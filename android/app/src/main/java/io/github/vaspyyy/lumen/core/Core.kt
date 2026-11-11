@@ -29,13 +29,16 @@ object Core {
     /** The fingerprint of a public key line, as `ssh-keygen -l` and `lumen pair` on the PC show it: "SHA256:...". "" if it is not a key. */
     external fun fingerprint(publicKey: String): String
 
-    /** Reads a pairing code without using it. {"ok":true,"label":"desk","user":"ada","port":22,"addresses":["192.168.1.20","100.64.0.7"]} or {"ok":false,"error":"..."} */
+    /** Reads a pairing code without using it. {"ok":true,"label":"desk","user":"ada","port":22,"addresses":["192.168.1.20","100.64.0.7"],"host_keys":["9f2c..."]} or {"ok":false,"error":"..."}.
+     *  "host_keys" are the keys the PC proves itself with, as a paired PC's "host" object has them. */
     external fun offer(link: String): String
 
     /** BLOCKING, up to about 4 minutes (the PC's user is asked to confirm there). Introduces this phone's key to the PC.
+     *  `had` are the public key lines this phone had for the same PC before, one to a line ("" for none): with the
+     *  yes on the PC, the new key takes their place there.
      *  {"ok":true,"host":{...}} : store the "host" object verbatim, it is what `connect` takes.
      *  {"ok":false,"code":"unreachable|wrong-host|refused|denied|cancelled|failed","error":"words for the user"} */
-    external fun enroll(link: String, device: String, publicKey: String): String
+    external fun enroll(link: String, device: String, publicKey: String, had: String): String
     /** How far the `enroll` under way has come: 0 none, 1 reaching the PC, 2 the PC has the key and its user is being asked. */
     external fun enrollStage(): Int
     /** Ends the `enroll` under way: it returns at once with the code "cancelled", and the PC stops asking. */

@@ -42,12 +42,12 @@ import java.util.UUID
 enum class Route { Welcome, Scan, TypeCode, Pairing, Terminal }
 
 /** What a pairing code says, read by `Core.offer` without using it. */
-data class Offer(val label: String, val user: String, val port: Int, val addresses: List<String>) {
+data class Offer(val label: String, val user: String, val port: Int, val addresses: List<String>, val hostKeys: List<String> = emptyList()) {
     companion object {
         fun parse(json: String): Result<Offer> = runCatching {
             val o = JSONObject(json)
             if (!o.optBoolean("ok")) error(o.optString("error").ifBlank { "This is not a lumen pairing code." }.replaceFirstChar { it.uppercase() })
-            Offer(o.optString("label"), o.optString("user"), o.optInt("port", 22), o.optJSONArray("addresses").strings())
+            Offer(o.optString("label"), o.optString("user"), o.optInt("port", 22), o.optJSONArray("addresses").strings(), o.optJSONArray("host_keys").strings())
         }
     }
 }
@@ -260,6 +260,12 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         startPairing(p.link, p.offer)
     }
 
+    /** The pairings this phone has with a PC already: the same user there, and a key the PC proves itself with in common. */
+    private fun pairedBefore(user: String, proofs: Collection<String>): List<Pc> = pcs.filter { old ->
+        old.user == user &&
+            runCatching { JSONObject(old.host).optJSONArray("host_keys").strings() }.getOrDefault(emptyList()).any { it in proofs }
+    }
+
     fun startPairing(link: String, offer: Offer) {
         stopEnroll()
         pairJob?.cancel()
@@ -311,8 +317,12 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
             }
+            // This PC paired before: the PC is told which keys the new one replaces,
+            // so that no line of a key that is gone stays behind there.
+            val had = pairedBefore(offer.user, offer.hostKeys)
+                .mapNotNull { old -> runCatching { JSONObject(old.host).optString("public_key") }.getOrNull()?.takeIf { it.isNotBlank() } }
             val res = withContext(io) {
-                runCatching { JSONObject(Core.enroll(link, Device.name(ctx), pub)) }
+                runCatching { JSONObject(Core.enroll(link, Device.name(ctx), pub, had.joinToString("\n"))) }
                     .getOrElse { JSONObject().put("ok", false).put("code", "failed").put("error", it.message ?: "") }
             }
             ask.cancel()
@@ -335,11 +345,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             // The same PC paired again (it proves itself with a key this phone
             // knows, for the same user) takes the place of its old entry: the
             // old key goes, the terminals it had open are found again.
-            val proofs = host.optJSONArray("host_keys").strings().toSet()
-            val before = pcs.filter { old ->
-                old.user == offer.user &&
-                    runCatching { JSONObject(old.host).optJSONArray("host_keys").strings() }.getOrDefault(emptyList()).any { it in proofs }
-            }
+            val before = pairedBefore(offer.user, host.optJSONArray("host_keys").strings())
             if (before.isNotEmpty()) {
                 L.i("pair: replaces ${before.size} earlier pairing(s) with this PC")
                 if (before.any { it.id == current?.id }) disconnectNow()

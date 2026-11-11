@@ -12,7 +12,9 @@
 //!                                            screen once it shows <wait>
 //!   phone kill <dir> <session>               end a kept terminal
 //!
-//! <dir> holds `key.pem` and, once paired, `host.json`.
+//! <dir> holds `key.pem` and, once paired, `host.json`. With PHONE_HAD set to
+//! the public lines of keys this phone had for the PC before (one to a
+//! line), `enroll` asks the PC to put the new key in their place.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -121,9 +123,10 @@ fn main() {
             let dir = Path::new(dir);
             let key = FileKey::make(dir);
             let device = device.first().copied().unwrap_or("phone on the command line");
-            match runtime()
-                .block_on(link::enroll(link, device, &key.public_line(), || eprintln!("phone: the PC is asking")))
-            {
+            // PHONE_HAD: the public keys this phone had for the PC before, one to a line
+            let had: Vec<String> = std::env::var("PHONE_HAD").unwrap_or_default().lines().map(str::to_string).collect();
+            let asked = || eprintln!("phone: the PC is asking");
+            match runtime().block_on(link::enroll(link, device, &key.public_line(), &had, asked)) {
                 Ok(host) => {
                     let stored = serde_json::to_string_pretty(&host).expect("a host is JSON");
                     std::fs::write(dir.join("host.json"), &stored).unwrap_or_else(|e| fail(e));

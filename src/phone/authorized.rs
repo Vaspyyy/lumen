@@ -198,12 +198,14 @@ fn option_quote(value: &str) -> String {
 }
 
 /// The file with the phone's key in place of the pairing line, in one go.
-/// A line with the same key is replaced; a name another phone has already
-/// gets a number. Returns the new text and the name the phone got.
-pub fn enrolled(text: &[u8], token: &str, key: &PhoneKey, name: &str) -> (Vec<u8>, String) {
+/// A line with the same key is replaced, and so are the phones whose keys
+/// have the fingerprints in `replaces`: the keys a phone that pairs again
+/// had here before. A name another phone has already gets a number.
+/// Returns the new text and the name the phone got.
+pub fn enrolled(text: &[u8], token: &str, key: &PhoneKey, name: &str, replaces: &[String]) -> (Vec<u8>, String) {
     let rest = keep(text, |line| match classify(line) {
         Line::Pairing { token: t, .. } => t != token,
-        Line::Phone { blob, .. } => blob != key.blob,
+        Line::Phone { blob, .. } => blob != key.blob && !replaces.contains(&fingerprint_of(&blob)),
         Line::Other => true,
     });
     let taken: Vec<String> = phones_in(&rest).into_iter().map(|(name, _)| name).collect();
@@ -227,13 +229,17 @@ fn phones_in(text: &[u8]) -> Vec<(String, Vec<u8>)> {
 }
 
 pub fn phones(text: &[u8]) -> Vec<Phone> {
-    phones_in(text)
-        .into_iter()
-        .map(|(name, blob)| {
-            let fingerprint = lumen_link::fingerprint_text(&sha256(&blob));
-            Phone { name, fingerprint }
-        })
-        .collect()
+    phones_in(text).into_iter().map(|(name, blob)| Phone { name, fingerprint: fingerprint_of(&blob) }).collect()
+}
+
+/// The names of the phones whose keys have these fingerprints.
+pub fn named(text: &[u8], fingerprints: &[String]) -> Vec<String> {
+    phones(text).into_iter().filter(|phone| fingerprints.contains(&phone.fingerprint)).map(|phone| phone.name).collect()
+}
+
+/// A key's fingerprint the way `ssh-keygen -l` writes it: `SHA256:...`.
+fn fingerprint_of(blob: &[u8]) -> String {
+    lumen_link::fingerprint_text(&sha256(blob))
 }
 
 fn sha256(blob: &[u8]) -> [u8; 32] {
@@ -436,7 +442,7 @@ mod tests {
         let pairing = pairing_line(Path::new("/bin/lumen"), "0123456789abcdef", "20991231000000", ED25519).unwrap();
         let text = with_line(&other_lines(), &pairing);
         let key = PhoneKey::parse(&ecdsa()).unwrap();
-        let (new, name) = enrolled(&text, "0123456789abcdef", &key, "Pixel 9");
+        let (new, name) = enrolled(&text, "0123456789abcdef", &key, "Pixel 9", &[]);
         assert_eq!(name, "Pixel 9");
         assert_eq!(new, with_line(&other_lines(), &format!("restrict,pty {} lumen-phone:Pixel 9", ecdsa())));
         assert_eq!(phones(&new), vec![Phone { name: "Pixel 9".into(), fingerprint: key.fingerprint() }]);
@@ -445,8 +451,8 @@ mod tests {
     #[test]
     fn the_same_key_again_replaces_its_line() {
         let key = PhoneKey::parse(&ecdsa()).unwrap();
-        let (once, _) = enrolled(&other_lines(), "x", &key, "Pixel 9");
-        let (twice, name) = enrolled(&once, "x", &key, "Pixel 9 Pro");
+        let (once, _) = enrolled(&other_lines(), "x", &key, "Pixel 9", &[]);
+        let (twice, name) = enrolled(&once, "x", &key, "Pixel 9 Pro", &[]);
         assert_eq!(name, "Pixel 9 Pro");
         assert_eq!(phones(&twice).len(), 1);
         assert!(twice.starts_with(&other_lines()));
@@ -456,19 +462,41 @@ mod tests {
     fn a_name_clash_gets_a_number() {
         let first = PhoneKey::parse(&ecdsa()).unwrap();
         let second = PhoneKey::parse(ED25519).unwrap();
-        let (text, _) = enrolled(b"", "x", &first, "Pixel");
-        let (text, name) = enrolled(&text, "x", &second, "Pixel");
+        let (text, _) = enrolled(b"", "x", &first, "Pixel", &[]);
+        let (text, name) = enrolled(&text, "x", &second, "Pixel", &[]);
         assert_eq!(name, "Pixel 2");
         let names: Vec<String> = phones(&text).into_iter().map(|p| p.name).collect();
         assert_eq!(names, ["Pixel", "Pixel 2"]);
     }
 
     #[test]
+    fn a_phone_that_pairs_again_takes_the_place_of_its_old_key() {
+        let old = PhoneKey::parse(&ecdsa()).unwrap();
+        let new = PhoneKey::parse(ED25519).unwrap();
+        let (text, _) = enrolled(&other_lines(), "x", &old, "Pixel", &[]);
+        assert_eq!(named(&text, &[old.fingerprint()]), ["Pixel"]);
+        // the old line goes, and with it the reason for a number after the name
+        let (again, name) = enrolled(&text, "x", &new, "Pixel", &[old.fingerprint()]);
+        assert_eq!(name, "Pixel");
+        assert_eq!(phones(&again), vec![Phone { name: "Pixel".into(), fingerprint: new.fingerprint() }]);
+        assert!(again.starts_with(&other_lines()));
+        // a fingerprint no phone here has takes nothing away, and neither does one of somebody else's line
+        let stranger = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string();
+        let (kept, name) = enrolled(&text, "x", &new, "Pixel", &[stranger]);
+        assert_eq!(name, "Pixel 2");
+        assert_eq!(phones(&kept).len(), 2);
+        let mine = format!("{ED25519} me@desk\n");
+        let other = lumen_link::fingerprint(ED25519).map(|f| lumen_link::fingerprint_text(&f)).unwrap();
+        let (kept, _) = enrolled(mine.as_bytes(), "x", &old, "Pixel", &[other]);
+        assert!(kept.starts_with(mine.as_bytes()), "{}", String::from_utf8_lossy(&kept));
+    }
+
+    #[test]
     fn unpairing_takes_exactly_that_name() {
         let first = PhoneKey::parse(&ecdsa()).unwrap();
         let second = PhoneKey::parse(ED25519).unwrap();
-        let (text, _) = enrolled(&other_lines(), "x", &first, "Pixel");
-        let (text, _) = enrolled(&text, "x", &second, "Pixel 2");
+        let (text, _) = enrolled(&other_lines(), "x", &first, "Pixel", &[]);
+        let (text, _) = enrolled(&text, "x", &second, "Pixel 2", &[]);
         assert_eq!(without_phone(&text, "Pix"), None);
         let rest = without_phone(&text, "Pixel").unwrap();
         let names: Vec<String> = phones(&rest).into_iter().map(|p| p.name).collect();

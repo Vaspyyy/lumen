@@ -183,6 +183,8 @@ pub extern "system" fn Java_io_github_vaspyyy_lumen_core_Core_offer<'l>(
     let answer = guarded(String::new(), || match lumen_link::Offer::from_link(&link) {
         Ok(offer) => json!({
             "ok": true, "label": offer.label, "user": offer.user, "port": offer.port, "addresses": offer.addresses,
+            // as a paired PC's "host_keys" has them: how the app knows a PC it paired before
+            "host_keys": offer.host_keys.iter().map(|key| link::hex(key)).collect::<Vec<_>>(),
         })
         .to_string(),
         Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
@@ -197,15 +199,19 @@ pub extern "system" fn Java_io_github_vaspyyy_lumen_core_Core_enroll<'l>(
     link: JString<'l>,
     device: JString<'l>,
     public_key: JString<'l>,
+    had: JString<'l>,
 ) -> jstring {
     let (link, device, public_key) = (text(&mut env, &link), text(&mut env, &device), text(&mut env, &public_key));
+    // the keys this phone had for the PC before, one to a line
+    let had: Vec<String> =
+        text(&mut env, &had).lines().map(str::to_string).filter(|line| !line.trim().is_empty()).collect();
     let answer = guarded(String::new(), || {
         let (stop, stopped) = oneshot::channel();
         *ENROLL_STOP.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(stop);
         ENROLL_STAGE.store(1, Ordering::Relaxed);
         let done = wait(async {
             tokio::select! {
-                done = link::enroll(&link, &device, &public_key, || ENROLL_STAGE.store(2, Ordering::Relaxed)) => done,
+                done = link::enroll(&link, &device, &public_key, &had, || ENROLL_STAGE.store(2, Ordering::Relaxed)) => done,
                 // dropping the pairing drops its connection: the PC stops asking
                 Ok(()) = stopped => Err(Failure { code: "cancelled", message: "Pairing was stopped.".into() }),
             }

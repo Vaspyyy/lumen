@@ -1,7 +1,8 @@
 #!/bin/sh
 # The phone's side and the PC's side, together: a phone on the command line
 # (examples/phone.rs) is paired with `lumen pair`, logs in, runs a command in
-# a terminal the PC keeps, goes away, comes back to find it, and is unpaired.
+# a terminal the PC keeps, goes away, comes back to find it, pairs again
+# with a new key, and is unpaired.
 #
 # It runs against an SSH server of its own, started as the current user on
 # a port of localhost, with its own host key and its own authorized_keys:
@@ -144,9 +145,25 @@ step "end the terminal"
 "$phone" sessions "$work/phone" >"$work/out"
 ! grep -q '^t1 ' "$work/out" || fail "the terminal is still there"
 
+step "pair again with a new key: it takes the place of the old one"
+mkdir -m 700 "$work/phone2"
+pair
+code=$(head -n 1 "$work/link")
+PHONE_HAD=$("$phone" key "$work/phone") "$phone" enroll "$work/phone2" "$code" "test phone" >/dev/null ||
+    fail "the phone could not pair again"
+wait "$pairing" || fail "lumen pair did not end well: $(cat "$work/pair.log")"
+pairing=""
+cat "$work/authorized_keys"
+[ "$(wc -l <"$work/authorized_keys")" = 1 ] || fail "the line of the old key is still in authorized_keys"
+grep -q 'lumen-phone:test phone$' "$work/authorized_keys" || fail "the phone did not keep its name"
+if "$phone" sessions "$work/phone" >"$work/out" 2>&1; then
+    fail "the key that was replaced still gets in"
+fi
+"$phone" sessions "$work/phone2" >"$work/out" || fail "the new key does not get in"
+
 step "unpair"
 "$lumen" unpair "test phone" --authorized-keys "$work/authorized_keys"
-if "$phone" sessions "$work/phone" >"$work/out" 2>&1; then
+if "$phone" sessions "$work/phone2" >"$work/out" 2>&1; then
     fail "an unpaired phone still gets in"
 fi
 cat "$work/out"

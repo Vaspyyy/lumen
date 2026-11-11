@@ -219,6 +219,10 @@ pub struct EnrollRequest {
     /// pair-enroll` puts in what sshd saw, over whatever came with the request.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub from: String,
+    /// The fingerprints (`SHA256:...`) of the keys this phone had for this PC
+    /// before, when it pairs again: with a yes, the new key takes their place.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaces: Vec<String>,
 }
 
 /// The PC's answer, as one line of JSON on the standard output.
@@ -380,12 +384,18 @@ mod tests {
             device: "Galaxy S24 Ultra".into(),
             public_key: "ecdsa-sha2-nistp256 AAAA".into(),
             from: String::new(),
+            replaces: Vec::new(),
         };
         let line = serde_json::to_string(&request).unwrap();
         assert!(!line.contains('\n'));
         assert_eq!(serde_json::from_str::<EnrollRequest>(&line).unwrap(), request);
-        // a phone doesn't say where it comes from
-        assert!(!line.contains("from"));
+        // a phone doesn't say where it comes from, and names no keys it never had
+        assert!(!line.contains("from") && !line.contains("replaces"));
+        // one that pairs again names the keys it had
+        let again = EnrollRequest { replaces: vec!["SHA256:abc".into()], ..request };
+        let line = serde_json::to_string(&again).unwrap();
+        assert!(line.contains(r#""replaces":["SHA256:abc"]"#), "{line}");
+        assert_eq!(serde_json::from_str::<EnrollRequest>(&line).unwrap(), again);
         // an answer from an older PC: what it doesn't say is empty
         let reply: EnrollReply = serde_json::from_str(r#"{"ok":false,"error":"no"}"#).unwrap();
         assert_eq!(reply, EnrollReply { ok: false, error: "no".into(), ..Default::default() });

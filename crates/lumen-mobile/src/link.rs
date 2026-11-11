@@ -197,7 +197,7 @@ fn prints(host_keys: &[String]) -> Vec<[u8; 32]> {
         .collect()
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -229,8 +229,15 @@ async fn run(handle: &Handle<Checker>, command: &str) -> Option<(u32, Vec<u8>)> 
 
 /// Introduces the phone's key to the PC with a pairing code. Waits for the
 /// PC's user to say yes: `asked` is called once the PC has the phone's key
-/// and its user is being asked.
-pub async fn enroll(link: &str, device: &str, public_key: &str, asked: impl Fn()) -> Result<Host, Failure> {
+/// and its user is being asked. `had` are the public keys this phone had for
+/// this PC before: with the yes, the new key takes their place there.
+pub async fn enroll(
+    link: &str,
+    device: &str,
+    public_key: &str,
+    had: &[String],
+    asked: impl Fn(),
+) -> Result<Host, Failure> {
     let offer = Offer::from_link(link).map_err(Failure::failed)?;
     let (mut handle, _) = arrive(&offer.addresses, offer.port, &offer.host_keys).await?;
 
@@ -247,6 +254,11 @@ pub async fn enroll(link: &str, device: &str, public_key: &str, asked: impl Fn()
     let request = EnrollRequest {
         device: lumen_link::clean_name(device),
         public_key: public_key.trim().to_string(),
+        replaces: had
+            .iter()
+            .filter_map(|line| lumen_link::fingerprint(line))
+            .map(|print| lumen_link::fingerprint_text(&print))
+            .collect(),
         ..Default::default()
     };
     let mut line = serde_json::to_vec(&request).map_err(Failure::failed)?;

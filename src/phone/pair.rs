@@ -28,6 +28,8 @@ const MAX_LINE: usize = 4096;
 /// How long the question about a new phone waits for its answer. Shorter than `pair-enroll`
 /// waits for the answer to pass on (`ANSWER_WAIT`), which is shorter than the phone waits.
 const QUESTION_TIME: Duration = Duration::from_secs(150);
+/// How many earlier keys of its own a phone that pairs again can have replaced.
+const MAX_REPLACED: usize = 8;
 /// How long `pair-enroll` waits for `lumen pair` to answer.
 const ANSWER_WAIT: Duration = Duration::from_secs(180);
 /// Interfaces of containers and virtual machines: not where a phone is.
@@ -283,13 +285,18 @@ impl Pairing {
             },
         };
         let device = lumen_link::clean_name(&request.device);
-        if !self.confirm(&device, &request.from, &key, &stream) {
+        // A phone that pairs again names the keys it had here. Only lines of
+        // phones can go this way, and only with the yes that lets the phone in.
+        let replaces: Vec<String> = request.replaces.into_iter().take(MAX_REPLACED).collect();
+        let going = authorized::read(&self.keys).map(|text| authorized::named(&text, &replaces)).unwrap_or_default();
+        if !self.confirm(&device, &request.from, &key, &going, &stream) {
             refuse(&mut stream, "The answer on the PC was no.".into());
             return None;
         }
 
         let mut cleanup = CLEANUP.lock().unwrap_or_else(|e| e.into_inner());
-        let enrolled = authorized::edit(&self.keys, |text| authorized::enrolled(text, &self.token, &key, &device));
+        let enrolled =
+            authorized::edit(&self.keys, |text| authorized::enrolled(text, &self.token, &key, &device, &replaces));
         match enrolled {
             Ok((_, name)) => {
                 // the pairing line went with the edit: only the socket is left to clean up
@@ -311,10 +318,11 @@ impl Pairing {
         }
     }
 
-    /// Asks the PC's user about a phone. `phone` is the connection its
-    /// request came on: a phone that gives up while the question stands is
-    /// not added, whatever is answered afterwards.
-    fn confirm(&self, device: &str, from: &str, key: &PhoneKey, phone: &UnixStream) -> bool {
+    /// Asks the PC's user about a phone. `going` names the phones whose keys
+    /// the new one replaces. `phone` is the connection the request came on:
+    /// a phone that gives up while the question stands is not added,
+    /// whatever is answered afterwards.
+    fn confirm(&self, device: &str, from: &str, key: &PhoneKey, going: &[String], phone: &UnixStream) -> bool {
         if self.yes {
             return true;
         }
@@ -328,8 +336,9 @@ impl Pairing {
         // where it comes from is what sshd saw; the name and the key are what it says of itself
         let origin = if from.is_empty() { String::new() } else { format!(" (connecting from {from})") };
         let question = format!(
-            "{device}{origin} wants to log in to this PC as {}.\nIts key: {}\nThe app shows the same key. Add it? [y/N] ",
+            "{device}{origin} wants to log in to this PC as {}.\n{}Its key: {}\nThe app shows the same key. Add it? [y/N] ",
             self.user,
+            replaced(going),
             key.fingerprint()
         );
         if sys::is_terminal(1) {
@@ -355,6 +364,16 @@ impl Pairing {
         }
         matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
     }
+}
+
+/// The line of the question about the pairings a phone's new key replaces,
+/// or nothing.
+fn replaced(going: &[String]) -> String {
+    if going.is_empty() {
+        return String::new();
+    }
+    let names: Vec<String> = going.iter().map(|name| format!("\"{name}\"")).collect();
+    format!("With a yes, it takes the place of {}, paired before.\n", names.join(" and "))
 }
 
 /// The address a login came from, out of sshd's `SSH_CONNECTION` ("their
@@ -829,6 +848,19 @@ mod tests {
 
     fn interface(name: &str, address: [u8; 4]) -> Interface {
         Interface { name: name.into(), up: true, loopback: false, address: Ipv4Addr::from(address) }
+    }
+
+    #[test]
+    fn the_question_names_what_a_new_key_replaces() {
+        assert_eq!(replaced(&[]), "");
+        assert_eq!(
+            replaced(&["Pixel 9".to_string()]),
+            "With a yes, it takes the place of \"Pixel 9\", paired before.\n"
+        );
+        assert_eq!(
+            replaced(&["Pixel 9".to_string(), "Pixel 9 2".to_string()]),
+            "With a yes, it takes the place of \"Pixel 9\" and \"Pixel 9 2\", paired before.\n"
+        );
     }
 
     #[test]
