@@ -103,6 +103,8 @@ object Authenticator {
 
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                 L.i("auth: ended without success ($errorCode)")
+                // taken away by the system because the app left the front: not the owner's no
+                if (errorCode == BiometricPrompt.ERROR_CANCELED) missed = true
                 done(false)
             }
             // onAuthenticationFailed: a finger that did not match; the prompt stays and lets them try again.

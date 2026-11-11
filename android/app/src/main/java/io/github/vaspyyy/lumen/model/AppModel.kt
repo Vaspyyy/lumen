@@ -42,6 +42,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 
 enum class Route { Welcome, Scan, TypeCode, Pairing, Terminal }
 
@@ -101,6 +102,12 @@ data class Kept(val name: String, val title: String, val cwd: String)
 data class Grid(val cols: Int, val rows: Int, val cellWidth: Int, val cellHeight: Int)
 
 data class Notice(val id: Int, val text: String)
+
+/**
+ * The numbers the core knows pairings by. The core lives as long as the
+ * process, longer than one model: so do the numbers.
+ */
+private val enrollIds = AtomicLong()
 
 /** The most text Android's clipboard is given at once: it takes about a megabyte, at two bytes a character. */
 private const val CLIPBOARD_MAX = 400_000
@@ -231,6 +238,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         runCatching { getApplication<Application>().getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(network) }
+        // a pairing under way ends with the model: nobody is left to store what it would bring
+        stopEnroll()
         dropTabs(kill = false)
         (conn as? Conn.Connected)?.let { c -> detached.launch { runCatching { Core.disconnect(c.link) } } }
     }
@@ -361,7 +370,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         stopEnroll()
         pairJob?.cancel()
         val gen = ++pairGen
-        enrollId = gen.toLong()
+        val id = enrollIds.incrementAndGet()
+        enrollId = id
         val ctx = getApplication<Application>()
         if (route != Route.Pairing && route != Route.Scan && route != Route.TypeCode) pairFrom = route
         route = Route.Pairing
@@ -406,7 +416,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             val ask = launch {
                 while (pairing?.step == PairStep.Reach) {
                     delay(120)
-                    if (runCatching { Core.enrollStage(gen.toLong()) }.getOrDefault(0) == 2 && pairing?.step == PairStep.Reach) {
+                    if (runCatching { Core.enrollStage(id) }.getOrDefault(0) == 2 && pairing?.step == PairStep.Reach) {
                         pairing = pairing?.copy(step = PairStep.Confirm)
                     }
                 }
@@ -420,7 +430,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 if (key.isBlank() || machine.isBlank()) null else "$machine $key"
             }
             val res = withContext(io) {
-                runCatching { JSONObject(Core.enroll(link, Device.name(ctx), pub, had.joinToString("\n"), gen.toLong())) }
+                runCatching { JSONObject(Core.enroll(link, Device.name(ctx), pub, had.joinToString("\n"), id)) }
                     .getOrElse { JSONObject().put("ok", false).put("code", "failed").put("error", it.message ?: "") }
             }
             ask.cancel()
@@ -497,6 +507,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         pairing = null
         route = if (pairFrom == Route.Pairing) Route.Welcome else pairFrom
         if (route == Route.Terminal && current == null) route = Route.Welcome
+        connectStored()
     }
 
     // ---------------------------------------------------------------- PCs
@@ -548,20 +559,29 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         val pc = current ?: return
         connectJob?.cancel()
         waitsForFront = false
+        // what an earlier try missed is not this one's
+        Authenticator.takeMissed()
         val gen = ++connGen
         connectJob = viewModelScope.launch { run(pc, gen, auto, openFirst) }
     }
 
     private enum class Outcome { Ok, Stop, Retry }
 
+    /** How one try to log in ended. [network]: the PC did not answer at all. */
+    private class Attempt(val outcome: Outcome, val error: String = "", val network: Boolean = false)
+
+    private val stop = Attempt(Outcome.Stop)
+
     private suspend fun run(pc: Pc, gen: Int, auto: Boolean, openFirst: Boolean, reason: String = "") {
         val waits = intArrayOf(1, 2, 5)
         var attempt = 0
         var lastError = reason
+        // a connection that was lost is the network's doing until a try says otherwise
+        var network = true
         while (true) {
             if (auto) {
                 if (attempt >= waits.size) {
-                    conn = Conn.Failed(lastError.ifBlank { str(R.string.conn_lost_generic) }, network = true)
+                    conn = Conn.Failed(lastError.ifBlank { str(R.string.conn_lost_generic) }, network)
                     return
                 }
                 for (s in waits[attempt] downTo 1) {
@@ -570,14 +590,15 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                     if (gen != connGen) return
                 }
             }
-            val (outcome, error) = attemptOnce(pc, gen, openFirst)
+            val tried = attemptOnce(pc, gen, openFirst)
             if (gen != connGen) return
-            when (outcome) {
+            when (tried.outcome) {
                 Outcome.Ok, Outcome.Stop -> return
                 Outcome.Retry -> {
-                    lastError = error
+                    lastError = tried.error
+                    network = tried.network
                     if (!auto) {
-                        conn = Conn.Failed(error, network = true)
+                        conn = Conn.Failed(tried.error, network)
                         return
                     }
                     attempt++
@@ -586,25 +607,25 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private suspend fun attemptOnce(pc: Pc, gen: Int, openFirst: Boolean): Pair<Outcome, String> {
+    private suspend fun attemptOnce(pc: Pc, gen: Int, openFirst: Boolean): Attempt {
         val ctx = getApplication<Application>()
         conn = Conn.Checking
         if (!KeyVault.hasScreenLock(ctx)) {
             L.i("connect: the phone has no screen lock")
             conn = if (KeyVault.exists(pc.keyAlias)) Conn.NoScreenLock else Conn.KeyGone
-            return Outcome.Stop to ""
+            return stop
         }
         L.i("connect: checking the key for ${pc.label}")
         var probe = withContext(io) { KeyVault.probe(pc.keyAlias) }
-        if (gen != connGen) return Outcome.Stop to ""
+        if (gen != connGen) return stop
         if (probe == KeyVault.Signed.NeedsAuth) {
             L.i("connect: the key needs the owner")
             conn = Conn.Auth
             val ok = Authenticator.authenticate(str(R.string.auth_title, pc.label), str(R.string.auth_subtitle))
-            if (gen != connGen) return Outcome.Stop to ""
+            if (gen != connGen) return stop
             if (!ok) {
                 awaitOwner()
-                return Outcome.Stop to ""
+                return stop
             }
             probe = withContext(io) { KeyVault.probe(pc.keyAlias) }
         }
@@ -612,15 +633,15 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             is KeyVault.Signed.Ok -> Unit
             KeyVault.Signed.Gone -> {
                 conn = Conn.KeyGone
-                return Outcome.Stop to ""
+                return stop
             }
             KeyVault.Signed.NeedsAuth -> {
                 conn = Conn.AuthCancelled
-                return Outcome.Stop to ""
+                return stop
             }
             is KeyVault.Signed.Failed -> {
                 conn = Conn.Failed(str(R.string.conn_key_failed, probe.message))
-                return Outcome.Stop to ""
+                return stop
             }
         }
         val addresses = hostAddresses(pc)
@@ -635,7 +656,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         }
         if (gen != connGen) {
             detached.launch { runCatching { giveBack(res) } }
-            return Outcome.Stop to ""
+            return stop
         }
         if (res.optBoolean("ok")) {
             val l = res.optLong("link")
@@ -643,16 +664,16 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             L.i("connect: connected (link $l, keeps terminals: $k)")
             conn = Conn.Connected(l, k, res.optString("address"))
             onConnected(pc, openFirst)
-            return Outcome.Ok to ""
+            return Attempt(Outcome.Ok)
         }
         val code = res.optString("code")
         val error = res.optString("error").ifBlank { str(R.string.conn_failed_generic) }
         L.i("connect: failed ($code)")
         return when (code) {
-            "refused" -> { conn = Conn.Refused; Outcome.Stop to error }
-            "wrong-host" -> { conn = Conn.WrongHost; Outcome.Stop to error }
-            "cancelled" -> { awaitOwner(); Outcome.Stop to error }
-            else -> Outcome.Retry to error
+            "refused" -> { conn = Conn.Refused; stop }
+            "wrong-host" -> { conn = Conn.WrongHost; stop }
+            "cancelled" -> { awaitOwner(); stop }
+            else -> Attempt(Outcome.Retry, error, network = code == "unreachable")
         }
     }
 
@@ -812,8 +833,10 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         tab.gen++
         val ev = events(tab, tab.gen, l)
         // Not marked dirty: the last screen stays until the PC sends the new one.
+        val opened = tab.gen
         val h = made(closeUnused) { runCatching { Core.open(l, tab.name, g.cols, g.rows, g.cellWidth, g.cellHeight, ev) }.getOrDefault(0L) }
-        if (link != l) {
+        // the connection changed meanwhile, or the tab was closed or ended: nobody wants this terminal shown
+        if (link != l || tab.gen != opened || tab !in tabs) {
             detached.launch { runCatching { closeUnused(h) } }
             return
         }
@@ -954,6 +977,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         if (!BuildConfig.DEBUG || coreError != null) return
         val ctx = getApplication<Application>()
         viewModelScope.launch {
+            sweep.join()
             val alias = KeyVault.newAlias()
             when (val made = withContext(io) { KeyVault.create(ctx, alias) }) {
                 is KeyVault.Made.Ok -> Unit

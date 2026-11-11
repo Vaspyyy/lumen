@@ -61,7 +61,8 @@ class Store(context: Context) {
     /**
      * The paired PCs. An entry that can't be read is left out, the others
      * stay. A file with something unreadable in it is copied to
-     * `pcs.json.bad` before anything is saved over it.
+     * `pcs.json.bad`, to see afterwards what was wrong with it: a PC that
+     * was left out has to be paired again.
      */
     @Synchronized
     fun load(): List<Pc> {

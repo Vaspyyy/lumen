@@ -87,7 +87,7 @@ A keyboard plugged in or connected over Bluetooth works as on a PC. With one, `C
 | A drag | Scrolls through what was printed. In a program that has the whole screen, such as `less` or an editor, it scrolls there |
 | Two fingers, apart or together | Makes the text bigger or smaller |
 | Holding a word | Selects it. Drag to select more, then **Copy** |
-| A tap on a link | Shows where it leads, in full, with **Open** for a web page and **Copy**. A link is what a program marks as one, as on the PC |
+| A tap on a link | Shows where it leads, the machine's name standing out, with **Open** for a web page and **Copy**. A link is what a program marks as one, as on the PC |
 | A tap on a file's name in a `glint` listing | Shows where the file is on the PC, with **Copy path** |
 
 ## When the connection drops

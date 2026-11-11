@@ -52,7 +52,7 @@ These need no window. They run in any terminal, and over SSH.
 | `--port` *number* | The SSH server's port, if lumen can't tell |
 | `--host-key` *file* | A public key the SSH server proves itself with, if they are not in `/etc/ssh` |
 | `--authorized-keys` *file* | The file to add the phone's key to, if it is not `~/.ssh/authorized_keys`. `lumen phones` and `lumen unpair` take it too |
-| `-y`, `--yes` | Lets the first phone that comes with the code in, without asking. For scripts |
+| `-y`, `--yes` | Lets the first phone that comes with the code in, without asking, also when its key takes the place of one it had before. For scripts |
 
 `lumen attach` takes `--cwd` *folder* and `--env` *NAME=value* for a terminal it makes.
 

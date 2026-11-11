@@ -284,7 +284,7 @@ data class TappedLink(val target: String, val isFile: Boolean) {
     val opens: Boolean get() = !isFile && (target.startsWith("http://", true) || target.startsWith("https://", true))
 }
 
-/** Where a tapped link leads, in full, and what can be done with it. */
+/** Where a tapped link leads, from its beginning, and what can be done with it. */
 @Composable
 private fun LinkBar(link: TappedLink, onOpen: () -> Unit, onCopy: () -> Unit, onDismiss: () -> Unit) {
     Column(
@@ -299,7 +299,7 @@ private fun LinkBar(link: TappedLink, onOpen: () -> Unit, onCopy: () -> Unit, on
             Text(
                 linkText(link),
                 style = Mono.copy(fontSize = 12.5.sp, lineHeight = 18.sp),
-                maxLines = 4,
+                maxLines = 6,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f).padding(top = 10.dp, bottom = 6.dp),
             )
@@ -334,18 +334,35 @@ private fun LinkBar(link: TappedLink, onOpen: () -> Unit, onCopy: () -> Unit, on
     }
 }
 
-/** A web address with the machine it leads to standing out: that part says whose page it is. */
+/**
+ * A link's target as it is shown: a web address with the machine it leads
+ * to standing out, since that part says whose page it is. What comes before
+ * an `@` there is a name to log in with, not the machine, however much it
+ * looks like one.
+ */
 private fun linkText(link: TappedLink): AnnotatedString = buildAnnotatedString {
-    val t = link.target
+    val t = spelledOut(link.target)
     val from = t.indexOf("://").takeIf { link.opens && it >= 0 }?.plus(3)
     if (from == null) {
         withStyle(SpanStyle(color = Lumen.fg)) { append(t) }
         return@buildAnnotatedString
     }
     val to = t.indexOfAny(charArrayOf('/', '?', '#'), from).takeIf { it >= 0 } ?: t.length
-    withStyle(SpanStyle(color = Lumen.fg3)) { append(t.substring(0, from)) }
-    withStyle(SpanStyle(color = Lumen.accent)) { append(t.substring(from, to)) }
+    val machine = t.lastIndexOf('@', to - 1).takeIf { it >= from }?.plus(1) ?: from
+    withStyle(SpanStyle(color = Lumen.fg3)) { append(t.substring(0, machine)) }
+    withStyle(SpanStyle(color = Lumen.accent)) { append(t.substring(machine, to)) }
     withStyle(SpanStyle(color = Lumen.fg3)) { append(t.substring(to)) }
+}
+
+/**
+ * A text with what can't be seen in it written out: control characters and
+ * the ones that turn text around or hide it would make an address read as
+ * another one.
+ */
+private fun spelledOut(text: String): String {
+    fun hidden(c: Char) = c.isISOControl() || c in '\u200b'..'\u200f' || c in '\u202a'..'\u202e' || c in '\u2060'..'\u206f' || c == '\ufeff'
+    if (text.none(::hidden)) return text
+    return buildString { text.forEach { c -> if (hidden(c)) append("\\u{%04x}".format(c.code)) else append(c) } }
 }
 
 fun formatSize(s: Float): String = if (s % 1f == 0f) s.toInt().toString() else "%.1f".format(s)

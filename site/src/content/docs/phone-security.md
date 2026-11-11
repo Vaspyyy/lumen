@@ -30,7 +30,7 @@ A terminal on your phone is a way into your PC, so this page says exactly how it
    The app shows the fingerprint of its key at the same moment. If the two are the same, the phone on the other end is yours. Only `y` lets it in. Enter alone does not.
 5. **The short-lived key is replaced by the phone's.** Both happen in one step, so the code can't be used a second time.
 
-A phone that was paired with this PC before says which key it had, and the question names the pairing that the new key takes the place of. With your yes, the old key's line goes in the same step.
+A phone that was paired with this PC before says which key it had, and the question names the pairing that the new key takes the place of. With your yes, the old key's line goes in the same step. Should the connection break in that very moment, the PC has the new key and the phone does not know: pair once more.
 
 If you say no, the phone is told so, and `lumen pair` waits on for the right one. When ten minutes have passed, or you stop it with `Ctrl+C`, the short-lived key is removed and nothing else has changed.
 
@@ -71,6 +71,8 @@ The code carries the fingerprints of the PC's SSH keys. The phone logs in only t
 The phone also remembers which of those keys the PC proved when it was paired. Only a machine that proves that same key counts as the same PC when you pair again: a code that merely names your PC's key, made by somebody else, pairs as a PC of its own and leaves the real one alone.
 
 What a program on the PC prints can't act on the phone by itself. A link says where it leads before it is opened, and a program can put text on the phone's clipboard only from the terminal you are looking at.
+
+`lumen pair --yes` asks nothing, also not before a phone's new key takes the place of its old one. It is for scripts that pair a phone they hold.
 
 ## Away from home
 
