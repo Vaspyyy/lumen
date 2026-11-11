@@ -7,7 +7,7 @@ export default {
     'editor.foreground': '#e4e1ee',
   },
   tokenColors: [
-    { scope: ['comment', 'punctuation.definition.comment'], settings: { foreground: '#6c6880', fontStyle: 'italic' } },
+    { scope: ['comment', 'punctuation.definition.comment'], settings: { foreground: '#8782a0', fontStyle: 'italic' } },
     { scope: ['string', 'string.quoted', 'string.unquoted'], settings: { foreground: '#8fdfa8' } },
     { scope: ['constant.numeric', 'constant.language', 'constant.character', 'constant.other.option'], settings: { foreground: '#ffd08a' } },
     { scope: ['keyword', 'storage', 'storage.type', 'keyword.control'], settings: { foreground: '#c9a4ff' } },

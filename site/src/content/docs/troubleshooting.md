@@ -11,7 +11,7 @@ Start it from another terminal, and read what it prints:
 lumen
 ```
 
-- **A message about Vulkan or a graphics adapter.** lumen is drawn by the graphics card and needs a driver with Vulkan. `vulkaninfo --summary` (from the package `vulkan-tools`) shows whether your system has one.
+- **A message about Vulkan or a graphics adapter.** lumen is drawn by the graphics card and needs a working driver. `vulkaninfo --summary` (from the package `vulkan-tools`) shows whether Vulkan works on your system.
 - **`lumen: command not found`.** The program is in `~/.cargo/bin`. That folder has to be in your `PATH`; rustup normally adds it. Log out and in again after installing Rust.
 - **A message about the config file.** lumen starts anyway, with its defaults, and the message says what is wrong in the file.
 

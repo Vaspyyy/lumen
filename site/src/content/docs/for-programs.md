@@ -23,7 +23,7 @@ The better way to find out what a terminal can do is to ask it. lumen answers th
 | | |
 | --- | --- |
 | Colors | The 16 colors of the theme, the 256 numbered ones, and true color |
-| Text styles | Bold, italic, dim, inverse, hidden, strikethrough; single, double and curly underlines, in a color of their own |
+| Text styles | Bold, italic, dim, inverse, hidden, strikethrough; straight and curly underlines, in a color of their own. A double underline is drawn as a thicker line, dotted and dashed ones as a straight one |
 | Wide characters | Characters that take two cells, such as CJK and most emoji |
 | Links | OSC 8. See [Files and links](/docs/files-and-links/) |
 | Pictures | The kitty graphics protocol, in part. See [Pictures](/docs/images/) |
@@ -35,7 +35,7 @@ The better way to find out what a terminal can do is to ask it. lumen answers th
 | Focus | Reports when the pane gains or loses the keyboard, to programs that ask |
 | Screen updates | Synchronized updates, so a redraw is shown whole |
 | Screens | The alternate screen, with the wheel as arrow keys in it |
-| Cursor | The shapes a program can ask for: block, beam, underline, blinking or not |
+| Cursor | The shapes a program can ask for: block, beam, underline. Whether it blinks is set in the config, not by the program |
 | Queries | The colors in use, the size of the window in cells and in pixels, what kind of terminal this is |
 
 ## The kitty keyboard protocol
@@ -58,7 +58,7 @@ Three rules, which keep such links from being misused:
 
 - The host has to be the machine lumen runs on, or `localhost`, or empty.
 - The path is absolute, and percent-encoded as in any URL.
-- The text of the link has to contain the file's name. A link that reads `click here` is not copied by a plain click.
+- The text of the link has to contain the file's name. A link that reads `click here` is not copied by a plain click. A name that was cut short is fine when it ends in `…` and at least three characters of it are left.
 
 In other terminals the link is handed to the desktop, where [glint](https://github.com/Vaspyyy/glint) can register itself to do the copying (`glint --init copy`).
 

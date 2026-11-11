@@ -13,7 +13,7 @@
   --fg: #ece9f4;
   --fg-2: #bdb8cf;
   --fg-3: #938ea8;
-  --fg-4: #6c6880;
+  --fg-4: #8782a0;
 
   --accent: #ffc97a;
   --accent-2: #ffd9a0;
@@ -384,6 +384,12 @@ kbd {
 }
 .prose tr:last-child td {
   border-bottom: 0;
+}
+/* on a phone the first column may break between its keys, so the second one stays on the screen */
+@media (max-width: 600px) {
+  .prose td:first-child {
+    white-space: normal;
+  }
 }
 
 /* a dab of a color, next to its name */

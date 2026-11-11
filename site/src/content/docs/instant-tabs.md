@@ -28,6 +28,7 @@ A split gets its shell the same way.
 - lumen keeps **one** shell started ahead of time, per window. When you take it, the next one is started.
 - It is started **in the folder of the pane you are in**, since that is where a new tab opens.
 - When you change folders, the waiting shell is in the wrong place. lumen notices and replaces it. A tab opened right after a `cd` may still start its shell on the spot, as it would without `prewarm`.
+- It is also replaced when the window changes size, when you save the config, and when it has waited for more than five minutes, so that what it shows is never stale.
 - The waiting shell is an ordinary shell that nobody is looking at. It costs what one more idle shell costs: some memory (17 MB with fish, when measured), and no processor time.
 
 ## Why it is off by default

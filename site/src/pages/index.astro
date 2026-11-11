@@ -24,12 +24,12 @@ const roadmap = [
   {
     state: 'done',
     title: 'Daily driver',
-    text: 'A terminal you can live in. Tabs, splits, selection, scrollback and search, your fonts and colors.',
+    text: 'A terminal you can live in. Tabs, splits, selection, scrollback, your fonts and colors.',
   },
   {
     state: 'done',
     title: 'Files and pictures',
-    text: 'Names in a listing are files: click to copy, Ctrl+click to open, drag one out into another program. Pictures in place.',
+    text: 'Names in a listing are files: click to copy, Ctrl+Click to open, drag one out into another program. Pictures in place, and search.',
   },
   {
     state: 'next',
@@ -56,8 +56,8 @@ const roadmap = [
         A terminal that <span class="serif lamp-text">understands</span><br class="wide" /> what it shows.
       </h1>
       <p class="lede">
-        lumen is a GPU-rendered terminal for Linux. A name in a listing is the file: click it to copy it, drag it into a
-        chat. Pictures sit between the lines, and a new tab is ready before you look at it.
+        lumen is a GPU-rendered terminal for Linux. A name in a listing is the file: click it to copy it, then paste it into
+        a chat. Pictures sit between the lines, and a new tab is ready before you look at it.
       </p>
 
       <div class="cta">
@@ -100,7 +100,7 @@ const roadmap = [
             <dl class="does">
               <div><dt><kbd>Click</kbd></dt><dd>copies the file, as a file manager’s Copy does</dd></div>
               <div><dt><kbd>Ctrl</kbd> <kbd>Click</kbd></dt><dd>opens it in its program</dd></div>
-              <div><dt><kbd>Drag</kbd></dt><dd>takes it along, into a chat, a mail, a folder</dd></div>
+              <div><dt><kbd>Drag</kbd></dt><dd>takes it along, into a chat, a mail, a folder (on Wayland)</dd></div>
             </dl>
           </div>
           <div class="art art-drag" aria-hidden="true">
@@ -286,7 +286,7 @@ const roadmap = [
         </a>
       </div>
       <div class="code prose">
-        <pre data-copy><code><span class="c"># get it, build it, install it</span>
+        <pre><code><span class="c"># get it, build it, install it</span>
 <span class="f">git</span> clone {site.repo}
 <span class="f">cd</span> lumen
 <span class="f">scripts/install.sh</span>

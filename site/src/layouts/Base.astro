@@ -53,6 +53,20 @@ const image = new URL(url('/og.jpg'), Astro.site);
     <meta name="twitter:title" content={fullTitle} />
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content={image} />
+    <!-- the menus open with a script: without one they are simply there -->
+    <noscript>
+      <style is:inline>
+        @media (max-width: 760px) {
+          #nav-sheet { display: block !important; }
+          [data-menu] { display: none !important; }
+        }
+        @media (max-width: 800px) {
+          #docs-nav { display: block !important; }
+          [data-side-toggle] { display: none !important; }
+        }
+        [data-search-open] { display: none !important; }
+      </style>
+    </noscript>
   </head>
   <body>
     <a class="skip" href="#main">Skip to the page</a>

@@ -268,15 +268,18 @@ const links = [
   scrolled();
   window.addEventListener('scroll', scrolled, { passive: true });
 
-  menu?.addEventListener('click', () => {
-    const open = menu.getAttribute('aria-expanded') !== 'true';
-    menu.setAttribute('aria-expanded', String(open));
+  const show = (open: boolean) => {
+    menu?.setAttribute('aria-expanded', String(open));
     if (sheet) sheet.hidden = !open;
-  });
+  };
+  menu?.addEventListener('click', () => show(menu.getAttribute('aria-expanded') !== 'true'));
   sheet?.addEventListener('click', (event) => {
-    if ((event.target as HTMLElement).closest('a')) {
-      menu?.setAttribute('aria-expanded', 'false');
-      sheet.hidden = true;
+    if ((event.target as HTMLElement).closest('a')) show(false);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && menu?.getAttribute('aria-expanded') === 'true') {
+      show(false);
+      menu.focus();
     }
   });
 </script>

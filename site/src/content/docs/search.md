@@ -14,7 +14,7 @@ Press `Ctrl+Shift+F`. A search field opens in the top right corner of the pane. 
 | `Shift+Enter` | Go to the match after |
 | `Up`, `Down` | The same as `Enter` and `Shift+Enter` |
 | `Backspace` | Remove the last character |
-| `Ctrl+Backspace` | Empty the field |
+| `Ctrl+Backspace`, `Alt+Backspace` | Empty the field |
 | `Ctrl+Shift+V` | Paste into the field |
 | `Esc` | Close the search |
 
@@ -32,5 +32,5 @@ While the search is open, the program in the pane keeps running. When it prints 
 
 ## Limits
 
-- With more than 5,000 matches, the newest 5,000 are kept.
+- With more than 5,000 matches, the newest 5,000 are kept, and the field says `5000+`.
 - A match can't span two lines, unless the line was wrapped by the terminal.

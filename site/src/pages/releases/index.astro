@@ -5,7 +5,23 @@ import { allReleases, longDate } from '../../lib/releases';
 import { url } from '../../lib/url';
 
 const releases = await allReleases();
-const notes = await Promise.all(releases.map(async (release) => ({ release, ...(await render(release)) })));
+
+// On this page a note sits under the heading of its version: its own headings
+// go one step down, and their ids get the version in front, since several
+// notes have a "Fixed".
+function under(html: string, version: string) {
+  const prefix = `v${version.replaceAll('.', '-')}-`;
+  return html
+    .replace(/<(\/?)h([2-5])\b/g, (_, slash, level) => `<${slash}h${Number(level) + 1}`)
+    .replace(/(<h[3-6]\b[^>]*\sid=")/g, `$1${prefix}`);
+}
+
+const notes = await Promise.all(
+  releases.map(async (release) => {
+    const html = release.rendered?.html;
+    return { release, html: html && under(html, release.data.version), ...(await render(release)) };
+  }),
+);
 ---
 
 <Base
@@ -25,7 +41,7 @@ const notes = await Promise.all(releases.map(async (release) => ({ release, ...(
 
     <ol class="line">
       {
-        notes.map(({ release, Content }, i) => (
+        notes.map(({ release, html, Content }, i) => (
           <li>
             <div class="when">
               <a class="version" href={url(`/releases/${release.data.version}/`)}>
@@ -38,9 +54,7 @@ const notes = await Promise.all(releases.map(async (release) => ({ release, ...(
               <h2>
                 <a href={url(`/releases/${release.data.version}/`)}>{release.data.title}</a>
               </h2>
-              <div class="prose">
-                <Content />
-              </div>
+              <div class="prose">{html ? <Fragment set:html={html} /> : <Content />}</div>
             </article>
           </li>
         ))
@@ -127,7 +141,7 @@ const notes = await Promise.all(releases.map(async (release) => ({ release, ...(
   .prose {
     margin-top: 18px;
   }
-  .prose :global(h2) {
+  .prose :global(h3) {
     margin-top: 1.8em;
     font-size: 1.14rem;
   }

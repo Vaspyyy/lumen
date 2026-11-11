@@ -8,7 +8,7 @@ lumen is not packaged for any distribution yet, so you build it yourself. That n
 ## What you need
 
 - **Linux**, with Wayland or X11.
-- **A graphics driver with Vulkan.** lumen is drawn by the graphics card. Any Mesa driver of the last few years has it.
+- **A working graphics driver.** lumen is drawn by the graphics card, through Vulkan where the driver has it. Any Mesa driver of the last few years will do.
 - **A recent Rust toolchain.** [rustup](https://rustup.rs) installs one.
 - **The development files of a few libraries** that the window toolkit links against.
 
@@ -67,7 +67,7 @@ A lumen that is running keeps running the old version until you close it. The [r
 Two small programs make lumen more useful, and both are optional:
 
 - **`wl-copy`** (package `wl-clipboard`) on Wayland, or **`xclip`** on X11. lumen uses it to put a file on the clipboard when you [click a file name](/docs/files-and-links/).
-- **[glint](https://github.com/Vaspyyy/glint)**, version 0.11.1 or newer. It prints the listings whose names are files, and the thumbnails.
+- **[glint](https://github.com/Vaspyyy/glint)**, version 0.11.1 or newer. It prints the listings whose names are files (since 0.11.0) and the thumbnails (since 0.11.1).
 
 ## Remove it
 

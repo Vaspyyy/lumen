@@ -172,7 +172,7 @@ const chevron = `<svg class="lt-chev" viewBox="0 0 10 16" fill="none" stroke="cu
   </figure>
 
   <p class="lt-hint" data-hint>
-    <span data-hint-text>This is a sketch of lumen. Click a name to copy the file; Ctrl+click opens it.</span>
+    <span data-hint-text>This is a sketch of lumen. Click a name to copy the file; Ctrl+Click opens it.</span>
   </p>
 </div>
 
@@ -450,7 +450,7 @@ const chevron = `<svg class="lt-chev" viewBox="0 0 10 16" fill="none" stroke="cu
     color: #e4e1ee;
   }
   .lt-info {
-    color: #6c6880;
+    color: #8782a0;
     white-space: nowrap;
   }
 
@@ -537,7 +537,7 @@ const chevron = `<svg class="lt-chev" viewBox="0 0 10 16" fill="none" stroke="cu
     overflow-wrap: anywhere;
   }
   .lt-time {
-    color: #6c6880;
+    color: #8782a0;
   }
   .lt-lv-info .lt-level {
     color: #8cb4ff;
@@ -652,8 +652,9 @@ const chevron = `<svg class="lt-chev" viewBox="0 0 10 16" fill="none" stroke="cu
     .lt-ctl svg:not(:last-child) {
       display: none;
     }
-    .lt-log {
-      padding-top: 30px;
+    /* the search field would lie on the command: the pane starts below it */
+    .lt-scene[data-pane='search'] {
+      padding-top: 36px;
     }
   }
 </style>
@@ -666,7 +667,7 @@ const chevron = `<svg class="lt-chev" viewBox="0 0 10 16" fill="none" stroke="cu
     const notice = root.querySelector<HTMLElement>('[data-notice]')!;
 
     const hints: Record<string, string> = {
-      files: 'This is a sketch of lumen. Click a name to copy the file; Ctrl+click opens it.',
+      files: 'This is a sketch of lumen. Click a name to copy the file; Ctrl+Click opens it.',
       images: 'Pictures a program sends are drawn in place and scroll with the text. Their names are files too.',
       search: 'Type in the search field. Enter goes to the match before, Shift+Enter to the one after.',
     };
@@ -700,7 +701,7 @@ const chevron = `<svg class="lt-chev" viewBox="0 0 10 16" fill="none" stroke="cu
         const file = name.dataset.file!;
         if (event.ctrlKey || event.metaKey) {
           notice.classList.remove('lt-shown');
-          hint.textContent = `In lumen, Ctrl+click opens ${file} in its program.`;
+          hint.textContent = `In lumen, Ctrl+Click opens ${file} in its program.`;
         } else {
           say(`Copied ${file}`);
           hint.textContent = `In lumen, ${file} is on the clipboard now, as a file: paste it into a folder, a mail, a chat.`;
@@ -742,7 +743,7 @@ const chevron = `<svg class="lt-chev" viewBox="0 0 10 16" fill="none" stroke="cu
       // a search starts at the newest match, the one at the bottom
       on = step && marks.length ? (on + step + marks.length) % marks.length : marks.length - 1;
       marks[on]?.classList.add('lt-on');
-      count.textContent = !query ? '' : marks.length ? `${on + 1} of ${marks.length}` : 'none';
+      count.textContent = !query ? '' : marks.length ? `${on + 1} of ${marks.length}` : 'no match';
     }
     field.addEventListener('input', () => find());
     field.addEventListener('keydown', (event) => {

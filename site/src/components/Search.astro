@@ -6,23 +6,29 @@ import { url } from '../lib/url';
 
 <dialog class="sx" data-search data-bundle={url('/pagefind/pagefind.js')} aria-label="Search the docs">
   <div class="sx-box">
-    <label class="sx-field">
+    <div class="sx-field">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"
         ><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg
       >
-      <span class="sr-only">Search the docs</span>
+      <label class="sr-only" for="sx-input">Search the docs and the release notes</label>
       <input
+        id="sx-input"
         type="search"
+        role="combobox"
+        aria-expanded="false"
+        aria-controls="sx-results"
+        aria-autocomplete="list"
         placeholder="Search the docs and the release notes"
         autocomplete="off"
         autocapitalize="off"
         spellcheck="false"
         data-search-input
       />
-      <kbd>Esc</kbd>
-    </label>
-    <ul class="sx-results" data-search-results></ul>
-    <p class="sx-hint" data-search-hint>Try “prewarm”, “copy a file” or “opacity”.</p>
+      <kbd aria-hidden="true">Esc</kbd>
+    </div>
+    <ul class="sx-results" id="sx-results" role="listbox" aria-label="Results" data-search-results></ul>
+    <p class="sx-hint" role="status" data-search-hint>Try “prewarm”, “copy a file” or “opacity”.</p>
+    <p class="sr-only" role="status" data-search-count></p>
   </div>
 </dialog>
 
@@ -72,6 +78,10 @@ import { url } from '../lib/url';
     height: 56px;
     flex: none;
     border-bottom: 1px solid var(--line);
+    transition: border-color 0.2s;
+  }
+  .sx-field:focus-within {
+    border-bottom-color: rgba(255, 201, 122, 0.5);
   }
   .sx-field svg {
     width: 18px;
@@ -115,7 +125,7 @@ import { url } from '../lib/url';
     padding: 10px 12px;
     border-radius: 10px;
   }
-  .sx-results a[aria-selected='true'] {
+  .sx-results li[aria-selected='true'] a {
     background: rgba(255, 201, 122, 0.1);
     box-shadow: inset 0 0 0 1px rgba(255, 201, 122, 0.22);
   }
@@ -158,8 +168,8 @@ import { url } from '../lib/url';
 </style>
 
 <script>
+  type SubResult = { url: string; title: string; excerpt: string; locations?: number[] };
   type Result = { url: string; excerpt: string; meta: { title?: string }; sub_results?: SubResult[] };
-  type SubResult = { url: string; title: string; excerpt: string };
   type Pagefind = {
     init(): Promise<void>;
     debouncedSearch(query: string, options?: object, wait?: number): Promise<{ results: { data(): Promise<Result> }[] } | null>;
@@ -169,22 +179,30 @@ import { url } from '../lib/url';
   const input = dialog.querySelector<HTMLInputElement>('[data-search-input]')!;
   const list = dialog.querySelector<HTMLUListElement>('[data-search-results]')!;
   const hint = dialog.querySelector<HTMLElement>('[data-search-hint]')!;
+  const count = dialog.querySelector<HTMLElement>('[data-search-count]')!;
   const firstHint = hint.textContent ?? '';
 
-  let pagefind: Pagefind | null | undefined;
+  let loading: Promise<Pagefind | null> | null = null;
   let selected = 0;
+  /** The query that the list on the screen answers. */
+  let shown = '';
+  /** Enter came before the answer to what is typed: follow it when it arrives. */
+  let eager = false;
 
-  async function load(): Promise<Pagefind | null> {
-    if (pagefind !== undefined) return pagefind;
-    try {
-      const found: Pagefind = await import(/* @vite-ignore */ dialog.dataset.bundle!);
-      await found.init();
-      pagefind = found;
-    } catch {
-      // the index is made when the site is built: a development server has none
-      pagefind = null;
-    }
-    return pagefind;
+  function load(): Promise<Pagefind | null> {
+    loading ??= (async () => {
+      try {
+        const found: Pagefind = await import(/* @vite-ignore */ dialog.dataset.bundle!);
+        await found.init();
+        return found;
+      } catch {
+        // The index is made when the site is built: a development server has
+        // none. Not remembered, so a failure of the network is tried again.
+        loading = null;
+        return null;
+      }
+    })();
+    return loading;
   }
 
   function open() {
@@ -199,24 +217,39 @@ import { url } from '../lib/url';
     hint.hidden = false;
   }
 
+  function empty() {
+    list.replaceChildren();
+    shown = '';
+    count.textContent = '';
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');
+  }
+
   function select(index: number) {
-    const links = list.querySelectorAll('a');
-    if (!links.length) return;
-    selected = (index + links.length) % links.length;
-    links.forEach((link, i) => link.setAttribute('aria-selected', String(i === selected)));
-    links[selected].scrollIntoView({ block: 'nearest' });
+    const options = [...list.children];
+    if (!options.length) return;
+    selected = (index + options.length) % options.length;
+    options.forEach((option, i) => option.setAttribute('aria-selected', String(i === selected)));
+    input.setAttribute('aria-activedescendant', options[selected].id);
+    options[selected].scrollIntoView({ block: 'nearest' });
+  }
+
+  function follow() {
+    list.children[selected]?.querySelector('a')?.click();
   }
 
   async function search() {
     const query = input.value.trim();
+    eager = false;
     if (!query) {
-      list.replaceChildren();
+      empty();
       say(firstHint);
       return;
     }
     const engine = await load();
+    if (input.value.trim() !== query) return;
     if (!engine) {
-      list.replaceChildren();
+      empty();
       say('The search index is made when the site is built, and this copy has none.');
       return;
     }
@@ -225,13 +258,24 @@ import { url } from '../lib/url';
     if (!found) return;
     const pages = await Promise.all(found.results.slice(0, 7).map((result) => result.data()));
     if (input.value.trim() !== query) return;
+    if (!pages.length) {
+      empty();
+      shown = query;
+      say(`Nothing found for “${query}”.`);
+      return;
+    }
     list.replaceChildren(
-      ...pages.map((page) => {
-        // the part of the page the match is in, when it is under a heading of its own
-        const part = page.sub_results?.find((sub) => sub.url !== page.url) ?? null;
+      ...pages.map((page, i) => {
+        // the part of the page with the most matches, when it is under a heading of its own
+        const parts = [...(page.sub_results ?? [])].sort((a, b) => (b.locations?.length ?? 0) - (a.locations?.length ?? 0));
+        const part = parts[0] && parts[0].url !== page.url ? parts[0] : null;
         const item = document.createElement('li');
+        item.id = `sx-option-${i}`;
+        item.setAttribute('role', 'option');
         const link = document.createElement('a');
         link.href = part?.url ?? page.url;
+        // the field keeps the focus: the arrow keys and Enter choose
+        link.tabIndex = -1;
         const title = document.createElement('div');
         title.className = 'sx-title';
         title.textContent = page.meta.title ?? 'lumen';
@@ -249,12 +293,12 @@ import { url } from '../lib/url';
         return item;
       }),
     );
-    if (pages.length) {
-      hint.hidden = true;
-      select(0);
-    } else {
-      say(`Nothing found for “${query}”.`);
-    }
+    shown = query;
+    hint.hidden = true;
+    input.setAttribute('aria-expanded', 'true');
+    count.textContent = pages.length === 1 ? '1 result' : `${pages.length} results`;
+    select(0);
+    if (eager) follow();
   }
 
   document.querySelectorAll('[data-search-open]').forEach((button) => button.addEventListener('click', open));
@@ -277,16 +321,21 @@ import { url } from '../lib/url';
       select(selected - 1);
     } else if (event.key === 'Enter') {
       event.preventDefault();
-      list.querySelectorAll('a')[selected]?.click();
+      // what is listed may still answer an older query: then wait for the answer to this one
+      if (shown === input.value.trim()) follow();
+      else eager = true;
     }
   });
 
   list.addEventListener('pointermove', (event) => {
-    const link = (event.target as HTMLElement).closest('a');
-    if (link) select([...list.querySelectorAll('a')].indexOf(link));
+    const item = (event.target as HTMLElement).closest('li');
+    if (item) select([...list.children].indexOf(item));
   });
   list.addEventListener('click', (event) => {
     if ((event.target as HTMLElement).closest('a')) dialog.close();
+  });
+  dialog.addEventListener('close', () => {
+    eager = false;
   });
 
   // a click beside the box closes it

@@ -10,7 +10,7 @@ lumen is a terminal emulator for Linux. It is drawn by the graphics card, has ta
 
 What sets it apart is one idea: **the screen is not only text**. When a tool prints the name of a file, a picture or a link, most terminals draw the characters and stop there. lumen knows what they are.
 
-- **A file name is the file.** In a listing, a click on a name copies the file to the clipboard, `Ctrl+Click` opens it, and you can drag it out of the window into another program. See [Files and links](/docs/files-and-links/).
+- **A file name is the file.** In a listing, a click on a name copies the file to the clipboard, `Ctrl+Click` opens it, and on Wayland you can drag it out of the window into another program. See [Files and links](/docs/files-and-links/).
 - **Pictures sit between the lines.** What a program sends with the kitty graphics protocol is drawn in place and scrolls with the text. See [Pictures](/docs/images/).
 - **A new tab is there at once.** With `prewarm` on, the next shell is started ahead of time. See [Instant tabs](/docs/instant-tabs/).
 
@@ -28,7 +28,7 @@ Around that is a terminal you can work in all day: [tabs and splits](/docs/tabs-
 
 ## Early days
 
-lumen is new, and it says so. It is a terminal you can use every day, and the first parts that make it different are in. Some things other terminals have are not there yet: key bindings can't be changed, there are no ligatures settings, and lumen is not packaged for any distribution, so it is built from source. The [roadmap](/docs/roadmap/) says what comes next, and the [release notes](/releases/) say what each version brought.
+lumen is new, and it says so. It is a terminal you can use every day, and the first parts that make it different are in. Some things other terminals have are not there yet: key bindings can't be changed, and lumen is not packaged for any distribution, so it is built from source. The [roadmap](/docs/roadmap/) says what comes next, and the [release notes](/releases/) say what each version brought.
 
 ## The tools it is made for
 

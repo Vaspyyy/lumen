@@ -46,7 +46,7 @@ A few habits, so that a change fits in:
 - **Comments say why**, in plain sentences. What the code does is in the code.
 - **Names are words**, not abbreviations.
 - **A mistake is reported**, not ignored. A config file with a typo in it is an error with a message, not a silent default.
-- **Nothing in lumen is made for one tool.** lumen reads standard escape sequences. If a tool needs something new, it should be something any terminal could add.
+- **Nothing in lumen works for one tool only.** lumen reads standard escape sequences. Its one addition, the link that copies a file, is open to any program. If a tool needs something new, it should be something any terminal could add.
 
 [How it works](/docs/how-it-works/) says what is where.
 

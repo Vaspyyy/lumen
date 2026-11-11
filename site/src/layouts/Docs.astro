@@ -36,7 +36,7 @@ const source = `${site.repo}/edit/main/site/src/content/docs/${slug}.md`;
         {
           docsNav.map((section) => (
             <section>
-              <h2>{section.title}</h2>
+              <p class="group">{section.title}</p>
               <ul>
                 {section.pages.map((page) => (
                   <li>
@@ -95,7 +95,7 @@ const source = `${site.repo}/edit/main/site/src/content/docs/${slug}.md`;
       {
         toc.length > 1 && (
           <nav aria-label="On this page">
-            <h2>On this page</h2>
+            <p class="group">On this page</p>
             <ul data-toc>
               {toc.map((h) => (
                 <li class={`d${h.depth}`}>
@@ -135,8 +135,8 @@ const source = `${site.repo}/edit/main/site/src/content/docs/${slug}.md`;
   .side section + section {
     margin-top: 22px;
   }
-  .side h2,
-  .toc h2 {
+  .side .group,
+  .toc .group {
     margin-bottom: 8px;
     font-size: 12.5px;
     font-weight: 500;

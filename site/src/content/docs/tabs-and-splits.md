@@ -19,6 +19,8 @@ A lumen window holds tabs, and a tab holds panes. Every pane is a terminal of it
 
 With the mouse: click a tab to go to it, click the `+` for a new one, and click the `×` on a tab or middle-click the tab to close it. Drag a tab onto another one to move it there.
 
+A new tab opens to the right of the one you are in.
+
 A tab is named after the title its program sets. Most shells set one: the folder, or the command that is running. Where a program sets none, the tab shows the name of the folder the shell is in.
 
 ## Panes
@@ -47,6 +49,8 @@ With [`prewarm`](/docs/instant-tabs/) on, the shell of the next tab or pane is s
 
 A pane closes when its program ends: when you leave the shell with `exit` or `Ctrl+D`. A tab closes with its last pane, and the window closes with its last tab.
 
+lumen doesn't ask before it closes something. The window's close button closes every tab in it, and what runs in them ends.
+
 ## More than one window
 
-`Ctrl+Shift+N` opens a new window.
+`Ctrl+Shift+N` opens a new window. It starts in the folder lumen was started in, not in the folder of the current pane.

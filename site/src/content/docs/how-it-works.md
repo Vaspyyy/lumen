@@ -12,7 +12,7 @@ What lumen adds is everything between the two: tabs and splits, the keyboard and
 
 ## A screen that is drawn every frame
 
-GPUI redraws the window whenever something changes. lumen lays out the cells of each visible pane: backgrounds first, then pictures, then text, then the marks of a search and of a link, and last the cursor and its light.
+GPUI redraws the window whenever something changes. lumen lays out the cells of each visible pane: backgrounds and the marks of a search first, then pictures, then text, then the line under a link, and last the cursor and its light.
 
 The cursor's glow and glide are done there. The cursor is not a cell that is filled in: it is a shape with a position of its own, which moves towards the cell it belongs in.
 
@@ -32,7 +32,7 @@ lumen does something simpler. A picture occupies cells, as text does. lumen mark
 
 When a pane is drawn, the cells with such a mark are not drawn as text. The drawing code looks the picture up by the mark and draws that part of it.
 
-When no cell names a picture any more, because it has scrolled out of the scrollback or was cleared, the picture is freed.
+When no cell names a picture any more, because it has scrolled out of the scrollback or was cleared, lumen frees it the next time it tidies up. A picture a program gave a number to is kept for a while longer, so that the program can show it again.
 
 ## Names as files
 

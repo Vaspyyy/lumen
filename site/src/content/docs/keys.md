@@ -3,7 +3,7 @@ title: Keys
 description: Every key lumen takes for itself. Everything else goes to the program in the pane.
 ---
 
-lumen keeps few keys for itself, and almost all of them have `Ctrl+Shift` in them, so they stay out of the way of the programs you run. The keys can't be changed yet.
+lumen keeps few keys for itself. Where a program is likely to want a key, lumen's has `Shift` in it as well: `Ctrl+C` stops a program, `Ctrl+Shift+C` copies. A few plain ones, such as `Alt+1` to `Alt+9` and `Ctrl+Tab`, are keys that some programs use too. The keys can't be changed yet.
 
 ## Tabs
 
@@ -53,17 +53,17 @@ Typing brings the view back to the bottom.
 
 | Key | Does |
 | --- | --- |
-| `Ctrl+Plus` | Larger text in the current pane |
+| `Ctrl+Plus` | Larger text in the current pane, a tenth at a time |
 | `Ctrl+Minus` | Smaller text in the current pane |
 | `Ctrl+0` | Back to the size from the config |
 
-The size is per pane, and lasts until the pane closes. The size all panes start with is `size` in the [`[font]`](/docs/fonts/) table.
+The size is per pane, lasts until the pane closes, and goes from less than half to four times the size in the config. The size all panes start with is `size` in the [`[font]`](/docs/fonts/) table.
 
 ## Windows
 
 | Key | Does |
 | --- | --- |
-| `Ctrl+Shift+N` | New window |
+| `Ctrl+Shift+N` | New window, in the folder lumen was started in |
 
 ## Keys for the program
 
