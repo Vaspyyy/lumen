@@ -9,6 +9,7 @@ mod keys;
 mod links;
 mod mouse;
 mod palette;
+mod phone;
 mod pty;
 mod terminal;
 mod view;
@@ -76,7 +77,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Spawn, i32> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-h" | "--help" => {
-                print!("{USAGE}");
+                print!("{USAGE}\n{}", phone::USAGE);
                 return Err(0);
             },
             "-v" | "--version" => {
@@ -165,7 +166,12 @@ fn watch_config(cx: &mut App) {
 }
 
 fn main() {
-    let spawn = match parse_args(std::env::args().skip(1)) {
+    // the commands for phones work over SSH, with no display: before anything of the window
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(status) = phone::run(&args) {
+        std::process::exit(status);
+    }
+    let spawn = match parse_args(args.into_iter()) {
         Ok(spawn) => spawn,
         Err(status) => std::process::exit(status),
     };
