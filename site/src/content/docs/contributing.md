@@ -66,6 +66,6 @@ Release notes are Markdown files too, one per version, in `site/src/content/rele
 
 ## How a release is made
 
-A release is a tag. When a tag such as `v0.2.2` is pushed, a workflow builds lumen on an old system (so that it runs on every newer one), wraps it up as an archive, a Debian package, an RPM and an Arch package, and tries each of them on a clean system: it installs it, opens a lumen window on a display nobody sees, and removes it again. Only when all of that went well are the files published. The usual checks (format, lint, tests) are not part of it: they run when a change is pushed, so tag a commit that has passed them.
+A release is a tag. When a tag such as `v0.2.2` is pushed, a workflow builds lumen on an old system (so that it runs on every newer one), wraps it up as an archive, a Debian package, an RPM and an Arch package, and tries each of them on a clean system: it installs it, opens a lumen window on a display nobody sees, and removes it again. The same run builds the Android app, and a job of its own, the only one that can read the signing key, signs it and checks the signature. Only when all of that went well are the files published. The usual checks (format, lint, tests) are not part of it: they run when a change is pushed, so tag a commit that has passed them.
 
-The version in `Cargo.toml` has to be the one the tag names, and it needs its release note. The scripts are in `packaging`, and `packaging/README.md` says how to run them on your own machine.
+The version in `Cargo.toml` has to be the one the tag names, `versionName` in `android/app/build.gradle.kts` has to say the same, and the version needs its release note. The scripts are in `packaging`, and `packaging/README.md` says how to run them on your own machine.
