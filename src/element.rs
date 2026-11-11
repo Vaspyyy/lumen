@@ -6,20 +6,23 @@
 
 use std::cell::Cell as StdCell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::search::Match;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 use gpui::{
-    App, BorderStyle, Bounds, BoxShadow, Corners, DispatchPhase, Element, ElementId, ElementInputHandler, Entity,
-    FocusHandle, Font, FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId,
-    IntoElement, LayoutId, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollEvent, ShapedLine,
-    SharedString, Size, StrikethroughStyle, Style, TextAlign, TextRun, UnderlineStyle, Window, fill, font, point, px,
-    quad, relative, size, transparent_black,
+    App, BorderStyle, Bounds, BoxShadow, Corners, CursorStyle, DispatchPhase, Element, ElementId, ElementInputHandler,
+    Entity, FocusHandle, Font, FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
+    InspectorElementId, IntoElement, LayoutId, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    RenderImage, ScrollEvent, ShapedLine, SharedString, Size, StrikethroughStyle, Style, TextAlign, TextRun,
+    UnderlineStyle, Window, fill, font, point, px, quad, relative, size, transparent_black,
 };
 
 use crate::config::Config;
+use crate::graphics;
 use crate::palette;
 use crate::terminal::{TermSize, Terminal};
 use crate::view::TerminalView;
@@ -27,10 +30,15 @@ use crate::view::TerminalView;
 /// Where the grid is on screen: what turns a mouse position into a cell.
 #[derive(Clone, Copy, Debug)]
 pub struct Geometry {
+    /// The pane.
+    pub bounds: Bounds<Pixels>,
+    /// The top left of the grid, which is inset from the pane's.
     pub origin: Point<Pixels>,
     pub cell: Size<Pixels>,
     pub cols: usize,
     pub rows: usize,
+    /// The cursor's cell, while it is on screen.
+    pub cursor: Option<Bounds<Pixels>>,
 }
 
 impl Geometry {
@@ -129,6 +137,12 @@ pub struct TerminalElement {
     pub blink_at: Instant,
     pub motion: Rc<StdCell<Motion>>,
     pub zoom: f32,
+    /// The cells of the link a click would follow: row, column, length.
+    pub link: Vec<(usize, usize, usize)>,
+    /// What a search found, and which match it is on.
+    pub search: Option<(Rc<[Match]>, Option<usize>)>,
+    /// Text an input method is composing, shown at the cursor.
+    pub composing: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -169,12 +183,26 @@ struct CursorLayout {
     text: Option<ShapedLine>,
 }
 
+/// A part of an image, as far as its cells are on screen.
+struct ImageLayout {
+    /// The cells.
+    clip: Bounds<Pixels>,
+    /// The whole image, of which the cells show a part.
+    bounds: Bounds<Pixels>,
+    image: Arc<RenderImage>,
+}
+
 pub struct Layout {
     hitbox: Hitbox,
     cell: Size<Pixels>,
     rects: Vec<(Bounds<Pixels>, Hsla)>,
+    images: Vec<ImageLayout>,
     lines: Vec<(Point<Pixels>, ShapedLine)>,
+    /// What is drawn over the text: the line under a link, text being composed.
+    marks: Vec<(Bounds<Pixels>, Hsla)>,
+    composing: Option<(Point<Pixels>, ShapedLine)>,
     cursor: Option<CursorLayout>,
+    pointer: CursorStyle,
 }
 
 impl IntoElement for TerminalElement {
@@ -256,7 +284,8 @@ impl Element for TerminalElement {
         let (cols, rows) = (term_size.cols, term_size.rows);
         let origin = point((bounds.origin.x + pad).round(), (bounds.origin.y + pad).round());
         self.terminal.update(cx, |terminal, _| terminal.resize(term_size));
-        self.geometry.set(Some(Geometry { origin, cell, cols, rows }));
+        let mut geometry = Geometry { bounds, origin, cell, cols, rows, cursor: None };
+        self.geometry.set(Some(geometry));
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
 
         let cell_bounds = |col: usize, row: usize, cells: usize| {
@@ -268,7 +297,12 @@ impl Element for TerminalElement {
         // Read the grid. Nothing slow happens while the lock is held.
         let mut backgrounds: Vec<(usize, usize, usize, Hsla)> = Vec::new();
         let mut runs: Vec<Run> = Vec::new();
+        // the cells that show part of an image: row, column, placement, column and row in the image
+        let mut image_cells: Vec<(usize, usize, u32, usize, usize)> = Vec::new();
+        let mut found: Vec<(usize, usize, usize, Hsla)> = Vec::new();
+        let accent = config.accent();
         let cursor;
+        let pointer;
         {
             let terminal = self.terminal.read(cx);
             let term = terminal.term.lock();
@@ -278,6 +312,27 @@ impl Element for TerminalElement {
             let selection_bg = colors.selection.background.map(|c| c.hsla());
             let selection_fg = colors.selection.text.map(|c| c.hsla());
             let mut run: Option<Run> = None;
+            pointer =
+                if content.mode.intersects(TermMode::MOUSE_MODE) { CursorStyle::Arrow } else { CursorStyle::IBeam };
+
+            // what the search found, as far as it is on screen
+            let mut on_match = None;
+            if let Some((matches, current)) = &self.search {
+                on_match = current.and_then(|i| matches.get(i)).cloned();
+                let (top, bottom) = (-offset, rows as i32 - 1 - offset);
+                let first = matches.partition_point(|m| m.end().line.0 < top);
+                for found_match in matches[first..].iter().take_while(|m| m.start().line.0 <= bottom) {
+                    if Some(found_match) == on_match.as_ref() {
+                        continue;
+                    }
+                    let (start, end) = (found_match.start(), found_match.end());
+                    for line in start.line.0.max(top)..=end.line.0.min(bottom) {
+                        let from = if line == start.line.0 { start.column.0 } else { 0 };
+                        let to = if line == end.line.0 { end.column.0 } else { cols.saturating_sub(1) };
+                        found.push(((line + offset) as usize, from, to + 1 - from.min(to), accent.opacity(0.3)));
+                    }
+                }
+            }
 
             for indexed in content.display_iter {
                 let row = indexed.point.line.0 + offset;
@@ -286,6 +341,12 @@ impl Element for TerminalElement {
                 }
                 let (row, col) = (row as usize, indexed.point.column.0);
                 let cell = indexed.cell;
+                if let Some(link) = cell.hyperlink()
+                    && let Some((placement, image_col, image_row)) = graphics::cell_of(link.uri())
+                {
+                    image_cells.push((row, col, placement, image_col, image_row));
+                    continue;
+                }
                 let flags = cell.flags;
                 if flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
                     continue;
@@ -306,7 +367,11 @@ impl Element for TerminalElement {
                     fg_color.a *= 0.6;
                 }
                 let default_bg = bg == Color::Named(NamedColor::Background);
-                if selected {
+                if on_match.as_ref().is_some_and(|m| m.contains(&indexed.point)) {
+                    // the match the search is on: lit like the lamp, with the text dark on it
+                    push_background(&mut backgrounds, row, col, width, accent);
+                    fg_color = colors.primary.background.hsla();
+                } else if selected {
                     // a theme without a selection color gets a see-through wash of the text color
                     let wash = selection_bg.unwrap_or_else(|| Hsla { a: 0.28, ..colors.primary.foreground.hsla() });
                     push_background(&mut backgrounds, row, col, width, wash);
@@ -393,9 +458,67 @@ impl Element for TerminalElement {
             });
         }
 
-        let mut rects = Vec::with_capacity(backgrounds.len());
-        for (row, col, cells, color) in backgrounds {
+        let mut rects = Vec::with_capacity(backgrounds.len() + found.len());
+        for (row, col, cells, color) in backgrounds.into_iter().chain(found) {
             rects.push((cell_bounds(col, row, cells), color));
+        }
+
+        // Cells of one image that are next to each other are one piece of it.
+        // A piece: row, column, columns, rows, placement, column and row in the image.
+        let mut pieces: Vec<(usize, usize, usize, usize, u32, usize, usize)> = Vec::new();
+        for (row, col, placement, image_col, image_row) in image_cells {
+            if let Some(p) = pieces.last_mut()
+                && (p.0, p.3, p.4, p.6) == (row, 1, placement, image_row)
+                && p.1 + p.2 == col
+                && p.5 + p.2 == image_col
+            {
+                p.2 += 1;
+                continue;
+            }
+            pieces.push((row, col, 1, 1, placement, image_col, image_row));
+        }
+        let mut blocks: Vec<(usize, usize, usize, usize, u32, usize, usize)> = Vec::new();
+        for piece in pieces {
+            let above = blocks.iter_mut().find(|b| {
+                (b.1, b.2, b.4, b.5) == (piece.1, piece.2, piece.4, piece.5)
+                    && b.0 + b.3 == piece.0
+                    && b.6 + b.3 == piece.6
+            });
+            match above {
+                Some(block) => block.3 += 1,
+                None => blocks.push(piece),
+            }
+        }
+        let mut images = Vec::with_capacity(blocks.len());
+        if !blocks.is_empty() {
+            let terminal = self.terminal.read(cx);
+            let store = terminal.images.lock().unwrap();
+            for (row, col, width, height, placement, image_col, image_row) in blocks {
+                let Some(placement) = store.placement(placement) else { continue };
+                let cell_origin = |col: f32, row: f32| point(origin.x + cell_width * col, origin.y + cell_height * row);
+                images.push(ImageLayout {
+                    clip: Bounds::new(
+                        cell_origin(col as f32, row as f32),
+                        size(cell_width * width as f32, cell_height * height as f32),
+                    ),
+                    bounds: Bounds::new(
+                        cell_origin(col as f32 - image_col as f32, row as f32 - image_row as f32),
+                        size(cell_width * placement.extent.0, cell_height * placement.extent.1),
+                    ),
+                    image: placement.image.render.clone(),
+                });
+            }
+        }
+
+        // the link a click would follow is underlined
+        let mut marks = Vec::new();
+        for &(row, col, len) in &self.link {
+            let cells = cell_bounds(col, row, len);
+            let line = Bounds::new(
+                point(cells.origin.x, cells.origin.y + cell_height - thickness - px(1.)),
+                size(cells.size.width, thickness),
+            );
+            marks.push((line, accent));
         }
         let mut lines = Vec::with_capacity(runs.len());
         for run in runs {
@@ -405,6 +528,31 @@ impl Element for TerminalElement {
             let text_run = self.text_run(&base, &run.style, run.text.len(), thickness);
             let line = text_system.shape_line(run.text.into(), font_size, &[text_run], Some(advance));
             lines.push((point(origin.x + cell_width * run.col as f32, origin.y + cell_height * run.row as f32), line));
+        }
+
+        // Text an input method is composing stands at the cursor, which moves on behind it.
+        let mut composing = None;
+        let mut composed = px(0.);
+        if let (Some(text), Some((row, col, ..))) = (&self.composing, cursor) {
+            let style = RunStyle {
+                fg: colors.primary.foreground.hsla(),
+                bold: false,
+                italic: false,
+                underline: Line::Single,
+                underline_color: Some(accent),
+                strike: false,
+            };
+            let run = self.text_run(&base, &style, text.len(), thickness);
+            let line = text_system.shape_line(text.clone().into(), font_size, &[run], None);
+            let at = cell_bounds(col, row, 1).origin;
+            composed = (line.width / cell_width).ceil() * cell_width;
+            marks.push((Bounds::new(at, size(composed, cell_height)), colors.primary.background.hsla()));
+            composing = Some((at, line));
+        }
+
+        if let Some((row, col, cells, ..)) = cursor {
+            geometry.cursor = Some(cell_bounds(col, row, cells));
+            self.geometry.set(Some(geometry));
         }
 
         let now = Instant::now();
@@ -429,6 +577,7 @@ impl Element for TerminalElement {
             }
             let color = config.cursor_color().opacity(lit);
             let mut bounds = cell_bounds(col, row, cells);
+            bounds.origin.x += composed;
             if config.cursor.smooth {
                 let target = (f32::from(bounds.origin.x - origin.x), f32::from(bounds.origin.y - origin.y));
                 let ((x, y), moving) = motion.toward(target, now);
@@ -455,7 +604,7 @@ impl Element for TerminalElement {
         });
         self.motion.set(motion);
 
-        Layout { hitbox, cell, rects, lines, cursor }
+        Layout { hitbox, cell, rects, images, lines, marks, composing, cursor, pointer }
     }
 
     fn paint(
@@ -470,10 +619,21 @@ impl Element for TerminalElement {
     ) {
         window.handle_input(&self.focus, ElementInputHandler::new(bounds, self.view.clone()), cx);
 
+        window.set_cursor_style(layout.pointer, &layout.hitbox);
+
         for (rect, color) in &layout.rects {
             window.paint_quad(fill(*rect, *color));
         }
+        for image in &layout.images {
+            let _ = window.paint_image(image.clip, image.bounds, Corners::default(), image.image.clone(), 0, false);
+        }
         for (origin, line) in &layout.lines {
+            let _ = line.paint(*origin, layout.cell.height, TextAlign::Left, None, window, cx);
+        }
+        for (rect, color) in &layout.marks {
+            window.paint_quad(fill(*rect, *color));
+        }
+        if let Some((origin, line)) = &layout.composing {
             let _ = line.paint(*origin, layout.cell.height, TextAlign::Left, None, window, cx);
         }
         if let Some(cursor) = &layout.cursor {

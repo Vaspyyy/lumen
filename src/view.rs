@@ -1,23 +1,33 @@
-//! A terminal on screen: its keyboard, mouse, selection and clipboard.
+//! A terminal on screen: its keyboard, mouse, selection, clipboard, links
+//! and search.
 
 use std::cell::Cell;
 use std::ops::Range;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use alacritty_terminal::grid::Scroll;
-use alacritty_terminal::index::Side;
+use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Direction, Line, Point as GridPoint, Side};
 use alacritty_terminal::selection::SelectionType;
-use alacritty_terminal::term::TermMode;
+use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
+use alacritty_terminal::term::{Term, TermMode};
+use gpui::prelude::*;
 use gpui::{
-    App, AppContext, Bounds, ClipboardItem, Context, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement, Pixels, Render, ScrollDelta, ScrollEvent, Styled, Subscription, Task, UTF16Selection, Window, div,
+    App, Bounds, BoxShadow, ClickEvent, ClipboardItem, Context, Entity, EntityInputHandler, EventEmitter,
+    ExternalDragPayload, ExternalPaths, FileDragPaths, FocusHandle, Focusable, KeyDownEvent, KeyUpEvent, Keystroke,
+    Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    ScrollDelta, ScrollEvent, SharedString, Subscription, Task, UTF16Selection, Window, div, point, px, svg,
 };
 
-use crate::actions::{Copy, Paste, ScrollBottom, ScrollPageDown, ScrollPageUp, ScrollTop, ZoomIn, ZoomOut, ZoomReset};
+use crate::actions::{
+    Copy, Paste, ScrollBottom, ScrollPageDown, ScrollPageUp, ScrollTop, ToggleSearch, ZoomIn, ZoomOut, ZoomReset,
+};
 use crate::config::Config;
 use crate::element::{Geometry, Motion, TerminalElement};
+use crate::keys::Press;
+use crate::links::{self, Target};
 use crate::terminal::{Started, Terminal, TerminalEvent};
 use crate::{keys, mouse};
 
@@ -30,6 +40,61 @@ pub enum ViewEvent {
     Output,
     /// The pane was clicked or otherwise took the keyboard.
     Focused,
+    /// Something to tell the user in passing: a file was copied.
+    Notice(String),
+}
+
+/// A link the mouse is on.
+#[derive(Clone, PartialEq)]
+pub struct Hover {
+    pub target: Target,
+    /// The cells it covers on screen: row, column and length of each
+    /// stretch. A link that wraps has more than one.
+    pub segments: Vec<(usize, usize, usize)>,
+}
+
+/// A search through the scrollback.
+pub struct Search {
+    pub query: String,
+    /// Oldest first.
+    pub matches: Rc<[Match]>,
+    /// The match the view is on.
+    pub current: Option<usize>,
+    /// How many lines were above the screen when the matches were found:
+    /// what tells how far they have moved up since.
+    history: usize,
+}
+
+/// More matches than this are not kept: the newest are.
+const MAX_MATCHES: usize = 5000;
+
+/// A file being dragged out of a listing.
+#[derive(Clone)]
+pub struct DraggedFile {
+    pub path: PathBuf,
+    /// The pane it is dragged from, and where its name is there.
+    from: gpui::EntityId,
+    name_at: Vec<Bounds<Pixels>>,
+}
+
+/// What is under the mouse while a file is dragged.
+struct FileGhost(SharedString);
+
+impl Render for FileGhost {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let config = cx.global::<Config>();
+        div()
+            .px(px(10.))
+            .py(px(5.))
+            .rounded(px(8.))
+            .bg(config.colors.primary.background.hsla().opacity(0.92))
+            .border_1()
+            .border_color(config.accent().opacity(0.6))
+            .text_size(px(12.5))
+            .text_color(gpui::white().opacity(0.92))
+            .font_family(".SystemUIFont")
+            .child(self.0.clone())
+    }
 }
 
 pub struct TerminalView {
@@ -50,6 +115,15 @@ pub struct TerminalView {
     motion: Rc<Cell<Motion>>,
     /// Text an input method is still composing.
     composing: Option<String>,
+    /// Where the mouse is, while it is over this pane.
+    mouse: Option<Point<Pixels>>,
+    modifiers: Modifiers,
+    hover: Option<Hover>,
+    /// The keys whose press went to the program, and whose release may too.
+    keys_down: Vec<String>,
+    search: Option<Search>,
+    /// The wait before the matches are looked for again after new output.
+    search_refresh: Option<Task<()>>,
     _blink: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
@@ -67,7 +141,10 @@ impl TerminalView {
         let terminal = cx.new(|cx| Terminal::new(started, cx));
         let focus = cx.focus_handle();
         let subscriptions = vec![
-            cx.observe(&terminal, |_, _, cx| {
+            cx.observe(&terminal, |this, _, cx| {
+                // what is under the mouse, and what the search finds, may have changed
+                this.update_hover(cx);
+                this.refresh_search_soon(cx);
                 cx.emit(ViewEvent::Output);
                 cx.notify();
             }),
@@ -84,6 +161,10 @@ impl TerminalView {
             }),
             cx.on_blur(&focus, window, |this, _, cx| {
                 this.report_focus(false, cx);
+                cx.notify();
+            }),
+            cx.observe_global::<Config>(|this, cx| {
+                this.terminal.read(cx).configure(cx.global::<Config>());
                 cx.notify();
             }),
         ];
@@ -119,7 +200,14 @@ impl TerminalView {
             blink_on: true,
             blink_at: Instant::now() - Duration::from_secs(1),
             motion: Rc::default(),
-            composing: None,
+            // for a screenshot of composed text, where there is no input method to compose it
+            composing: std::env::var("LUMEN_COMPOSING").ok().filter(|_| crate::preview()),
+            mouse: None,
+            modifiers: Modifiers::default(),
+            hover: None,
+            keys_down: Vec::new(),
+            search: None,
+            search_refresh: None,
             _blink: blink,
             _subscriptions: subscriptions,
         }
@@ -157,9 +245,40 @@ impl TerminalView {
         if self.composing.is_some() {
             return;
         }
-        if let Some(bytes) = keys::encode(&event.keystroke, self.mode(cx)) {
+        if self.search.is_some() {
+            if self.search_key(&event.keystroke, cx) {
+                cx.stop_propagation();
+            }
+            return;
+        }
+        // The press is the program's from here on, as bytes now or as text through
+        // the input method in a moment: so is the release.
+        if !self.keys_down.contains(&event.keystroke.key) {
+            self.keys_down.push(event.keystroke.key.clone());
+        }
+        let press = if event.is_held { Press::Repeat } else { Press::Down };
+        if let Some(bytes) = keys::encode(&event.keystroke, self.mode(cx), press) {
             self.send(bytes, cx);
             cx.stop_propagation();
+        }
+    }
+
+    /// A key let go: only a program that asked to hear of it is told, and
+    /// only of a key whose press it got (not one that was a shortcut of
+    /// lumen's, or went to the search).
+    fn key_up(&mut self, event: &KeyUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(at) = self.keys_down.iter().position(|key| *key == event.keystroke.key) else {
+            return;
+        };
+        self.keys_down.swap_remove(at);
+        if self.composing.is_some() || self.search.is_some() {
+            return;
+        }
+        let mode = self.mode(cx);
+        if mode.contains(TermMode::REPORT_EVENT_TYPES)
+            && let Some(bytes) = keys::encode(&event.keystroke, mode, Press::Up)
+        {
+            self.terminal.read(cx).write(bytes);
         }
     }
 
@@ -170,7 +289,13 @@ impl TerminalView {
     }
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return;
+        };
+        if let Some(search) = &mut self.search {
+            search.query.push_str(text.lines().next().unwrap_or_default());
+            self.search_changed(cx);
+        } else {
             self.paste_text(&text, cx);
         }
     }
@@ -186,8 +311,18 @@ impl TerminalView {
         self.send(bytes, cx);
     }
 
+    /// Files dropped on the pane are typed as their paths.
+    fn drop_paths(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        let words: Vec<String> = paths.iter().map(|path| links::shell_quote(path)).collect();
+        if !words.is_empty() {
+            window.focus(&self.focus, cx);
+            self.paste_text(&(words.join(" ") + " "), cx);
+        }
+    }
+
     fn scroll_by(&mut self, scroll: Scroll, cx: &mut Context<Self>) {
         self.terminal.read(cx).scroll(scroll);
+        self.update_hover(cx);
         cx.notify();
     }
 
@@ -196,6 +331,245 @@ impl TerminalView {
             Some(f) => (self.zoom * f).clamp(0.4, 4.),
             None => 1.,
         };
+        cx.notify();
+    }
+
+    /// The link under the mouse, if there is one lumen can follow.
+    fn link_under_mouse(&self, cx: &App) -> Option<Hover> {
+        let (position, geometry) = (self.mouse?, self.geometry.get()?);
+        let grid = Bounds::new(
+            geometry.origin,
+            gpui::size(geometry.cell.width * geometry.cols as f32, geometry.cell.height * geometry.rows as f32),
+        );
+        if !grid.contains(&position) {
+            return None;
+        }
+        let (col, row, _) = geometry.cell_at(position);
+        let terminal = self.terminal.read(cx);
+        let term = terminal.term.lock();
+        let (cols, rows) = (term.columns(), term.screen_lines());
+        if col >= cols || row >= rows {
+            return None;
+        }
+        let offset = term.grid().display_offset() as i32;
+        let link_at = |row: usize, col: usize| term.grid()[Line(row as i32 - offset)][Column(col)].hyperlink();
+        let link = link_at(row, col)?;
+        let target = links::target(link.uri())?;
+        // the cells around `col` that carry the same link
+        let stretch = |row: usize, col: usize| {
+            let (mut start, mut end) = (col, col + 1);
+            while start > 0 && link_at(row, start - 1).as_ref() == Some(&link) {
+                start -= 1;
+            }
+            while end < cols && link_at(row, end).as_ref() == Some(&link) {
+                end += 1;
+            }
+            (start, end)
+        };
+        let (start, end) = stretch(row, col);
+        let mut segments = vec![(row, start, end - start)];
+        // a link that wraps goes on in the rows above and below
+        let (mut above, mut first) = (row, start);
+        while above > 0 && first == 0 && link_at(above - 1, cols - 1).as_ref() == Some(&link) {
+            above -= 1;
+            let (start, end) = stretch(above, cols - 1);
+            segments.push((above, start, end - start));
+            first = start;
+        }
+        let (mut below, mut last) = (row, end);
+        while below + 1 < rows && last == cols && link_at(below + 1, 0).as_ref() == Some(&link) {
+            below += 1;
+            let (start, end) = stretch(below, 0);
+            segments.push((below, start, end - start));
+            last = end;
+        }
+        // A click copies what the text names. A link that says one thing and leads to
+        // another file is not taken at its word: it is a link like any other.
+        segments.sort();
+        let mut text = String::new();
+        for &(row, start, len) in &segments {
+            for cell in &term.grid()[Line(row as i32 - offset)][Column(start)..Column(start + len)] {
+                // the second half of a wide character is not a character of its own
+                if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                text.push(cell.c);
+                text.extend(cell.zerowidth().into_iter().flatten());
+            }
+        }
+        let target = match target {
+            Target::Copy(path) if !names(&text, &path) => Target::File(path),
+            target => target,
+        };
+        Some(Hover { target, segments })
+    }
+
+    fn update_hover(&mut self, cx: &mut Context<Self>) {
+        let hover = self.link_under_mouse(cx);
+        if hover != self.hover {
+            self.hover = hover;
+            cx.notify();
+        }
+    }
+
+    /// The hovered link, if a click would follow it now: a file from a
+    /// listing always, anything else with Ctrl held. Shift leaves the text
+    /// to be selected, and a program that uses the mouse gets the click.
+    fn live_link(&self, cx: &App) -> Option<&Hover> {
+        let hover = self.hover.as_ref()?;
+        let wanted = matches!(hover.target, Target::Copy(_)) || self.modifiers.control;
+        let free = !self.modifiers.shift && !self.selecting && !self.mode(cx).intersects(TermMode::MOUSE_MODE);
+        (wanted && free).then_some(hover)
+    }
+
+    /// A click on the hovered link: a listed file is copied, or opened with
+    /// Ctrl held; everything else is opened.
+    fn follow(&mut self, open: bool, cx: &mut Context<Self>) {
+        let Some(hover) = self.hover.clone() else {
+            return;
+        };
+        match (&hover.target, open) {
+            (Target::Copy(path), false) => self.copy_file(path, cx),
+            (Target::Copy(path) | Target::File(path), _) => cx.open_with_system(path),
+            (Target::Url(url), _) => cx.open_url(url),
+        }
+    }
+
+    /// Puts a file on the clipboard, and says so.
+    fn copy_file(&mut self, path: &PathBuf, cx: &mut Context<Self>) {
+        let name = path.file_name().map_or_else(|| "/".into(), |n| n.to_string_lossy().into_owned());
+        // a file from somewhere else than where the shell is, is named with its folder
+        let here = self.terminal.read(cx).cwd();
+        let folder =
+            path.parent().filter(|folder| here.as_deref() != Some(*folder)).map(|folder| {
+                match dirs::home_dir().and_then(|home| folder.strip_prefix(home).ok().map(|rest| rest.to_path_buf())) {
+                    Some(rest) => format!(" from ~/{}", rest.display()),
+                    None => format!(" from {}", folder.display()),
+                }
+            });
+        let notice = if !path.exists() {
+            format!("{name} is gone")
+        } else {
+            match links::copy_files(std::slice::from_ref(path)) {
+                Ok(()) => format!("Copied {name}{}", folder.unwrap_or_default()),
+                Err(e) => e,
+            }
+        };
+        cx.emit(ViewEvent::Notice(notice));
+    }
+
+    fn toggle_search(&mut self, _: &ToggleSearch, _: &mut Window, cx: &mut Context<Self>) {
+        self.search = match self.search {
+            Some(_) => None,
+            None => Some(Search { query: String::new(), matches: Rc::new([]), current: None, history: 0 }),
+        };
+        cx.notify();
+    }
+
+    /// A key while the search is open. True when the key was the search's.
+    fn search_key(&mut self, key: &Keystroke, cx: &mut Context<Self>) -> bool {
+        let m = key.modifiers;
+        let Some(search) = &mut self.search else {
+            return false;
+        };
+        match key.key.as_str() {
+            "escape" => {
+                self.search = None;
+                cx.notify();
+            },
+            // Enter goes back in time, as the newest match is where a search starts
+            "enter" | "up" | "down" => {
+                let older = (key.key == "enter" && !m.shift) || key.key == "up";
+                self.search_step(if older { -1 } else { 1 }, cx);
+            },
+            "backspace" => {
+                if m.control || m.alt {
+                    search.query.clear();
+                } else {
+                    search.query.pop();
+                }
+                self.search_changed(cx);
+            },
+            "space" if !m.control && !m.alt => {
+                search.query.push(' ');
+                self.search_changed(cx);
+            },
+            // text arrives through the input method; nothing else goes to the program meanwhile
+            _ => return m.control || m.alt || key.key.chars().count() > 1,
+        }
+        true
+    }
+
+    /// Looks for the query again and goes to the newest match.
+    fn search_changed(&mut self, cx: &mut Context<Self>) {
+        let Some(search) = &mut self.search else {
+            return;
+        };
+        let terminal = self.terminal.read(cx);
+        let term = terminal.term.lock();
+        search.matches = find(&term, &search.query).into();
+        search.current = search.matches.len().checked_sub(1);
+        search.history = term.history_size();
+        drop(term);
+        self.show_match(cx);
+    }
+
+    /// After new output: the same search, staying on the match it was on.
+    fn refresh_search_soon(&mut self, cx: &mut Context<Self>) {
+        if self.search.as_ref().is_none_or(|search| search.query.is_empty()) || self.search_refresh.is_some() {
+            return;
+        }
+        self.search_refresh = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(150)).await;
+            let _ = this.update(cx, |this, cx| {
+                this.search_refresh = None;
+                let Some(search) = &mut this.search else {
+                    return;
+                };
+                let (matches, history) = {
+                    let terminal = this.terminal.read(cx);
+                    let term = terminal.term.lock();
+                    (find(&term, &search.query), term.history_size())
+                };
+                // The match the search is on is the same text, further up by the lines
+                // printed since. Once the history is full that count is lost: then it
+                // is the match with the same number.
+                let moved = history as i32 - search.history as i32;
+                let on = search.current.and_then(|i| search.matches.get(i).cloned());
+                search.current = on
+                    .and_then(|on| {
+                        let (line, column) = (on.start().line.0 - moved, on.start().column);
+                        matches.iter().position(|m| m.start().line.0 == line && m.start().column == column)
+                    })
+                    .or(search.current.map(|i| i.min(matches.len().saturating_sub(1))))
+                    .filter(|_| !matches.is_empty());
+                search.history = history;
+                search.matches = matches.into();
+                cx.notify();
+            });
+        }));
+    }
+
+    fn search_step(&mut self, by: isize, cx: &mut Context<Self>) {
+        let Some(search) = &mut self.search else {
+            return;
+        };
+        let count = search.matches.len() as isize;
+        if count == 0 {
+            return;
+        }
+        let at = search.current.map_or(count - 1, |i| i as isize + by);
+        search.current = Some(at.rem_euclid(count) as usize);
+        self.show_match(cx);
+    }
+
+    /// Scrolls so that the match the search is on can be seen.
+    fn show_match(&mut self, cx: &mut Context<Self>) {
+        if let Some(search) = &self.search
+            && let Some(found) = search.current.and_then(|i| search.matches.get(i))
+        {
+            self.terminal.read(cx).term.lock().scroll_to_point(*found.start());
+        }
         cx.notify();
     }
 
@@ -237,6 +611,13 @@ impl TerminalView {
     }
 
     pub fn mouse_move(&mut self, event: &MouseMoveEvent, hovered: bool, _: &mut Window, cx: &mut Context<Self>) {
+        self.mouse = hovered.then_some(event.position);
+        if self.modifiers != event.modifiers {
+            // Ctrl makes a link a link: what is drawn depends on it
+            self.modifiers = event.modifiers;
+            cx.notify();
+        }
+        self.update_hover(cx);
         let Some(geometry) = self.geometry.get() else {
             return;
         };
@@ -325,20 +706,189 @@ impl TerminalView {
         } else {
             terminal.scroll(Scroll::Delta(steps));
         }
+        self.update_hover(cx);
         cx.notify();
     }
+
+    /// The hot spots over the hovered link: what takes the click, and what a
+    /// file is dragged by.
+    fn render_link(&self, hover: &Hover, geometry: Geometry, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let name_at = hover
+            .segments
+            .iter()
+            .map(|&(row, col, len)| {
+                let origin = point(
+                    geometry.origin.x + geometry.cell.width * col as f32,
+                    geometry.origin.y + geometry.cell.height * row as f32,
+                );
+                Bounds::new(origin, gpui::size(geometry.cell.width * len as f32, geometry.cell.height))
+            })
+            .collect();
+        let file =
+            hover.target.path().map(|path| DraggedFile { path: path.to_path_buf(), from: cx.entity_id(), name_at });
+        hover
+            .segments
+            .iter()
+            .enumerate()
+            .map(|(n, &(row, col, len))| {
+                let left = geometry.origin.x + geometry.cell.width * col as f32 - geometry.bounds.origin.x;
+                let top = geometry.origin.y + geometry.cell.height * row as f32 - geometry.bounds.origin.y;
+                let spot = div()
+                    .id(("link", n))
+                    .absolute()
+                    .left(left)
+                    .top(top)
+                    .w(geometry.cell.width * len as f32)
+                    .h(geometry.cell.height)
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            // the click is the link's: no selection starts under it
+                            window.focus(&this.focus, cx);
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                        this.follow(event.modifiers().control, cx);
+                    }));
+                match &file {
+                    Some(file) => {
+                        let name = file.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        spot.on_drag(file.clone(), move |_, _, _, cx| cx.new(|_| FileGhost(name.clone().into())))
+                            // out of the window, it is a file being dragged to another program
+                            .external_drag_payload(|file: &DraggedFile, _, _| {
+                                let entry = (file.path.clone(), file.path.is_dir());
+                                Some(ExternalDragPayload::Files(FileDragPaths::new([entry])))
+                            })
+                            .into_any_element()
+                    },
+                    None => spot.into_any_element(),
+                }
+            })
+            .collect()
+    }
+
+    fn render_search(&self, search: &Search, cx: &App) -> impl IntoElement + use<> {
+        let config = cx.global::<Config>();
+        let count = match (search.current, search.matches.len()) {
+            (_, 0) if search.query.is_empty() => String::new(),
+            (_, 0) => "no match".into(),
+            (Some(at), found) if found >= MAX_MATCHES => format!("{} of {found}+", at + 1),
+            (Some(at), found) => format!("{} of {found}", at + 1),
+            (None, found) => found.to_string(),
+        };
+        let dim = gpui::white().opacity(0.45);
+        div()
+            .absolute()
+            .top(px(8.))
+            .right(px(12.))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .h(px(30.))
+            .px(px(10.))
+            .rounded(px(9.))
+            .bg(config.colors.primary.background.hsla().opacity(0.95))
+            .border_1()
+            .border_color(config.accent().opacity(0.45))
+            .shadow(vec![BoxShadow {
+                color: gpui::black().opacity(0.35),
+                offset: point(px(0.), px(2.)),
+                blur_radius: px(10.),
+                spread_radius: px(0.),
+                inset: false,
+            }])
+            .font_family(".SystemUIFont")
+            .text_size(px(12.5))
+            .child(svg().path("icons/search.svg").flex_none().size(px(12.)).text_color(dim))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .min_w(px(110.))
+                    .max_w(px(320.))
+                    .overflow_hidden()
+                    .text_color(gpui::white().opacity(0.92))
+                    .child(SharedString::from(search.query.clone()))
+                    .child(div().flex_none().w(px(1.5)).h(px(14.)).ml(px(1.)).bg(config.accent())),
+            )
+            .child(div().flex_none().text_color(dim).child(SharedString::from(count)))
+    }
+}
+
+/// Whether the text of a link is the name of the file it leads to: all of
+/// it, or its start where a listing cut a long name short.
+fn names(text: &str, path: &std::path::Path) -> bool {
+    let Some(name) = path.file_name().map(|name| name.to_string_lossy()) else {
+        return false;
+    };
+    let text = text.trim();
+    match text.strip_suffix('…') {
+        Some(start) => start.chars().count() >= 3 && name.starts_with(start),
+        None => text.contains(name.as_ref()),
+    }
+}
+
+/// Every place `query` is found in the terminal's lines, oldest first. The
+/// query is plain text; it ignores case unless it has a capital in it.
+fn find<T>(term: &Term<T>, query: &str) -> Vec<Match> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let mut pattern = String::with_capacity(query.len() * 2);
+    for c in query.chars() {
+        // the characters a regex takes for more than themselves, and no others:
+        // an escaped `<` would be the start of a word
+        if "\\.+*?()|[]{}^$#&-~".contains(c) {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    let Ok(mut regex) = RegexSearch::new(&pattern) else {
+        return Vec::new();
+    };
+    let top = GridPoint::new(term.topmost_line(), Column(0));
+    let bottom = GridPoint::new(term.bottommost_line(), term.last_column());
+    // from the end, so that when there are too many the newest are the ones kept
+    let mut matches: Vec<Match> = Vec::new();
+    for found in RegexIter::new(bottom, top, Direction::Left, term, &mut regex) {
+        // going backwards, a query that overlaps itself (== in ====) is found again one cell on
+        if matches.last().is_some_and(|newer| found.end() >= newer.start()) {
+            continue;
+        }
+        matches.push(found);
+        if matches.len() == MAX_MATCHES {
+            break;
+        }
+    }
+    matches.reverse();
+    matches
 }
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.focus.is_focused(window) && (window.is_window_active() || crate::preview());
+        let link = self.live_link(cx).cloned();
+        let spots = match (&link, self.geometry.get()) {
+            (Some(hover), Some(geometry)) => self.render_link(hover, geometry, cx),
+            _ => Vec::new(),
+        };
+        let search = self.search.as_ref().map(|search| self.render_search(search, cx));
         div()
+            .relative()
             .size_full()
             .track_focus(&self.focus)
             .key_context("Terminal")
             .on_key_down(cx.listener(Self::key_down))
+            .on_key_up(cx.listener(Self::key_up))
+            .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
+                this.modifiers = event.modifiers;
+                cx.notify();
+            }))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::toggle_search))
             .on_action(cx.listener(|this, _: &ScrollPageUp, _, cx| this.scroll_by(Scroll::PageUp, cx)))
             .on_action(cx.listener(|this, _: &ScrollPageDown, _, cx| this.scroll_by(Scroll::PageDown, cx)))
             .on_action(cx.listener(|this, _: &ScrollTop, _, cx| this.scroll_by(Scroll::Top, cx)))
@@ -346,6 +896,18 @@ impl Render for TerminalView {
             .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.zoom(Some(1.1), cx)))
             .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.zoom(Some(1. / 1.1), cx)))
             .on_action(cx.listener(|this, _: &ZoomReset, _, cx| this.zoom(None, cx)))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| this.drop_paths(paths.paths(), window, cx)))
+            .on_drop(cx.listener(|this, file: &DraggedFile, window, cx| {
+                // let go on the name it was picked up by, it was a click with an unsteady hand
+                let position = window.mouse_position();
+                if file.from == cx.entity_id() && file.name_at.iter().any(|at| at.contains(&position)) {
+                    if matches!(this.hover.as_ref().map(|hover| &hover.target), Some(Target::Copy(_))) {
+                        this.copy_file(&file.path, cx);
+                    }
+                } else {
+                    this.drop_paths(std::slice::from_ref(&file.path), window, cx);
+                }
+            }))
             .child(TerminalElement {
                 terminal: self.terminal.clone(),
                 view: cx.entity(),
@@ -356,13 +918,18 @@ impl Render for TerminalView {
                 blink_at: self.blink_at,
                 motion: self.motion.clone(),
                 zoom: self.zoom,
+                link: link.map(|hover| hover.segments).unwrap_or_default(),
+                search: self.search.as_ref().map(|search| (search.matches.clone(), search.current)),
+                composing: self.composing.clone(),
             })
+            .children(spots)
+            .children(search)
     }
 }
 
 /// Text input. The terminal has no text of its own to edit: what the input
-/// method commits is sent to the program, and what it is still composing
-/// is held back.
+/// method commits is sent to the program (or is the search's query), and
+/// what it is still composing is shown at the cursor.
 impl EntityInputHandler for TerminalView {
     fn text_for_range(
         &mut self,
@@ -382,13 +949,19 @@ impl EntityInputHandler for TerminalView {
         self.composing.as_ref().map(|text| 0..text.encode_utf16().count())
     }
 
-    fn unmark_text(&mut self, _: &mut Window, _: &mut Context<Self>) {
+    fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         self.composing = None;
+        cx.notify();
     }
 
     fn replace_text_in_range(&mut self, _: Option<Range<usize>>, text: &str, _: &mut Window, cx: &mut Context<Self>) {
         self.composing = None;
-        if !text.is_empty() {
+        if text.is_empty() {
+            cx.notify();
+        } else if let Some(search) = &mut self.search {
+            search.query.push_str(text);
+            self.search_changed(cx);
+        } else {
             self.send(text.as_bytes().to_vec(), cx);
         }
     }
@@ -402,6 +975,7 @@ impl EntityInputHandler for TerminalView {
         cx: &mut Context<Self>,
     ) {
         self.composing = (!new_text.is_empty()).then(|| new_text.to_string());
+        self.touch();
         cx.notify();
     }
 
@@ -412,17 +986,93 @@ impl EntityInputHandler for TerminalView {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        // where the input method's popup goes: the top left of the grid, until
-        // the cursor's place is tracked here
-        self.geometry.get().map(|g| Bounds::new(g.origin, g.cell))
+        // where the input method's popup goes: at the cursor
+        let geometry = self.geometry.get()?;
+        Some(geometry.cursor.unwrap_or(Bounds::new(geometry.origin, geometry.cell)))
     }
 
-    fn character_index_for_point(
-        &mut self,
-        _: gpui::Point<Pixels>,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> Option<usize> {
+    fn character_index_for_point(&mut self, _: Point<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::term::Config as TermConfig;
+    use alacritty_terminal::vte::ansi::Processor;
+
+    use super::*;
+    use crate::terminal::TermSize;
+
+    /// A terminal of 40 by 6 cells that this was printed to.
+    fn printed(text: &str) -> Term<VoidListener> {
+        let size = TermSize { cols: 40, rows: 6, cell_width: 8., cell_height: 16. };
+        let mut term = Term::new(TermConfig::default(), &size, VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, text.as_bytes());
+        term
+    }
+
+    /// Where the matches start: line and column.
+    fn found(term: &Term<VoidListener>, query: &str) -> Vec<(i32, usize)> {
+        find(term, query).iter().map(|m| (m.start().line.0, m.start().column.0)).collect()
+    }
+
+    #[test]
+    fn the_query_is_plain_text() {
+        let term = printed("a -> b <tag> a.b axb\r\n(x) [y] 1+1 50% ~/x #1 a|b x&y\r\n");
+        assert_eq!(found(&term, "->"), [(0, 2)]);
+        assert_eq!(found(&term, "<tag>"), [(0, 7)]);
+        assert_eq!(found(&term, "<"), [(0, 7)]);
+        // a dot is a dot, not any character
+        assert_eq!(found(&term, "a.b"), [(0, 13)]);
+        assert_eq!(found(&term, "(x)"), [(1, 0)]);
+        assert_eq!(found(&term, "[y]"), [(1, 4)]);
+        assert_eq!(found(&term, "1+1"), [(1, 8)]);
+        assert_eq!(found(&term, "50%"), [(1, 12)]);
+        assert_eq!(found(&term, "~/x"), [(1, 16)]);
+        assert_eq!(found(&term, "#1"), [(1, 20)]);
+        assert_eq!(found(&term, "a|b"), [(1, 23)]);
+        assert_eq!(found(&term, "x&y"), [(1, 27)]);
+        assert_eq!(found(&term, "nothing"), []);
+    }
+
+    #[test]
+    fn case_counts_only_when_the_query_has_a_capital() {
+        let term = printed("Error error ERROR\r\n");
+        assert_eq!(found(&term, "error").len(), 3);
+        assert_eq!(found(&term, "Error"), [(0, 0)]);
+    }
+
+    #[test]
+    fn matches_do_not_overlap() {
+        let term = printed("======\r\naaa\r\n");
+        assert_eq!(found(&term, "=="), [(0, 0), (0, 2), (0, 4)]);
+        assert_eq!(found(&term, "aa").len(), 1);
+    }
+
+    #[test]
+    fn older_lines_are_found_too() {
+        let lines: String = (0..20).map(|i| format!("line {i}\r\n")).collect();
+        let term = printed(&lines);
+        assert_eq!(found(&term, "line").len(), 20);
+        // 21 lines on a screen of 6: the first 15 are above it
+        assert_eq!(found(&term, "line 3"), [(-12, 0)]);
+    }
+
+    #[test]
+    fn a_link_is_copied_only_under_its_own_name() {
+        let path = std::path::Path::new("/home/u/project/report-final.pdf");
+        assert!(names("report-final.pdf", path));
+        assert!(names(" report-final.pdf ", path));
+        assert!(names("project/report-final.pdf", path));
+        // a name that a listing cut short
+        assert!(names("report-fi…", path));
+        assert!(!names("r…", path));
+        assert!(!names("click here", path));
+        assert!(!names("notes.txt", path));
+        assert!(!names("", path));
+        assert!(!names("anything", std::path::Path::new("/")));
     }
 }

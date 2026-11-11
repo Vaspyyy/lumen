@@ -1,6 +1,6 @@
 [package]
 name = "lumen"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 description = "A terminal emulator that understands what your tools print"
@@ -16,6 +16,12 @@ serde = { version = "1", features = ["derive"] }
 toml = "1.1"
 dirs = "5"
 futures = "0.3"
+# Waiting on the PTY, as alacritty_terminal's own event loop does.
+polling = "3"
+# Inline images (the kitty graphics protocol).
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.22"
+flate2 = "1"
 
 [profile.dev]
 # The grid is drawn every frame: unoptimized, a full screen of text stutters.

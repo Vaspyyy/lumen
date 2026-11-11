@@ -1,17 +1,16 @@
 //! One running terminal: the program, its PTY, and the grid it draws on.
 //!
-//! alacritty_terminal does the terminal emulation. Its I/O thread reads the
-//! PTY and updates the grid behind a lock; what the window needs to know
-//! about (new output, a title, a clipboard request, the exit) comes over a
-//! channel into this entity.
+//! alacritty_terminal does the terminal emulation. An I/O thread
+//! ([`crate::pty`]) reads the PTY and updates the grid behind a lock; what
+//! the window needs to know about (new output, a title, a clipboard
+//! request, the exit) comes over a channel into this entity.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use alacritty_terminal::event::{Event as TermEvent, EventListener, Notify, WindowSize};
-use alacritty_terminal::event_loop::{EventLoop, Msg, Notifier};
+use alacritty_terminal::event::{Event as TermEvent, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point as GridPoint, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
@@ -24,7 +23,9 @@ use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use gpui::{ClipboardItem, Context, EventEmitter, Task};
 
 use crate::config::{Config, CursorShape};
+use crate::graphics;
 use crate::palette;
+use crate::pty::{IoLoop, Msg, Sender};
 
 #[derive(Clone)]
 pub struct Listener(UnboundedSender<TermEvent>);
@@ -63,8 +64,9 @@ impl From<TermSize> for WindowSize {
         WindowSize {
             num_lines: s.rows as u16,
             num_cols: s.cols as u16,
-            cell_width: s.cell_width as u16,
-            cell_height: s.cell_height as u16,
+            // whole pixels are all a program can be told: the nearest ones
+            cell_width: s.cell_width.round() as u16,
+            cell_height: s.cell_height.round() as u16,
         }
     }
 }
@@ -79,7 +81,9 @@ pub enum TerminalEvent {
 
 pub struct Terminal {
     pub term: Arc<FairMutex<Term<Listener>>>,
-    notifier: Notifier,
+    /// The images the program has put on screen.
+    pub images: graphics::Shared,
+    io: Sender,
     pub size: TermSize,
     title: Option<String>,
     shell_pid: u32,
@@ -100,7 +104,8 @@ pub struct Spawn {
 /// A terminal whose program is running, before it is an entity.
 pub struct Started {
     term: Arc<FairMutex<Term<Listener>>>,
-    notifier: Notifier,
+    images: graphics::Shared,
+    io: Sender,
     size: TermSize,
     shell_pid: u32,
     events: UnboundedReceiver<TermEvent>,
@@ -128,27 +133,16 @@ impl Terminal {
 
         let (tx, rx) = unbounded();
         let listener = Listener(tx);
-        let term_config = TermConfig {
-            scrolling_history: config.scrollback,
-            default_cursor_style: CursorStyle {
-                shape: match config.cursor.style {
-                    CursorShape::Block => VteCursorShape::Block,
-                    CursorShape::Beam => VteCursorShape::Beam,
-                    CursorShape::Underline => VteCursorShape::Underline,
-                },
-                blinking: config.cursor.blink,
-            },
-            ..TermConfig::default()
-        };
-        let term = Arc::new(FairMutex::new(Term::new(term_config, &size, listener.clone())));
-        let event_loop = EventLoop::new(term.clone(), listener, pty, true, false)?;
-        let notifier = Notifier(event_loop.channel());
-        let _io_thread = event_loop.spawn();
-        Ok(Started { term, notifier, size, shell_pid, events: rx })
+        let term = Arc::new(FairMutex::new(Term::new(term_options(config), &size, listener.clone())));
+        let images = graphics::Shared::default();
+        let io_loop = IoLoop::new(term.clone(), listener, pty, images.clone(), (size.cell_width, size.cell_height))?;
+        let io = io_loop.sender();
+        io_loop.spawn();
+        Ok(Started { term, images, io, size, shell_pid, events: rx })
     }
 
     pub fn new(started: Started, cx: &mut Context<Self>) -> Self {
-        let Started { term, notifier, size, shell_pid, events: mut rx } = started;
+        let Started { term, images, io, size, shell_pid, events: mut rx } = started;
         let events = cx.spawn(async move |this, cx| {
             while let Some(first) = rx.next().await {
                 // output arrives in bursts: take what is there, redraw once
@@ -167,7 +161,7 @@ impl Terminal {
             }
         });
 
-        Terminal { term, notifier, size, title: None, shell_pid, exited: false, _events: events }
+        Terminal { term, images, io, size, title: None, shell_pid, exited: false, _events: events }
     }
 
     fn handle(&mut self, event: TermEvent, cx: &mut Context<Self>) {
@@ -208,7 +202,15 @@ impl Terminal {
 
     /// Sends bytes to the program, as if typed.
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
-        self.notifier.notify(bytes);
+        let bytes = bytes.into();
+        if !bytes.is_empty() {
+            self.io.send(Msg::Input(bytes));
+        }
+    }
+
+    /// Takes on what a changed config says about the terminal itself.
+    pub fn configure(&self, config: &Config) {
+        self.term.lock().set_options(term_options(config));
     }
 
     pub fn resize(&mut self, size: TermSize) {
@@ -216,7 +218,7 @@ impl Terminal {
             return;
         }
         self.size = size;
-        let _ = self.notifier.0.send(Msg::Resize(size.into()));
+        self.io.send(Msg::Resize(size.into(), (size.cell_width, size.cell_height)));
         self.term.lock().resize(size);
     }
 
@@ -283,8 +285,25 @@ impl Terminal {
     }
 }
 
+fn term_options(config: &Config) -> TermConfig {
+    TermConfig {
+        scrolling_history: config.scrollback,
+        default_cursor_style: CursorStyle {
+            shape: match config.cursor.style {
+                CursorShape::Block => VteCursorShape::Block,
+                CursorShape::Beam => VteCursorShape::Beam,
+                CursorShape::Underline => VteCursorShape::Underline,
+            },
+            blinking: config.cursor.blink,
+        },
+        // programs may ask for keys in the kitty keyboard protocol
+        kitty_keyboard: true,
+        ..TermConfig::default()
+    }
+}
+
 impl Drop for Terminal {
     fn drop(&mut self) {
-        let _ = self.notifier.0.send(Msg::Shutdown);
+        self.io.send(Msg::Shutdown);
     }
 }

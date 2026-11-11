@@ -12,7 +12,7 @@
 
 lumen is a GPU-rendered terminal for Linux with tabs and splits built in. It is made to be the home of [glint](https://github.com/Vaspyyy/glint), crux, recap, seek and pulse: those tools print standard terminal output that works anywhere, and lumen understands more of it than other terminals do.
 
-> **Early days.** lumen runs a shell, draws it correctly and has tabs and splits, a window frame of its own and a cursor that glows. The parts that make it different (files you can click and drag, inline images, command blocks) are on the roadmap below, not in the build yet.
+> **Early days.** lumen is a terminal you can work in: tabs and splits, search, a window frame of its own and a cursor that glows. The first parts that make it different are in: file names you can click and drag, and inline images. Command blocks are on the roadmap below, not in the build yet.
 
 ## Install
 
@@ -47,15 +47,34 @@ lumen -e htop               # run a program instead of the shell
 | `Ctrl+Shift+W` | Close the pane (the tab closes with its last pane) |
 | `Ctrl+Shift+Q` | Close the tab |
 | `Ctrl+Shift+C`, `Ctrl+Shift+V` | Copy and paste (`Shift+Insert` pastes too) |
+| `Ctrl+Shift+F` | Search what the pane has printed. `Enter` goes to the match before, `Shift+Enter` to the one after, `Esc` closes |
 | `Shift+PageUp`, `Shift+PageDown`, `Shift+Home`, `Shift+End` | Scroll back and forth |
 | `Ctrl+Plus`, `Ctrl+Minus`, `Ctrl+0` | Text size of the current pane |
 | `Ctrl+Shift+N` | New window |
 
-With the mouse: drag to select (double click selects a word, triple click a line, `Ctrl`+drag a block), middle click pastes the selection, and the lines between panes can be dragged. A program that uses the mouse itself (vim, htop) gets it; hold `Shift` to select anyway. A tab closes with a middle click.
+With the mouse: drag to select (double click selects a word, triple click a line, `Ctrl`+drag a block), middle click pastes the selection, and the lines between panes can be dragged. A program that uses the mouse itself (vim, htop) gets it; hold `Shift` to select anyway. A tab closes with a middle click, and moves when you drag it onto another one.
+
+## Files and images
+
+<img src="assets/images.png" alt="glint --thumbs in lumen: thumbnails of the images in a folder" width="700">
+
+**File names are files.** In a [glint](https://github.com/Vaspyyy/glint) listing made with `--hyperlink=copy` (or `hyperlink = "copy"` in glint's config), a name is a link to the file, and lumen knows what to do with it:
+
+| On a file name | Does |
+| --- | --- |
+| Click | Copies the file, as a file manager's Copy does: paste it into a folder, a mail, a chat |
+| `Ctrl`+click | Opens it in its program |
+| Drag | Takes the file along: out of the window into another program (on Wayland), or onto a pane, which types its path |
+
+A click copies only what the text names: a link that says one thing and leads to another file is a link like any other. Other links a program prints (web pages, `file://` links from `ls --hyperlink`) open with `Ctrl`+click. Hold `Shift` to select text that is a link. Files dragged in from a file manager are typed as their paths. Copying files needs `wl-copy` (wl-clipboard) on Wayland and `xclip` on X11.
+
+**Images** a program sends with the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) are drawn in place and scroll with the text: `glint --thumbs`, `kitten icat`, `chafa -f kitty`, `timg`. lumen reads PNG and raw pixels, sent in the escape sequence or as a file, at their own size or fitted to a number of cells. A pane keeps up to 320 MB of pictures (the oldest go first), and one larger than 4096 pixels on a side is scaled down. Animations and placement by placeholder characters are not there yet.
+
+**Keys** are reported in the [kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) to programs that ask for it, so an editor can tell `Tab` from `Ctrl+I` and `Enter` from `Shift+Enter`.
 
 ## Configuration
 
-lumen reads `~/.config/lumen/lumen.toml` (`lumen --config-path` prints the place). Everything is optional:
+lumen reads `~/.config/lumen/lumen.toml` (`lumen --config-path` prints the place). Saving the file is enough: lumen takes the change on while it runs, and says so at the bottom of the window. Everything is optional:
 
 ```toml
 scrollback = 10000
@@ -89,27 +108,32 @@ background = "#12111a"
 foreground = "#e4e1ee"
 ```
 
-With `prewarm = true`, lumen starts the shell of the next tab ahead of time, in the folder of the current pane, so a new tab shows a finished prompt the moment it opens, however long your shell takes to start. It is off by default because your shell's startup files then run before you ask for the tab (a greeter is fine; a config that attaches to tmux is not). A tab opened right after a `cd`, and every split, still starts its shell on the spot.
+With `prewarm = true`, lumen starts the shell of the next tab ahead of time, in the folder of the current pane, so a new tab shows a finished prompt the moment it opens, however long your shell takes to start. The same goes for a split. It is off by default because your shell's startup files then run before you ask for the tab (a greeter is fine; a config that attaches to tmux is not). A tab or split opened right after a `cd` still starts its shell on the spot.
 
-The `[colors]` table has the same shape as Alacritty's (`primary`, `cursor`, `selection`, `normal`, `bright`), so a theme written for Alacritty can be pasted in unchanged. A file with a typo in it is reported on stderr and lumen starts with its defaults.
+The `[colors]` table has the same shape as Alacritty's (`primary`, `cursor`, `selection`, `normal`, `bright`), so a theme written for Alacritty can be pasted in unchanged. A file with a typo in it is reported: on stderr when lumen starts (it starts with its defaults), in the window when you save it while lumen runs (the settings from before stay).
 
 ## Roadmap
 
-1. **Daily driver** (in progress): a terminal you can live in. Tabs, splits, selection, scrollback, your fonts and colors.
-2. **Files and images:** names in a `glint` listing become objects. Click to copy, Ctrl+click to open, drag a file out into another app. Inline images through the kitty graphics protocol.
-3. **Command blocks and refs:** jump between commands, copy one command's output, a pass or fail mark per command, and `path:line` refs from seek, recap and crux that open in your editor.
+1. **Daily driver** (done): a terminal you can live in. Tabs, splits, selection, scrollback and search, your fonts and colors.
+2. **Files and images** (done): names in a `glint` listing are objects. Click to copy, Ctrl+click to open, drag a file out into another app. Inline images through the kitty graphics protocol.
+3. **Command blocks and refs** (next): jump between commands, copy one command's output, a pass or fail mark per command, and `path:line` refs from seek, recap and crux that open in your editor.
 
 ## How it works
 
 lumen is written in Rust. The terminal itself (escape sequences, the grid, scrollback, the PTY) is [alacritty_terminal](https://crates.io/crates/alacritty_terminal), the engine of Alacritty. The window and everything drawn in it is [GPUI](https://github.com/longbridge/gpui-fast), the UI framework of the Zed editor.
+
+An image occupies cells like text does. lumen marks each of those cells with a link of its own, so the grid scrolls, erases and overwrites an image without knowing what one is, and the drawing code looks the picture up by the mark.
 
 ```
 src/
   main.rs       command line, window
   config.rs     the config file
   terminal.rs   a running terminal: the program, its PTY, its grid
+  pty.rs        the thread that reads what the program prints and writes what is typed
+  graphics.rs   inline images: the kitty graphics protocol
   element.rs    draws the grid
-  view.rs       a terminal on screen: keyboard, mouse, selection, clipboard
+  view.rs       a terminal on screen: keyboard, mouse, selection, clipboard, links, search
+  links.rs      what a link leads to, and copying files
   keys.rs       what a key press sends to the program
   mouse.rs      mouse reports for programs that ask for them
   palette.rs    from the colors a program asks for to the theme's

@@ -2980,13 +2980,17 @@ dependencies = [
 
 [[package]]
 name = "lumen"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "alacritty_terminal",
+ "base64",
  "dirs",
+ "flate2",
  "futures",
  "gpui-fast",
  "gpui-fast-platform",
+ "image",
+ "polling",
  "serde",
  "toml 1.2.1+spec-1.1.0",
 ]

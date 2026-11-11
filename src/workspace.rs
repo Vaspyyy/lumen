@@ -138,6 +138,44 @@ impl Node {
     }
 }
 
+/// A tab on its way to another place in the bar.
+#[derive(Clone)]
+struct DraggedTab {
+    id: usize,
+    title: SharedString,
+}
+
+/// What is under the mouse while a tab is dragged.
+struct TabGhost(SharedString);
+
+impl Render for TabGhost {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div().child(pill(self.0.clone(), cx.global::<Config>()))
+    }
+}
+
+/// A small label that floats over the terminal: a notice, a dragged tab.
+fn pill(text: SharedString, config: &Config) -> gpui::Div {
+    div()
+        .px(px(12.))
+        .py(px(6.))
+        .rounded(px(9.))
+        .bg(config.colors.primary.background.hsla().opacity(0.95))
+        .border_1()
+        .border_color(config.accent().opacity(0.45))
+        .shadow(vec![BoxShadow {
+            color: gpui::black().opacity(0.35),
+            offset: point(px(0.), px(2.)),
+            blur_radius: px(10.),
+            spread_radius: px(0.),
+            inset: false,
+        }])
+        .font_family(".SystemUIFont")
+        .text_size(px(12.5))
+        .text_color(gpui::white().opacity(0.92))
+        .child(text)
+}
+
 struct Tab {
     id: usize,
     root: Node,
@@ -168,7 +206,11 @@ pub struct Workspace {
     spare: Option<Spare>,
     /// The wait before the spare is looked at again.
     spare_refresh: Option<Task<()>>,
-    _bounds: Subscription,
+    /// Something said in passing at the bottom of the window, and the wait
+    /// until it goes away.
+    notice: Option<SharedString>,
+    notice_end: Option<Task<()>>,
+    _observers: [Subscription; 2],
 }
 
 /// A terminal that was started before it was asked for, so that the tab it
@@ -199,8 +241,13 @@ impl Workspace {
             subscriptions: HashMap::new(),
             spare: None,
             spare_refresh: None,
-            // a spare is laid out for the window's size: a resized window wants a new one
-            _bounds: cx.observe_window_bounds(window, |this, window, cx| this.refresh_spare_soon(window, cx)),
+            notice: None,
+            notice_end: None,
+            _observers: [
+                // a spare is laid out for the window's size: a resized window wants a new one
+                cx.observe_window_bounds(window, |this, window, cx| this.refresh_spare_soon(window, cx)),
+                cx.observe_global_in::<Config>(window, Self::config_changed),
+            ],
         };
         let pane = this.open(spawn, (1., 1.), window, cx)?;
         this.push_tab(pane, window, cx);
@@ -233,10 +280,16 @@ impl Workspace {
             },
             // a shell that never sets a title still prints a prompt after `cd`
             ViewEvent::Output => {
+                // the images the program replaced or scrolled away are freed here, drawn or not
+                let images = pane.read(cx).terminal.read(cx).images.lock().unwrap().take_dropped(false);
+                for image in images {
+                    let _ = window.drop_image(image);
+                }
                 if this.spare.as_ref().is_some_and(|spare| spare.cwd != this.spawn_here(cx).cwd) {
                     this.refresh_spare_soon(window, cx);
                 }
             },
+            ViewEvent::Notice(text) => this.say(text.clone(), cx),
             ViewEvent::Focused => {
                 if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.root.contains(pane))
                     && &tab.active != pane
@@ -278,16 +331,60 @@ impl Workspace {
         eprintln!("lumen: {what}: {error}");
     }
 
+    /// Shows a line at the bottom of the window for a moment.
+    fn say(&mut self, text: String, cx: &mut Context<Self>) {
+        // long enough to be read: an error takes longer than "Copied"
+        let shown = Duration::from_millis((1800 + 45 * text.chars().count().saturating_sub(24) as u64).min(9000));
+        self.notice = Some(text.into());
+        self.notice_end = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(shown).await;
+            let _ = this.update(cx, |this, cx| {
+                this.notice = None;
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    /// The config file was saved: what the window itself keeps of it is renewed.
+    fn config_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let config = cx.global::<Config>();
+        window.set_background_appearance(config.appearance());
+        let said = match &config.problem {
+            Some(problem) => problem.clone(),
+            None => "Config reloaded".to_string(),
+        };
+        // the spare was started with the old shell and settings
+        if let Some(old) = self.spare.take() {
+            self.forget(&old.pane, window, cx);
+        }
+        self.refresh_spare_soon(window, cx);
+        self.say(said, cx);
+    }
+
+    /// Lets go of a pane that is closing: what the window holds for it.
+    fn forget(&mut self, pane: &Pane, window: &mut Window, cx: &mut Context<Self>) {
+        self.subscriptions.remove(&pane.entity_id());
+        let images = pane.read(cx).terminal.read(cx).images.lock().unwrap().take_dropped(true);
+        for image in images {
+            let _ = window.drop_image(image);
+        }
+    }
+
+    /// The shell that was started ahead of time, if it was started where
+    /// `spawn` would start one.
+    fn take_spare(&mut self, spawn: &Spawn, window: &mut Window, cx: &mut Context<Self>) -> Option<Pane> {
+        let spare = self.spare.take()?;
+        if spare.cwd == spawn.cwd {
+            return Some(spare.pane);
+        }
+        self.forget(&spare.pane, window, cx);
+        None
+    }
+
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         let spawn = self.spawn_here(cx);
-        // the spare is this tab, if it was started where the tab would start
-        let ready = self.spare.take().and_then(|spare| {
-            if spare.cwd == spawn.cwd {
-                return Some(spare.pane);
-            }
-            self.subscriptions.remove(&spare.pane.entity_id());
-            None
-        });
+        let ready = self.take_spare(&spawn, window, cx);
         match ready.map(Ok).unwrap_or_else(|| self.open(spawn, (1., 1.), window, cx)) {
             Ok(pane) => self.push_tab(pane, window, cx),
             Err(e) => self.report("can't open a tab", e),
@@ -319,7 +416,7 @@ impl Workspace {
             return;
         }
         if let Some(old) = self.spare.take() {
-            self.subscriptions.remove(&old.pane.entity_id());
+            self.forget(&old.pane, window, cx);
         }
         let cwd = spawn.cwd.clone();
         match self.open(spawn, (1., 1.), window, cx) {
@@ -343,10 +440,14 @@ impl Workspace {
             Axis::Horizontal => (w / 2., h),
             Axis::Vertical => (w, h / 2.),
         };
-        let pane = match self.open(self.spawn_here(cx), share, window, cx) {
+        // the spare was laid out for a whole tab; its shell is told the new size like any resized one
+        let spawn = self.spawn_here(cx);
+        let ready = self.take_spare(&spawn, window, cx);
+        let pane = match ready.map(Ok).unwrap_or_else(|| self.open(spawn, share, window, cx)) {
             Ok(pane) => pane,
             Err(e) => return self.report("can't split", e),
         };
+        self.refresh_spare_soon(window, cx);
         let Some(tab) = self.tabs.get_mut(self.active) else {
             return;
         };
@@ -359,7 +460,7 @@ impl Workspace {
     }
 
     fn close_pane(&mut self, pane: &Pane, window: &mut Window, cx: &mut Context<Self>) {
-        self.subscriptions.remove(&pane.entity_id());
+        self.forget(pane, window, cx);
         if self.spare.as_ref().is_some_and(|spare| &spare.pane == pane) {
             // the spare's shell ended on its own
             self.spare = None;
@@ -390,7 +491,7 @@ impl Workspace {
         let mut panes = Vec::new();
         tab.root.panes(&mut panes);
         for pane in panes {
-            self.subscriptions.remove(&pane.entity_id());
+            self.forget(&pane, window, cx);
         }
         if self.tabs.is_empty() {
             window.remove_window();
@@ -417,6 +518,19 @@ impl Workspace {
         }
         self.tabs.swap(self.active, to as usize);
         self.active = to as usize;
+        cx.notify();
+    }
+
+    /// Puts the tab `moved` where the tab `onto` is.
+    fn reorder(&mut self, moved: usize, onto: usize, cx: &mut Context<Self>) {
+        let place = |tabs: &[Tab], id: usize| tabs.iter().position(|tab| tab.id == id);
+        let (Some(from), Some(to)) = (place(&self.tabs, moved), place(&self.tabs, onto)) else {
+            return;
+        };
+        let shown = self.tabs[self.active].id;
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        self.active = place(&self.tabs, shown).unwrap_or(0);
         cx.notify();
     }
 
@@ -613,6 +727,12 @@ impl Workspace {
                     cx.stop_propagation();
                 }),
             )
+            // a tab is dragged to another one's place
+            .on_drag(DraggedTab { id, title: title.clone().into() }, |tab, _, _, cx| {
+                cx.new(|_| TabGhost(tab.title.clone()))
+            })
+            .drag_over::<DraggedTab>(|style, _, _, _| style.bg(gpui::white().opacity(0.14)))
+            .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| this.reorder(dragged.id, id, cx)))
             .child(div().flex_1().min_w_0().truncate().child(SharedString::from(title)))
             .child(
                 div()
@@ -924,7 +1044,18 @@ impl Render for Workspace {
                 }),
             )
             .child(bar)
-            .child(div().flex_1().min_h_0().child(content));
+            .child(div().flex_1().min_h_0().child(content))
+            .children(self.notice.clone().map(|text| {
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom(px(18.))
+                    .px(px(24.))
+                    .flex()
+                    .justify_center()
+                    .child(pill(text, cx.global::<Config>()).max_w(px(620.)))
+            }));
 
         // the margin around a floating window holds its shadow and the strips that resize it
         let margin = |free: bool| px(if frame.client && free { SHADOW } else { 0. });

@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use gpui::{Global, Hsla, Rgba};
+use gpui::{Global, Hsla, Rgba, WindowBackgroundAppearance};
 use serde::Deserialize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -210,6 +210,10 @@ pub struct Config {
     /// there at once instead of after the shell's own startup. The shell's
     /// startup files run for it before the tab is asked for.
     pub prewarm: bool,
+    /// What was wrong with the file when it was last read, while lumen is
+    /// running: the settings from before stay, and the window says why.
+    #[serde(skip)]
+    pub problem: Option<String>,
 }
 
 impl Default for Config {
@@ -223,6 +227,7 @@ impl Default for Config {
             copy_on_select: false,
             shell: None,
             prewarm: false,
+            problem: None,
         }
     }
 }
@@ -235,17 +240,17 @@ impl Config {
     }
 
     /// The config file, or the defaults where there is none. A file that
-    /// doesn't parse is reported and the defaults are used: a terminal
-    /// that won't start is how one gets locked out of fixing it.
+    /// doesn't parse is reported (what is wrong with it is the second
+    /// value) and the defaults are used: a terminal that won't start is
+    /// how one gets locked out of fixing it.
     pub fn load() -> (Config, Option<String>) {
-        let path = Self::path();
-        match std::fs::read_to_string(&path) {
+        match std::fs::read_to_string(Self::path()) {
             Ok(text) => match toml::from_str::<Config>(&text) {
                 Ok(config) => (config.checked(), None),
-                Err(e) => (Config::default().checked(), Some(format!("{}: {}", path.display(), e.message()))),
+                Err(e) => (Config::default().checked(), Some(e.message().to_string())),
             },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Config::default().checked(), None),
-            Err(e) => (Config::default().checked(), Some(format!("{}: {e}", path.display()))),
+            Err(e) => (Config::default().checked(), Some(e.to_string())),
         }
     }
 
@@ -258,6 +263,29 @@ impl Config {
         self.window.columns = self.window.columns.clamp(20, 1000);
         self.window.lines = self.window.lines.clamp(5, 500);
         self
+    }
+
+    /// When the file was last written, which is how a change to it is noticed.
+    pub fn modified() -> Option<std::time::SystemTime> {
+        std::fs::metadata(Self::path()).and_then(|meta| meta.modified()).ok()
+    }
+
+    /// The file again, for a lumen that is running with `self`: a file that
+    /// doesn't parse changes nothing, and is reported.
+    pub fn reloaded(&self) -> Config {
+        match Self::load() {
+            (config, None) => config,
+            (_, Some(problem)) => Config { problem: Some(format!("lumen.toml: {problem}")), ..self.clone() },
+        }
+    }
+
+    /// What the window lets through of what is behind it.
+    pub fn appearance(&self) -> WindowBackgroundAppearance {
+        if self.window.opacity < 1. && self.window.blur {
+            WindowBackgroundAppearance::Blurred
+        } else {
+            WindowBackgroundAppearance::Transparent
+        }
     }
 
     pub fn cursor_color(&self) -> Hsla {
