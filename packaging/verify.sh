@@ -29,13 +29,77 @@ step() {
     printf '\n== %s\n' "$*"
 }
 
-# apt's lists of packages: apt-lists.sh, next to this script, keeps the
+# apt's lists of packages: apt-lists.sh, next to this script, has the
 # retries and the other name for Ubuntu's archive.
+apt_lists() {
+    sh "$here/apt-lists.sh" || fail "the package lists could not be fetched"
+}
+
+# What a system's package has to leave on the system, and what it has to
+# bring along. Asked before anything else is installed, so that nothing but
+# the package's own dependencies can have brought it.
+arrived() {
+    for file in /usr/bin/lumen /usr/share/applications/lumen.desktop /usr/share/icons/hicolor/256x256/apps/lumen.png; do
+        [ -f "$file" ] || fail "$file is missing"
+    done
+    lumen --version || fail "lumen doesn't start: a library it is linked against is not among the package's dependencies"
+    # lumen loads these when it opens a window, so no tool finds them in the program
+    libraries=$(ldconfig -p)
+    for library in libvulkan.so.1 libEGL.so.1 libwayland-client.so.0 libwayland-egl.so.1; do
+        case $libraries in
+            *"$library"*) ;;
+            *) fail "$library is not installed: the package doesn't depend on what holds it" ;;
+        esac
+    done
+    command -v fc-match >/dev/null || fail "fc-match is not installed: the package doesn't depend on fontconfig"
+}
+
+gone() {
+    for file in /usr/bin/lumen /usr/share/applications/lumen.desktop /usr/share/icons/hicolor/256x256/apps/lumen.png; do
+        [ ! -e "$file" ] || fail "$file is still there after the package was removed"
+    done
+}
+
+# A window with a command in it, drawn by the processor on a display nobody
+# sees. The command waits, so that lumen has drawn its tabs and its text
+# before it ends with it. $1 is the program, $2 the user to run it as (root
+# if left out).
+window() {
+    mark=/tmp/lumen-ran
+    rm -f "$mark"
+    run="timeout 120 xvfb-run -a $1 -e sh -c 'sleep 3; echo ran > $mark'"
+    if [ -n "${2:-}" ]; then
+        run="su $2 -c \"$run\""
+    fi
+    # what lumen printed stays in /tmp/window.log
+    if ! sh -c "$run" >/tmp/window.log 2>&1; then
+        cat /tmp/window.log
+        fail "lumen did not open, or did not end"
+    fi
+    cat /tmp/window.log
+    [ -f "$mark" ] || fail "lumen opened and ran nothing"
+    echo "a window opened, ran its command and closed"
+}
+
+# Runs install.sh as the user tester, with what is in $1 in front of it.
+as_tester() {
+    su tester -c "$1 sh $here/install.sh ${2:-}"
+}
+
+# $1 has to fail, and say $2.
+refused() {
+    if sh -c "$1" >/tmp/out 2>&1; then
+        cat /tmp/out
+        fail "this went through and should not have: $1"
+    fi
+    cat /tmp/out
+    grep -q -- "$2" /tmp/out || fail "it failed without saying \"$2\""
+}
 
 case $kind in
     deb)
         export DEBIAN_FRONTEND=noninteractive
-        sh "$here/apt-lists.sh" || fail "the package lists could not be fetched"
+        apt_lists
         step "install"
         apt-get install -y -q --no-install-recommends "$dist/lumen-terminal_amd64.deb"
         arrived
@@ -83,7 +147,7 @@ case $kind in
 
     script)
         export DEBIAN_FRONTEND=noninteractive
-        sh "$here/apt-lists.sh" || fail "the package lists could not be fetched"
+        apt_lists
         apt-get install -y -q --no-install-recommends curl ca-certificates
         useradd -m tester
         home=/home/tester
