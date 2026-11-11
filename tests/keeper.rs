@@ -69,6 +69,39 @@ fn attach_without_a_terminal_is_refused() {
 }
 
 #[test]
+fn a_takeover_lets_go_of_who_showed_it_before() {
+    let dir = scratch("takeover");
+    let _guard = KeeperGuard(&dir);
+
+    let mut first = Pty::open(80, 24);
+    let mut shown = first.spawn(command(&dir).args(["attach", "--session", "work"]));
+    first.wait_for_text("$ ", LONG);
+    first.type_text("echo marker-$((6*7))\r");
+    first.wait_for_text("marker-42", LONG);
+
+    // a second one next to it: both show the session
+    let mut second = Pty::open(80, 24);
+    let mut beside = second.spawn(command(&dir).args(["attach", "--session", "work"]));
+    second.wait_for_text("marker-42", LONG);
+    assert_eq!(attached(&dir, "work"), Some(2));
+
+    // a third one that takes it over, as a phone that comes back does: the
+    // other two are told and end, the session goes on
+    let mut third = Pty::open(80, 24);
+    let mut taken = third.spawn(command(&dir).args(["attach", "--session", "work", "--takeover"]));
+    third.wait_for_text("marker-42", LONG);
+    assert_eq!(wait_exit(&mut shown, LONG).code(), Some(0));
+    assert_eq!(wait_exit(&mut beside, LONG).code(), Some(0));
+    first.wait_for_text("shown somewhere else", LONG);
+    wait_for("one client to be left", LONG, || attached(&dir, "work") == Some(1));
+
+    third.type_text("exit\r");
+    assert_eq!(wait_exit(&mut taken, LONG).code(), Some(0));
+    drop((first, second, third));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_session_outlives_its_terminal() {
     let dir = scratch("keep");
     let _guard = KeeperGuard(&dir);

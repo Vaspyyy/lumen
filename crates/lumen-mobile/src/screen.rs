@@ -27,6 +27,9 @@ pub const HEADER: usize = 48;
 /// The bytes of one cell in a snapshot.
 pub const CELL: usize = 16;
 
+/// The most characters drawn on top of a cell's own.
+const MAX_EXTRAS: usize = 8;
+
 /// Nothing there: a cursor that is not shown, a selection end out of view.
 const NOWHERE: u16 = 0xffff;
 
@@ -334,12 +337,14 @@ impl Screen {
     /// Pasted text: marked as such if the program asked for that, so that
     /// a shell doesn't run it line by line.
     pub fn paste(&self, text: &str) -> Vec<u8> {
+        // Text is pasted, not keys: an ESC in it could step out of the paste or
+        // start a command of the terminal's, and the other control characters
+        // are keys a program acts on. Line ends and tabs stay.
+        let clean: String = text.chars().filter(|&c| !c.is_control() || matches!(c, '\n' | '\r' | '\t')).collect();
         if self.inner().term.mode().contains(TermMode::BRACKETED_PASTE) {
-            // text that holds the end mark, or an ESC at all, could step out of the paste
-            let clean = text.replace('\x1b', "");
             format!("\x1b[200~{clean}\x1b[201~").into_bytes()
         } else {
-            text.replace("\r\n", "\r").replace('\n', "\r").into_bytes()
+            clean.replace("\r\n", "\r").replace('\n', "\r").into_bytes()
         }
     }
 
@@ -366,8 +371,8 @@ impl Screen {
         let (cols, rows) = (term.columns(), term.screen_lines());
         let cells = HEADER + cols * rows * CELL;
         if out.len() < cells {
-            // room for a screen full of accents, so that the second try fits
-            return Err(cells + cols * rows * 4);
+            // room for every cell holding more, so that the second try fits
+            return Err(cells + cols * rows * (2 + MAX_EXTRAS) * 4);
         }
 
         let content = term.renderable_content();
@@ -423,6 +428,8 @@ impl Screen {
             }
             let character = if spacer || cell.c == ' ' { 0 } else { cell.c as u32 };
             if let Some(more) = cell.zerowidth().filter(|_| character != 0) {
+                // a few accents on a letter, not a tower of them
+                let more = &more[..more.len().min(MAX_EXTRAS)];
                 flags |= EXTRAS;
                 extra_count += 1;
                 extras.push((row * cols + col) as u32);
@@ -766,6 +773,8 @@ mod tests {
         assert_eq!(screen.text("b", ALT), b"\x1bb");
         assert_eq!(screen.text("é", 0), "é".as_bytes());
         assert_eq!(screen.paste("a\r\nb\nc"), b"a\rb\rc");
+        // what is pasted is text: a Ctrl+C or an ESC in it is not typed
+        assert_eq!(screen.paste("a\x03b\x1b[Ac\td"), b"ab[Ac\td");
         screen.advance(b"\x1b[?2004h");
         assert_eq!(screen.paste("a\nb"), b"\x1b[200~a\nb\x1b[201~");
         // text can't end the paste early to have its rest run

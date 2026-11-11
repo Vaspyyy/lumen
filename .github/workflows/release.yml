@@ -3,6 +3,7 @@ name: Release
 # What a release offers: the archive with its install script, the Debian
 # package, the RPM and the Arch package, each tried on a clean system before
 # anything is published, and the Android app, signed with lumen's key.
+# The key is in the "release" environment, which only tags named v* may use.
 #
 # A tag publishes:    git tag v0.2.2 && git push origin v0.2.2
 # Started by hand, it builds and tries everything and publishes nothing.
@@ -110,7 +111,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
-      - run: cargo install cargo-ndk --locked
+      - run: cargo install cargo-ndk --locked --version 4.1.2
       - name: The app carries the version in Cargo.toml
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
@@ -120,27 +121,46 @@ jobs:
           }
       - name: The core, for phones
         run: android/build-core.sh arm64-v8a
-      - name: The app, signed
+      # Built without a key: nothing that runs in this build can see one.
+      - name: The app, not signed yet
+        working-directory: android
+        run: ./gradlew --no-daemon :app:assembleRelease
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-unsigned
+          path: android/app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
+
+  sign:
+    name: Sign the Android app
+    # Only the push of a release tag gets lumen's key: it is kept in an
+    # environment that no branch and no run started by hand can use.
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: android
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: android-unsigned
+      - name: Sign it, and check whose signature it carries
         env:
           KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_B64 }}
-          LUMEN_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          LUMEN_KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          LUMEN_KEY_ALIAS: lumen
-        run: |
-          printf '%s' "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
-          export LUMEN_KEYSTORE="$RUNNER_TEMP/release.jks"
-          cd android
-          ./gradlew --no-daemon :app:assembleRelease
-          mkdir ../dist
-          cp app/build/outputs/apk/release/app-release.apk ../dist/lumen-android.apk
-          rm "$RUNNER_TEMP/release.jks"
-      - name: It is signed by lumen's key, and by nothing else
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           tools=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
+          printf '%s' "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
+          mkdir dist
+          "$tools/zipalign" -f -P 16 4 app-release-unsigned.apk aligned.apk
+          "$tools/apksigner" sign --ks "$RUNNER_TEMP/release.jks" --ks-key-alias lumen \
+            --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEYSTORE_PASSWORD \
+            --out dist/lumen-android.apk aligned.apk
+          rm "$RUNNER_TEMP/release.jks"
           signers=$("$tools/apksigner" verify --print-certs dist/lumen-android.apk | grep 'certificate SHA-256 digest')
           echo "$signers"
           [ "$(echo "$signers" | wc -l)" = 1 ]
           echo "$signers" | grep -q -i 'e45200452aa3f2f6276debd70005230e01b7974e41931f66c232720903ff99ed'
+          rm -f dist/*.idsig
       - uses: actions/upload-artifact@v7
         with:
           name: android-app
@@ -151,7 +171,7 @@ jobs:
     name: Publish
     # only the push of a tag publishes, not a run started by hand on one
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: [build, arch, verify, android]
+    needs: [build, arch, verify, sign]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -164,9 +184,13 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Checksums
+      - name: Checksums, of exactly what a release offers
         run: |
           cd dist
+          rm -f app-release-unsigned.apk
+          offered=$(LC_ALL=C ls | tr '\n' ' ')
+          echo "$offered"
+          [ "$offered" = "lumen-android.apk lumen-terminal-x86_64.pkg.tar.zst lumen-terminal.x86_64.rpm lumen-terminal_amd64.deb lumen-x86_64-linux.tar.gz " ]
           sha256sum -- * > ../SHA256SUMS
           mv ../SHA256SUMS .
           cat SHA256SUMS

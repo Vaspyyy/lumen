@@ -33,6 +33,8 @@ const HANDSHAKE: Duration = Duration::from_secs(12);
 const COMMAND: Duration = Duration::from_secs(10);
 /// How long the PC's user has to say yes to a new phone.
 const CONFIRM: Duration = Duration::from_secs(230);
+/// The most text a program may put on the phone's clipboard at once.
+const CLIPBOARD: usize = 1 << 20;
 /// A terminal whose program is gone this soon, and not with a zero, never
 /// started: what it said stays on screen.
 const STILLBORN: Duration = Duration::from_secs(3);
@@ -530,9 +532,11 @@ impl Tab {
             }
             match out {
                 Out::Reply(bytes) => self.send(bytes),
-                Out::Title(title) => self.events.title(&title),
+                // a program names its window, it does not fill the phone's memory
+                Out::Title(title) => self.events.title(&title.chars().take(200).collect::<String>()),
                 Out::Bell => self.events.bell(),
-                Out::Clipboard(text) => self.events.clipboard(&text),
+                Out::Clipboard(text) if text.len() <= CLIPBOARD => self.events.clipboard(&text),
+                Out::Clipboard(_) => {},
             }
         }
         self.changed();
@@ -565,7 +569,8 @@ async fn serve(link: Arc<Link>, tab: Arc<Tab>, name: String, size: Size, mut rx:
         let (width, height) = (size.cols as u32 * size.cell_width as u32, size.rows as u32 * size.cell_height as u32);
         channel.request_pty(false, "xterm-256color", size.cols as u32, size.rows as u32, width, height, &[]).await?;
         match link.lumen.as_ref().filter(|_| lumen_link::session_name_ok(&name)) {
-            Some(lumen) => channel.exec(true, format!("{lumen} attach --session {name}")).await?,
+            // whatever this phone left behind when it last lost the PC is let go of
+            Some(lumen) => channel.exec(true, format!("{lumen} attach --takeover --session {name}")).await?,
             None => channel.request_shell(true).await?,
         }
         Ok::<_, russh::Error>(channel)

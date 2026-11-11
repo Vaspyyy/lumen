@@ -254,8 +254,13 @@ pub struct SessionInfo {
 /// A name somebody else chose, made safe to print and to keep in a file of
 /// lines: what can be seen stays, at most 48 characters of it.
 pub fn clean_name(name: &str) -> String {
+    // what can't be seen but turns text around or hides it: a name shown next to
+    // a question must read as it is
+    let steers =
+        |c: char| matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{206f}' | '\u{feff}');
     let cleaned: String = name
         .chars()
+        .filter(|&c| !steers(c))
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect::<String>()
         .trim()
@@ -350,6 +355,8 @@ mod tests {
     fn names() {
         assert_eq!(clean_name("Galaxy S24 Ultra"), "Galaxy S24 Ultra");
         assert_eq!(clean_name("a\nb\u{7}c"), "a b c");
+        // a name can't be written backwards to read as another
+        assert_eq!(clean_name("phone\u{202e}enohp\u{200b}"), "phoneenohp");
         assert_eq!(clean_name("  \n "), "phone");
         assert_eq!(clean_name(&"x".repeat(200)).len(), 48);
         assert!(session_name_ok("phone-1"));

@@ -46,6 +46,8 @@ pub const EXIT: u8 = 19;
 pub const LISTING: u8 = 20;
 /// Something went wrong, in words.
 pub const ERROR: u8 = 21;
+/// Keeper to client: another client took this session over. No payload.
+pub const MOVED: u8 = 22;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hello {
@@ -58,6 +60,11 @@ pub struct Hello {
     /// Only for a session that is made by this hello.
     pub env: Vec<(String, String)>,
     pub cwd: Option<String>,
+    /// Whoever else shows this session stops showing it. A phone asks for
+    /// this: what it left behind when its connection broke may still be
+    /// there, as a client that will never read again.
+    #[serde(default)]
+    pub takeover: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,6 +176,7 @@ mod tests {
             height: 0,
             env: vec![("TERM_PROGRAM".into(), "lumen".into())],
             cwd: None,
+            takeover: false,
         };
         let text = serde_json::to_vec(&hello).unwrap();
         assert_eq!(serde_json::from_slice::<Hello>(&text).unwrap(), hello);

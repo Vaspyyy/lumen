@@ -44,6 +44,16 @@ fn forget<T>(all: &'static Mutex<Option<HashMap<i64, T>>>, number: i64) -> Optio
     held(all).as_mut().and_then(|all| all.remove(&number))
 }
 
+/// Waits for work on the connections' threads to be done. The app may call
+/// from one of those threads (out of a `TabEvents` method): then that thread
+/// is handed back to the others while it waits.
+fn wait<T>(work: impl Future<Output = T>) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(_) => tokio::task::block_in_place(|| runtime().handle().block_on(work)),
+        Err(_) => runtime().block_on(work),
+    }
+}
+
 /// A panic must not cross into the app: it would take the whole app down.
 fn guarded<T>(otherwise: T, work: impl FnOnce() -> T) -> T {
     catch_unwind(AssertUnwindSafe(work)).unwrap_or(otherwise)
@@ -147,6 +157,17 @@ pub extern "system" fn Java_io_github_vaspyyy_lumen_core_Core_publicKey<'l>(
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_vaspyyy_lumen_core_Core_fingerprint<'l>(
+    mut env: JNIEnv<'l>,
+    _core: JObject<'l>,
+    public_key: JString<'l>,
+) -> jstring {
+    let line = text(&mut env, &public_key);
+    let print = guarded(None, || lumen_link::fingerprint(&line).map(|print| lumen_link::fingerprint_text(&print)));
+    give(&mut env, &print.unwrap_or_default())
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_io_github_vaspyyy_lumen_core_Core_offer<'l>(
     mut env: JNIEnv<'l>,
     _core: JObject<'l>,
@@ -172,7 +193,7 @@ pub extern "system" fn Java_io_github_vaspyyy_lumen_core_Core_enroll<'l>(
     public_key: JString<'l>,
 ) -> jstring {
     let (link, device, public_key) = (text(&mut env, &link), text(&mut env, &device), text(&mut env, &public_key));
-    let answer = guarded(String::new(), || match runtime().block_on(link::enroll(&link, &device, &public_key)) {
+    let answer = guarded(String::new(), || match wait(link::enroll(&link, &device, &public_key)) {
         Ok(host) => json!({ "ok": true, "host": host }).to_string(),
         Err(e) => failure(e),
     });
@@ -195,7 +216,7 @@ pub extern "system" fn Java_io_github_vaspyyy_lumen_core_Core_connect<'l>(
         let Some(signer) = signer else {
             return failure(Failure { code: "failed", message: "This phone's key can't be used.".into() });
         };
-        match runtime().block_on(link::connect(&host, Arc::new(signer))) {
+        match wait(link::connect(&host, Arc::new(signer))) {
             Ok(link) => {
                 let (keeps, address) = (link.keeps(), link.address.clone());
                 json!({ "ok": true, "link": keep(&LINKS, link), "keeps": keeps, "address": address }).to_string()
@@ -228,7 +249,7 @@ pub extern "system" fn Java_io_github_vaspyyy_lumen_core_Core_alive<'l>(
 ) -> jboolean {
     guarded(false, || {
         let Some(link) = find(&LINKS, link) else { return false };
-        runtime().block_on(link.alive(Duration::from_millis(timeout_ms.clamp(100, 60_000) as u64)))
+        wait(link.alive(Duration::from_millis(timeout_ms.clamp(100, 60_000) as u64)))
     }) as jboolean
 }
 
@@ -240,7 +261,7 @@ pub extern "system" fn Java_io_github_vaspyyy_lumen_core_Core_sessions<'l>(
 ) -> jstring {
     let answer = guarded(None, || {
         let link = find(&LINKS, link)?;
-        serde_json::to_string(&runtime().block_on(link.sessions())).ok()
+        serde_json::to_string(&wait(link.sessions())).ok()
     });
     give(&mut env, &answer.unwrap_or_else(|| "[]".into()))
 }
@@ -255,7 +276,7 @@ pub extern "system" fn Java_io_github_vaspyyy_lumen_core_Core_kill<'l>(
     let name = text(&mut env, &name);
     guarded((), || {
         if let Some(link) = find(&LINKS, link) {
-            runtime().block_on(link.kill(&name));
+            wait(link.kill(&name));
         }
     })
 }

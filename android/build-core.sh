@@ -28,6 +28,12 @@ for abi in ${*:-arm64-v8a x86_64}; do
     targets="$targets -t $abi"
 done
 
+# Phones whose memory comes in pages of 16 KB load only libraries laid out for
+# that; the same library loads where pages are 4 KB.
+pages="-C link-arg=-Wl,-z,max-page-size=16384"
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="$pages"
+export CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS="$pages"
+
 # 30 is the oldest Android the app runs on (minSdk)
 # shellcheck disable=SC2086
 cargo ndk $targets --platform 30 -o android/app/src/main/jniLibs build -p lumen-mobile --release --locked

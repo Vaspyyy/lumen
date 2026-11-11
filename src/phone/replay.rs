@@ -166,7 +166,11 @@ impl Writer {
         }
         if pen.link != self.pen.link {
             match &pen.link {
-                Some(link) => self.text(&format!("\x1b]8;id={};{}\x1b\\", link.id(), link.uri())),
+                Some(link) => {
+                    // what a program put into a link must not end the sequence early
+                    let plain = |part: &str| part.chars().filter(|c| !c.is_control()).collect::<String>();
+                    self.text(&format!("\x1b]8;id={};{}\x1b\\", plain(link.id()), plain(link.uri())))
+                },
                 None => self.raw(b"\x1b]8;;\x1b\\"),
             }
         }

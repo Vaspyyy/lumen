@@ -7,6 +7,7 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -24,12 +25,14 @@ struct AttachArgs {
     session: String,
     env: Vec<(String, String)>,
     cwd: Option<String>,
+    takeover: bool,
 }
 
 fn parse_attach_args(args: &[String]) -> Result<AttachArgs, i32> {
     let mut session = None;
     let mut env = Vec::new();
     let mut cwd = None;
+    let mut takeover = false;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let mut value = |what: &str| args.next().cloned().ok_or_else(|| usage_error(format!("{arg} wants {what}")));
@@ -48,6 +51,7 @@ fn parse_attach_args(args: &[String]) -> Result<AttachArgs, i32> {
                 let dir = std::env::current_dir().map(|here| here.join(&dir)).unwrap_or(dir);
                 cwd = Some(dir.to_string_lossy().into_owned());
             },
+            "--takeover" => takeover = true,
             other => return Err(usage_error(format!("unknown option {other}"))),
         }
     }
@@ -57,7 +61,7 @@ fn parse_attach_args(args: &[String]) -> Result<AttachArgs, i32> {
             "{session} can't be the name of a terminal: letters, digits, '-', '_' and '.' only"
         )));
     }
-    Ok(AttachArgs { session, env, cwd })
+    Ok(AttachArgs { session, env, cwd, takeover })
 }
 
 pub fn attach(args: &[String]) -> i32 {
@@ -88,6 +92,7 @@ pub fn attach(args: &[String]) -> i32 {
         height: size.height,
         env: args.env,
         cwd: args.cwd,
+        takeover: args.takeover,
     };
     let mut stream = match hello_keeper(&dir, &hello) {
         Ok(stream) => stream,
@@ -147,15 +152,18 @@ pub fn attach(args: &[String]) -> i32 {
     });
 
     let mut stdout = io::stdout().lock();
+    let mut tail = Vec::new();
     loop {
         match frame::read(&mut stream) {
             Ok(Some((frame::OUTPUT, bytes))) => {
+                note_screen(&mut tail, &bytes);
                 if stdout.write_all(&bytes).and_then(|_| stdout.flush()).is_err() {
                     // nowhere to show it any more: a detach
                     leave(0, None);
                 }
             },
             Ok(Some((frame::EXIT, _))) => leave(0, None),
+            Ok(Some((frame::MOVED, _))) => leave(0, Some("this terminal is now shown somewhere else")),
             Ok(Some((frame::ERROR, message))) => leave(1, Some(&String::from_utf8_lossy(&message))),
             Ok(Some(_)) => {},
             Ok(None) | Err(_) => leave(1, Some("the keeper went away")),
@@ -163,8 +171,46 @@ pub fn attach(args: &[String]) -> i32 {
     }
 }
 
+/// Whether the program has the alternate screen, as far as what was shown
+/// here says.
+static ALT_SCREEN: AtomicBool = AtomicBool::new(false);
+
+/// Follows the program onto the alternate screen and off it, in what it
+/// prints. `tail` holds the end of what came before: a sequence may be cut in
+/// two by the pieces it arrives in.
+fn note_screen(tail: &mut Vec<u8>, bytes: &[u8]) {
+    tail.extend_from_slice(bytes);
+    let last = |marks: &[&[u8]]| {
+        marks.iter().filter_map(|mark| tail.windows(mark.len()).rposition(|window| window == *mark)).max()
+    };
+    let entered = last(&[b"\x1b[?1049h", b"\x1b[?1047h", b"\x1b[?47h"]);
+    // a full reset leaves it too
+    let left = last(&[b"\x1b[?1049l", b"\x1b[?1047l", b"\x1b[?47l", b"\x1bc"]);
+    match (entered, left) {
+        (Some(entered), Some(left)) => ALT_SCREEN.store(entered > left, Ordering::Relaxed),
+        (Some(_), None) => ALT_SCREEN.store(true, Ordering::Relaxed),
+        (None, Some(_)) => ALT_SCREEN.store(false, Ordering::Relaxed),
+        (None, None) => {},
+    }
+    let keep = tail.len().saturating_sub(8);
+    tail.drain(..keep);
+}
+
 /// Puts the terminal back as it was and ends the program.
 fn leave(status: i32, message: Option<&str>) -> ! {
+    if sys::is_terminal(1) {
+        // What the program asked of the terminal and may not have taken back: the
+        // alternate screen, the mouse, focus reports, bracketed paste, application
+        // keys, a hidden cursor, its shape, the kitty keyboard flags, colors.
+        let mut reset = String::new();
+        if ALT_SCREEN.load(Ordering::Relaxed) {
+            reset.push_str("\x1b[?1049l");
+        }
+        reset.push_str("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1004l\x1b[?2004l");
+        reset.push_str("\x1b[?1l\x1b>\x1b[?25h\x1b[0 q\x1b[<99u\x1b[0m");
+        let mut stdout = io::stdout().lock();
+        let _ = stdout.write_all(reset.as_bytes()).and_then(|_| stdout.flush());
+    }
     sys::restore_terminal();
     if let Some(message) = message {
         eprintln!("\r\nlumen: {message}");
@@ -357,7 +403,7 @@ fn list(json: bool) -> i32 {
                 1 => "yes".to_string(),
                 n => format!("yes ({n})"),
             };
-            [s.name.clone(), attached, started(s.created), cwd, s.title.clone()]
+            [printable(&s.name), attached, started(s.created), printable(&cwd), printable(&s.title)]
         })
         .collect();
     let header = ["NAME", "ATTACHED", "STARTED", "FOLDER", "TITLE"].map(String::from);
@@ -378,6 +424,12 @@ fn list(json: bool) -> i32 {
         println!("{}", line.trim_end());
     }
     0
+}
+
+/// A folder's name or a title as a program chose it, safe to print: what
+/// would steer the terminal it is printed on shows as a question mark.
+fn printable(text: &str) -> String {
+    text.chars().map(|c| if c.is_control() { '?' } else { c }).collect()
 }
 
 /// When a session was started: the time today, else the date and time.
@@ -465,4 +517,38 @@ fn peer_pid(stream: &UnixStream) -> Option<i32> {
         )
     };
     (got == 0 && cred.pid > 0 && cred.uid == sys::uid()).then_some(cred.pid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_listing_steers_no_terminal() {
+        assert_eq!(printable("~/work"), "~/work");
+        // a folder named to set the title of whoever lists it, and a C1 control
+        assert_eq!(printable("x\x1b]0;gotcha\x07y\u{9b}z"), "x?]0;gotcha?y?z");
+    }
+
+    #[test]
+    fn the_alternate_screen_is_followed() {
+        let mut tail = Vec::new();
+        note_screen(&mut tail, b"plain output");
+        assert!(!ALT_SCREEN.load(Ordering::Relaxed));
+        // cut in two by the pieces it came in
+        note_screen(&mut tail, b"text\x1b[?10");
+        note_screen(&mut tail, b"49h more");
+        assert!(ALT_SCREEN.load(Ordering::Relaxed));
+        note_screen(&mut tail, b"still there");
+        assert!(ALT_SCREEN.load(Ordering::Relaxed));
+        // in and out again within one piece: the later one counts
+        note_screen(&mut tail, b"\x1b[?1049l\x1b[?1049h\x1b[?1049l");
+        assert!(!ALT_SCREEN.load(Ordering::Relaxed));
+        note_screen(&mut tail, b"\x1b[?1049h");
+        assert!(ALT_SCREEN.load(Ordering::Relaxed));
+        // a full reset, as a new picture starts with
+        note_screen(&mut tail, b"\x1bc\x1b[3J");
+        assert!(!ALT_SCREEN.load(Ordering::Relaxed));
+        assert!(tail.len() <= 8);
+    }
 }

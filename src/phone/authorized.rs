@@ -78,7 +78,7 @@ fn well_formed(kind: &str, blob: &[u8]) -> bool {
         ("ssh-ed25519", [name, key]) => *name == kind.as_bytes() && key.len() == 32,
         ("ssh-rsa", [name, e, n]) => *name == kind.as_bytes() && !e.is_empty() && n.len() >= 128,
         (_, [name, curve, point]) => {
-            let curve_name = kind.strip_prefix("ecdsa-sha2-").unwrap_or_default();
+            let Some(curve_name) = kind.strip_prefix("ecdsa-sha2-") else { return false };
             *name == kind.as_bytes() && *curve == curve_name.as_bytes() && point.first() == Some(&4)
         },
         _ => false,

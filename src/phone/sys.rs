@@ -118,6 +118,12 @@ pub fn raw_mode() -> io::Result<()> {
     Ok(())
 }
 
+/// Throws away what was typed on a terminal and not read yet.
+pub fn forget_typed(fd: i32) {
+    // SAFETY: tcflush drops pending input of a descriptor and touches nothing else
+    unsafe { libc::tcflush(fd, libc::TCIFLUSH) };
+}
+
 /// Undoes [`raw_mode`], if it was done. Safe to call more than once.
 pub fn restore_terminal() {
     let saved = SAVED_TERMIOS.lock().unwrap_or_else(|e| e.into_inner()).take();

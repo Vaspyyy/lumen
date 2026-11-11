@@ -25,6 +25,11 @@ use super::{runtime_dir, this_lumen, usage_error};
 /// How long `lumen pair` waits for a phone, and how long its key is good for.
 const PAIRING_TIME: Duration = Duration::from_secs(10 * 60);
 const MAX_LINE: usize = 4096;
+/// How long the question about a new phone waits for its answer. Shorter than `pair-enroll`
+/// waits for the answer to pass on (`ANSWER_WAIT`), which is shorter than the phone waits.
+const QUESTION_TIME: Duration = Duration::from_secs(150);
+/// How long `pair-enroll` waits for `lumen pair` to answer.
+const ANSWER_WAIT: Duration = Duration::from_secs(180);
 /// Interfaces of containers and virtual machines: not where a phone is.
 const BRIDGES: [&str; 6] = ["docker", "br-", "veth", "virbr", "lxc", "podman"];
 /// Interfaces of VPNs: reachable from farther away, but slower than the LAN.
@@ -305,8 +310,11 @@ impl Pairing {
             eprintln!("lumen: {device} wants to log in, but there is nobody to ask here (no terminal). Use --yes.");
             return false;
         }
+        // What was typed while the code was on screen is not an answer to this
+        // question, and neither is an Enter: yes has to be said.
+        sys::forget_typed(0);
         let question = format!(
-            "{device} wants to log in to this PC as {}. Its key: {}. Add it? [Y/n] ",
+            "{device} wants to log in to this PC as {}. Its key: {}. Add it? [y/N] ",
             self.user,
             key.fingerprint()
         );
@@ -316,12 +324,38 @@ impl Pairing {
         } else {
             eprint!("{question}");
         }
+        if !readable(0, QUESTION_TIME) {
+            eprintln!("\nlumen: no answer: {device} was not added.");
+            return false;
+        }
         let mut answer = String::new();
         if io::stdin().lock().read_line(&mut answer).unwrap_or(0) == 0 {
             return false;
         }
-        matches!(answer.trim().to_lowercase().as_str(), "" | "y" | "yes")
+        matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
     }
+}
+
+/// One line from a descriptor, if all of it comes in time. Whoever is on the
+/// other end can't keep this waiting by sending half a line.
+fn line_within(fd: i32, timeout: Duration) -> Option<String> {
+    let deadline = Instant::now() + timeout;
+    let mut line = Vec::new();
+    loop {
+        let left = deadline.checked_duration_since(Instant::now())?;
+        if !readable(fd, left) {
+            return None;
+        }
+        let mut byte = [0u8];
+        // SAFETY: one byte, into a buffer of one byte
+        match unsafe { libc::read(fd, byte.as_mut_ptr().cast(), 1) } {
+            1 if byte[0] == b'\n' => break,
+            1 if line.len() < MAX_LINE => line.push(byte[0]),
+            0 if !line.is_empty() => break,
+            _ => return None,
+        }
+    }
+    String::from_utf8(line).ok()
 }
 
 /// Waits until a descriptor can be read, at most this long.
@@ -597,17 +631,14 @@ pub fn enroll(args: &[String]) -> i32 {
     if token.len() != 16 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
         return fail();
     }
-    if !readable(0, Duration::from_secs(30)) {
-        return fail();
-    }
-    let Ok(line) = read_line(&mut io::stdin().lock()) else { return fail() };
+    let Some(line) = line_within(0, Duration::from_secs(30)) else { return fail() };
     let Ok(dir) = runtime_dir() else { return fail() };
     let Ok(mut stream) = UnixStream::connect(dir.join(format!("pair-{token}.sock"))) else { return fail() };
     if stream.write_all(format!("{line}\n").as_bytes()).is_err() {
         return fail();
     }
     // the PC's user may take a while to answer
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(180)));
+    let _ = stream.set_read_timeout(Some(ANSWER_WAIT));
     match read_line(&mut stream) {
         Ok(reply) if !reply.trim().is_empty() => {
             println!("{reply}");

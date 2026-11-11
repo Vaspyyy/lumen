@@ -39,6 +39,8 @@ use super::{runtime_dir, usage_error};
 /// How far a client may fall behind before what it hasn't been sent is
 /// thrown away and it gets a fresh picture instead.
 const CLIENT_QUEUE: usize = 4 << 20;
+/// The most columns or rows a terminal is given, whatever a client asks for.
+const MAX_SIDE: u16 = 1000;
 const SCROLLBACK: usize = 5000;
 const READ_CHUNK: usize = 64 * 1024;
 /// How much output is taken in one go before input gets a turn.
@@ -258,8 +260,12 @@ impl Keeper {
             let _ = frame::write(&mut stream, frame::ERROR, b"that is not a name a terminal can have");
             return;
         }
-        let size =
-            Winsize { cols: hello.cols.max(1), rows: hello.rows.max(1), width: hello.width, height: hello.height };
+        let size = Winsize {
+            cols: hello.cols.clamp(1, MAX_SIDE),
+            rows: hello.rows.clamp(1, MAX_SIDE),
+            width: hello.width,
+            height: hello.height,
+        };
         let client = Arc::new(Client::default());
         let session = loop {
             let session = {
@@ -279,7 +285,7 @@ impl Keeper {
                     },
                 }
             };
-            if session.attach(&client, size) {
+            if session.attach(&client, size, hello.takeover) {
                 break session;
             }
             // it ended just now: a new one of the same name
@@ -299,7 +305,8 @@ impl Keeper {
                 Ok(Some((frame::INPUT, bytes))) => session.input(bytes),
                 Ok(Some((frame::RESIZE, payload))) => {
                     if let Some((cols, rows, width, height)) = frame::decode_size(&payload) {
-                        session.resize(Winsize { cols: cols.max(1), rows: rows.max(1), width, height });
+                        let (cols, rows) = (cols.clamp(1, MAX_SIDE), rows.clamp(1, MAX_SIDE));
+                        session.resize(Winsize { cols, rows, width, height });
                     }
                 },
                 Ok(Some(_)) => {},
@@ -319,6 +326,13 @@ impl Keeper {
         }
         self.exit_if_idle(&state);
     }
+}
+
+/// Whether this is the answer to "which kitty keyboard flags are on?".
+fn kitty_answer(text: &str) -> bool {
+    text.strip_prefix("\x1b[?")
+        .and_then(|rest| rest.strip_suffix('u'))
+        .is_some_and(|flags| !flags.is_empty() && flags.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// What the keeper has yet to send one client.
@@ -510,10 +524,15 @@ impl Session {
 
     /// Gives the client the picture and adds it, or `false` if the session
     /// has ended.
-    fn attach(&self, client: &Arc<Client>, size: Winsize) -> bool {
+    fn attach(&self, client: &Arc<Client>, size: Winsize, takeover: bool) -> bool {
         let mut inner = self.inner();
         if inner.ended {
             return false;
+        }
+        if takeover {
+            for other in inner.clients.drain(..) {
+                other.push(frame::MOVED, Vec::new());
+            }
         }
         self.resize_locked(&mut inner, size);
         let inner = &mut *inner;
@@ -522,6 +541,10 @@ impl Session {
             inner.parser.stop_sync(&mut inner.term);
             self.handle_events(inner);
         }
+        // A sequence the program is in the middle of printing is given up, here
+        // and so for the client too: its rest would come after the picture, where
+        // only this side would still take it for the end of a sequence.
+        inner.parser.advance(&mut inner.term, &[0x18]);
         let bytes = replay(&mut inner.term, inner.title.as_deref());
         client.push(frame::WELCOME, Vec::new());
         client.replace_output(bytes);
@@ -596,6 +619,10 @@ impl Session {
             match event {
                 Event::Title(title) => inner.title = Some(title),
                 Event::ResetTitle => inner.title = None,
+                // Whether the kitty keyboard protocol is spoken is for the terminal
+                // that attaches next to say, and a phone does not speak it: the
+                // question stays open, which a program takes for a no.
+                Event::PtyWrite(text) if alone && kitty_answer(&text) => {},
                 Event::PtyWrite(text) if alone => {
                     // the same answer lumen's own window gives (see `crate::terminal`)
                     let text = if text == "\x1b[?6c" { "\x1b[?62;22c".to_string() } else { text };
@@ -878,6 +905,16 @@ mod tests {
     }
 
     #[test]
+    fn the_kitty_keyboard_question_is_left_open() {
+        assert!(kitty_answer("\x1b[?0u"));
+        assert!(kitty_answer("\x1b[?31u"));
+        // what a terminal is, where the cursor is: answered
+        for other in ["\x1b[?62;22c", "\x1b[1;3R", "\x1b[?u", "\x1b[?1;2u", "\x1b[0n"] {
+            assert!(!kitty_answer(other), "{other:?}");
+        }
+    }
+
+    #[test]
     fn the_shells_environment() {
         let hello = Hello {
             session: "phone".into(),
@@ -887,6 +924,7 @@ mod tests {
             height: 0,
             env: vec![("TERM_PROGRAM".into(), "lumen".into()), ("bad name".into(), "x".into())],
             cwd: None,
+            takeover: false,
         };
         let env = shell_env(&hello);
         let get = |name: &str| env.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str());
