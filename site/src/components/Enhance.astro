@@ -1,0 +1,42 @@
+---
+// What the text pages get once they are loaded: a button on each block of
+// code that copies it, and a link on each heading to itself.
+---
+
+<script>
+  const copy = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.8"/><path d="M10.5 5.5V4.3a1.8 1.8 0 0 0-1.8-1.8H4.3a1.8 1.8 0 0 0-1.8 1.8v4.4a1.8 1.8 0 0 0 1.8 1.8h1.2"/></svg>`;
+  const done = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg>`;
+
+  document.querySelectorAll<HTMLElement>('.prose pre').forEach((pre) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'copy-code';
+    button.setAttribute('aria-label', 'Copy this');
+    button.innerHTML = copy;
+    button.addEventListener('click', async () => {
+      // comments and the lines between them stay behind: what is copied can be pasted and run
+      const text = (pre.querySelector('code')?.textContent ?? '').replace(/\n+$/, '');
+      try {
+        await navigator.clipboard.writeText(text);
+        button.innerHTML = done;
+        button.classList.add('done');
+        window.setTimeout(() => {
+          button.innerHTML = copy;
+          button.classList.remove('done');
+        }, 1600);
+      } catch {
+        // no clipboard here (an old browser, a page without https): the text can still be selected
+      }
+    });
+    pre.append(button);
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-prose] h2[id], [data-prose] h3[id]').forEach((heading) => {
+    const link = document.createElement('a');
+    link.className = 'anchor';
+    link.href = `#${heading.id}`;
+    link.textContent = '#';
+    link.setAttribute('aria-label', `Link to “${heading.textContent}”`);
+    heading.append(link);
+  });
+</script>

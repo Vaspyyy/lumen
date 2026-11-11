@@ -6,6 +6,8 @@
 
 **A terminal emulator that understands what your tools print.**
 
+[Website](https://vaspyyy.github.io/lumen/) · [Docs](https://vaspyyy.github.io/lumen/docs/) · [Release notes](https://vaspyyy.github.io/lumen/releases/)
+
 <img src="assets/screenshot.png" alt="lumen with two tabs and three panes showing glint, git log, crux and seek" width="860">
 
 </div>
@@ -139,6 +141,7 @@ src/
   palette.rs    from the colors a program asks for to the theme's
   workspace.rs  tabs and splits
   actions.rs    everything a key can be bound to
+site/           the website: the front page, the docs, the release notes
 ```
 
 ## License

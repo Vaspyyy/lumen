@@ -1,0 +1,1232 @@
+---
+import Base from '../layouts/Base.astro';
+import Terminal from '../components/Terminal.astro';
+import { site, tools } from '../data/site';
+import { thumbnails } from '../data/pictures';
+import { allReleases } from '../lib/releases';
+import { url } from '../lib/url';
+
+const [latest] = await allReleases();
+const pictures = thumbnails('b').slice(0, 3);
+
+const protocols = [
+  'kitty graphics',
+  'kitty keyboard',
+  'OSC 8 links',
+  'OSC 52 clipboard',
+  'true color',
+  'synchronized updates',
+  'bracketed paste',
+  'mouse reports',
+];
+
+const roadmap = [
+  {
+    state: 'done',
+    title: 'Daily driver',
+    text: 'A terminal you can live in. Tabs, splits, selection, scrollback and search, your fonts and colors.',
+  },
+  {
+    state: 'done',
+    title: 'Files and pictures',
+    text: 'Names in a listing are files: click to copy, Ctrl+click to open, drag one out into another program. Pictures in place.',
+  },
+  {
+    state: 'next',
+    title: 'Command blocks and refs',
+    text: 'Jump between commands, copy one command’s output, a pass or fail mark per command, and path:line refs that open in your editor.',
+  },
+];
+---
+
+<Base noindex>
+  <!-- ======================= hero ======================= -->
+  <section class="hero">
+    <div class="sky" aria-hidden="true"></div>
+    <div class="wrap">
+      <a class="pill" href={url(`/releases/${latest.data.version}/`)}>
+        <b>New</b>
+        <span>{latest.data.version}: {latest.data.title}</span>
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
+          ><path d="m6 3.5 4.5 4.5L6 12.5"></path></svg
+        >
+      </a>
+
+      <h1>
+        A terminal that <span class="serif lamp-text">understands</span><br class="wide" /> what it shows.
+      </h1>
+      <p class="lede">
+        lumen is a GPU-rendered terminal for Linux. A name in a listing is the file: click it to copy it, drag it into a
+        chat. Pictures sit between the lines, and a new tab is ready before you look at it.
+      </p>
+
+      <div class="cta">
+        <a class="btn btn-lamp" href={url('/docs/install/')}>
+          Install lumen
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+            ><path d="M3 8h10M9 4l4 4-4 4"></path></svg
+          >
+        </a>
+        <a class="btn btn-ghost" href={url('/docs/')}>Read the docs</a>
+      </div>
+      <p class="facts">Linux, on Wayland and X11 · written in Rust · free software</p>
+
+      <div class="stage">
+        <Terminal />
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================= features ======================= -->
+  <section class="section" id="features">
+    <div class="wrap">
+      <header class="head">
+        <p class="eyebrow">What is different</p>
+        <h2>The screen is not <span class="serif lamp-text">only text</span>.</h2>
+        <p>
+          Your tools print names, pictures and links. Most terminals draw the characters and stop there. lumen knows what
+          they are, and lets you use them.
+        </p>
+      </header>
+
+      <div class="bento">
+        <article class="card c-files">
+          <div class="copy">
+            <h3>File names are files</h3>
+            <p>
+              In a <a href={tools[0].href}>glint</a> listing, a name is the file itself. No path to type, no file manager
+              to open.
+            </p>
+            <dl class="does">
+              <div><dt><kbd>Click</kbd></dt><dd>copies the file, as a file manager’s Copy does</dd></div>
+              <div><dt><kbd>Ctrl</kbd> <kbd>Click</kbd></dt><dd>opens it in its program</dd></div>
+              <div><dt><kbd>Drag</kbd></dt><dd>takes it along, into a chat, a mail, a folder</dd></div>
+            </dl>
+          </div>
+          <div class="art art-drag" aria-hidden="true">
+            <div class="drop">
+              <span>Drop it anywhere</span>
+            </div>
+            <div class="chip">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
+                ><rect x="2" y="2.5" width="12" height="11" rx="2"></rect><circle cx="6" cy="6.5" r="1.2" fill="currentColor" stroke="none"
+                ></circle><path d="m3 12 3.5-3.5 2.5 2.5 2-2 2.5 2.5" stroke-linejoin="round"></path></svg
+              >
+              harbor.jpg
+            </div>
+            <svg class="pointer" viewBox="0 0 24 24"
+              ><path
+                d="M5 3l14 8-6.2 1.6L10.2 19z"
+                fill="#fff"
+                stroke="#12111a"
+                stroke-width="1.4"
+                stroke-linejoin="round"></path></svg
+            >
+          </div>
+        </article>
+
+        <article class="card c-pics">
+          <div class="art art-pics" aria-hidden="true">
+            {pictures.map((picture) => <div class="pic" set:html={picture.svg} />)}
+          </div>
+          <div class="copy">
+            <h3>Pictures between the lines</h3>
+            <p>
+              What a program sends with the kitty graphics protocol is drawn in place and scrolls with the text:{' '}
+              <code>glint --thumbs</code>, <code>kitten icat</code>, and other programs that speak it.
+            </p>
+          </div>
+        </article>
+
+        <article class="card c-fast">
+          <div class="art art-bars" aria-hidden="true">
+            <span>A shell started when you ask</span>
+            <div class="bar slow"><i></i><b>230 ms</b></div>
+            <span>With prewarm</span>
+            <div class="bar fast"><i></i><b>30 ms</b></div>
+          </div>
+          <div class="copy">
+            <h3>A new tab in 30 ms</h3>
+            <p>
+              With <code>prewarm</code> on, the next shell is already running. From the key press to a finished prompt:
+              about 30 ms instead of 230, measured with fish.
+            </p>
+          </div>
+        </article>
+
+        <article class="card c-search">
+          <div class="art art-search" aria-hidden="true">
+            <div class="field">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                ><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg
+              >
+              <span>timed out</span>
+              <em>2 of 3</em>
+            </div>
+            <p>upstream <mark>timed out</mark>: billing</p>
+            <p>retrying billing (1 of 3)</p>
+            <p>upstream <mark class="on">timed out</mark>: mail</p>
+            <p>upstream <mark>timed out</mark>: search</p>
+          </div>
+          <div class="copy">
+            <h3>Search what scrolled past</h3>
+            <p><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>F</kbd> finds it in everything the pane has printed.</p>
+          </div>
+        </article>
+
+        <article class="card c-panes">
+          <div class="art art-panes" aria-hidden="true">
+            <div class="strip"><i class="on"></i><i></i><i></i></div>
+            <div class="panes">
+              <div class="pane a"><s></s><s></s><s></s><u></u></div>
+              <div class="pane b"><s></s><s></s></div>
+              <div class="pane c"><s></s><s></s><s></s></div>
+            </div>
+          </div>
+          <div class="copy">
+            <h3>Tabs and splits, built in</h3>
+            <p>No multiplexer to set up. A new tab or pane opens in the folder you are in.</p>
+          </div>
+        </article>
+
+        <article class="card c-cursor">
+          <div class="art art-cursor" aria-hidden="true">
+            <span class="text">cargo run</span><span class="lamp"></span>
+          </div>
+          <div class="copy">
+            <h3>A cursor that glows</h3>
+            <p>The cursor is a lamp. It gives off light, dims instead of going out, and glides between cells.</p>
+          </div>
+        </article>
+
+        <article class="card c-config">
+          <div class="art art-config" aria-hidden="true">
+            <pre><span class="t">[window]</span>
+<span class="k">opacity</span> = <span class="n">0.85</span>
+<span class="k">blur</span> = <span class="n">true</span>
+
+<span class="t">[cursor]</span>
+<span class="k">style</span> = <span class="s">"beam"</span></pre>
+            <div class="toast">Config reloaded</div>
+          </div>
+          <div class="copy">
+            <h3>Save the config, see it change</h3>
+            <p>One TOML file, taken on the moment you save it. A theme written for Alacritty pastes in unchanged.</p>
+          </div>
+        </article>
+
+        <article class="card c-speaks">
+          <div class="copy">
+            <h3>Speaks what modern programs speak</h3>
+            <p>Editors, file managers and prompts get the protocols they ask for.</p>
+          </div>
+          <ul class="chips">
+            {protocols.map((name) => <li>{name}</li>)}
+          </ul>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================= tools ======================= -->
+  <section class="section" id="tools">
+    <div class="wrap">
+      <header class="head">
+        <p class="eyebrow">Made for tools that print well</p>
+        <h2>Standard output in. <span class="serif lamp-text">More</span> out.</h2>
+        <p>
+          lumen is the home of a family of command line tools. They print ordinary terminal output that works anywhere,
+          and lumen understands more of it than other terminals do. Nothing in them depends on lumen.
+        </p>
+      </header>
+
+      <figure class="shot">
+        <img
+          src={url('/shots/panes.png')}
+          width="1164"
+          height="690"
+          loading="lazy"
+          alt="lumen with two tabs and three panes: a glint listing, a git log, and the results of crux and seek"
+        />
+      </figure>
+
+      <ul class="tools">
+        {
+          tools.map((tool) => (
+            <li>
+              <a href={tool.href}>
+                <code>{tool.name}</code>
+                <span>{tool.what}</span>
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M5 11 11 5M6 5h5v5" />
+                </svg>
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
+
+  <!-- ======================= install ======================= -->
+  <section class="section" id="install">
+    <div class="wrap install">
+      <div class="copy">
+        <p class="eyebrow">Install</p>
+        <h2>Three lines, and it is in your launcher.</h2>
+        <p>
+          lumen is built from source for now. It needs a recent Rust toolchain, and runs on Wayland and X11. The script
+          puts the program into Cargo’s bin folder and adds the launcher entry and the icons.
+        </p>
+        <a class="more" href={url('/docs/install/')}>
+          What it needs, and how to try it without installing
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
+            ><path d="M3 8h10M9 4l4 4-4 4"></path></svg
+          >
+        </a>
+      </div>
+      <div class="code prose">
+        <pre data-copy><code><span class="c"># get it, build it, install it</span>
+<span class="f">git</span> clone {site.repo}
+<span class="f">cd</span> lumen
+<span class="f">scripts/install.sh</span>
+
+<span class="c"># then</span>
+<span class="f">lumen</span></code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================= roadmap ======================= -->
+  <section class="section" id="roadmap">
+    <div class="wrap">
+      <header class="head">
+        <p class="eyebrow">Where it is going</p>
+        <h2>Early days, said plainly.</h2>
+        <p>
+          lumen is new. Two of its three first steps are done, and the third is what comes next. The{' '}
+          <a href={url('/releases/')}>release notes</a> say what each version brought.
+        </p>
+      </header>
+      <ol class="road">
+        {
+          roadmap.map((step, i) => (
+            <li class={step.state}>
+              <span class="mark">{step.state === 'done' ? 'Done' : 'Next'}</span>
+              <h3>
+                <span>{i + 1}</span>
+                {step.title}
+              </h3>
+              <p>{step.text}</p>
+            </li>
+          ))
+        }
+      </ol>
+    </div>
+  </section>
+
+  <!-- ======================= last word ======================= -->
+  <section class="last">
+    <div class="wrap">
+      <img src={url('/icon-256.png')} width="96" height="96" alt="" loading="lazy" />
+      <h2>Turn the <span class="serif lamp-text">light</span> on.</h2>
+      <div class="cta">
+        <a class="btn btn-lamp" href={url('/docs/install/')}>Install lumen</a>
+        <a class="btn btn-ghost" href={site.repo}>
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"
+            ><path
+              d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.36-3.88-1.36-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.78 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.24 2.76.12 3.05.74.8 1.18 1.83 1.18 3.09 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"
+            ></path></svg
+          >
+          Source on GitHub
+        </a>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  /* ---------- hero ---------- */
+  .hero {
+    position: relative;
+    padding-top: clamp(40px, 6.4vw, 76px);
+    text-align: center;
+    /* the light behind the window is wider than a phone */
+    overflow-x: clip;
+  }
+  .sky {
+    position: absolute;
+    inset: calc(-1 * var(--nav-h)) 0 auto;
+    height: 980px;
+    z-index: -1;
+    background:
+      radial-gradient(46% 38% at 50% 0%, rgba(255, 190, 110, 0.17), transparent 72%),
+      radial-gradient(60% 50% at 50% 16%, rgba(140, 105, 255, 0.16), transparent 72%);
+    pointer-events: none;
+  }
+  /* a few stars, thinning out downwards */
+  .sky::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      radial-gradient(1px 1px at 12% 22%, rgba(255, 255, 255, 0.5) 50%, transparent 51%),
+      radial-gradient(1px 1px at 27% 9%, rgba(255, 255, 255, 0.35) 50%, transparent 51%),
+      radial-gradient(1.5px 1.5px at 39% 31%, rgba(255, 236, 200, 0.5) 50%, transparent 51%),
+      radial-gradient(1px 1px at 58% 12%, rgba(255, 255, 255, 0.4) 50%, transparent 51%),
+      radial-gradient(1px 1px at 71% 27%, rgba(255, 255, 255, 0.45) 50%, transparent 51%),
+      radial-gradient(1.5px 1.5px at 84% 15%, rgba(255, 236, 200, 0.45) 50%, transparent 51%),
+      radial-gradient(1px 1px at 92% 36%, rgba(255, 255, 255, 0.3) 50%, transparent 51%),
+      radial-gradient(1px 1px at 6% 44%, rgba(255, 255, 255, 0.3) 50%, transparent 51%),
+      radial-gradient(1px 1px at 48% 5%, rgba(255, 255, 255, 0.3) 50%, transparent 51%),
+      radial-gradient(1px 1px at 19% 38%, rgba(255, 255, 255, 0.25) 50%, transparent 51%),
+      radial-gradient(1px 1px at 77% 43%, rgba(255, 255, 255, 0.25) 50%, transparent 51%);
+    mask-image: linear-gradient(180deg, #000 0%, transparent 62%);
+    -webkit-mask-image: linear-gradient(180deg, #000 0%, transparent 62%);
+  }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 100%;
+    height: 34px;
+    padding: 0 12px 0 5px;
+    border-radius: 99px;
+    font-size: 13.5px;
+    color: var(--fg-2);
+    background: rgba(255, 255, 255, 0.04);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    transition:
+      box-shadow 0.25s,
+      color 0.25s;
+  }
+  .pill:hover {
+    color: var(--fg);
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 201, 122, 0.4),
+      0 0 30px -8px rgba(255, 190, 110, 0.5);
+  }
+  .pill b {
+    padding: 2px 9px;
+    border-radius: 99px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-ink);
+    background: var(--accent);
+  }
+  .pill span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pill svg {
+    width: 13px;
+    height: 13px;
+    flex: none;
+    color: var(--fg-4);
+    transition: transform 0.2s;
+  }
+  .pill:hover svg {
+    transform: translateX(2px);
+    color: var(--accent);
+  }
+
+  h1 {
+    margin-top: 26px;
+    font-size: clamp(2.5rem, 6.6vw, 4.7rem);
+    font-weight: 600;
+    letter-spacing: -0.042em;
+    line-height: 1.02;
+    background: linear-gradient(180deg, #fff 30%, #cfc9e2 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  h1 .serif {
+    font-size: 1.1em;
+    letter-spacing: -0.025em;
+    padding-right: 0.06em;
+  }
+  .lede {
+    max-width: 56ch;
+    margin: 22px auto 0;
+    text-wrap: balance;
+    font-size: clamp(1.03rem, 1.7vw, 1.2rem);
+    line-height: 1.6;
+    color: var(--fg-2);
+  }
+  .cta {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 28px;
+  }
+  .facts {
+    margin-top: 20px;
+    font-size: 13.5px;
+    color: var(--fg-4);
+  }
+  .stage {
+    margin-top: clamp(36px, 5vw, 52px);
+  }
+
+  /* ---------- sections ---------- */
+  .section {
+    padding-top: clamp(90px, 13vw, 168px);
+  }
+  .head {
+    max-width: 720px;
+    margin: 0 auto clamp(36px, 5vw, 60px);
+    text-align: center;
+  }
+  .head h2,
+  .install h2 {
+    margin-top: 14px;
+    font-size: clamp(1.9rem, 4.4vw, 3.1rem);
+    letter-spacing: -0.035em;
+    line-height: 1.06;
+  }
+  .head h2 .serif,
+  .last h2 .serif {
+    font-size: 1.1em;
+    padding-right: 0.05em;
+  }
+  .head > p:last-child,
+  .install .copy > p:not(.eyebrow) {
+    margin-top: 18px;
+    font-size: 1.06rem;
+    color: var(--fg-3);
+  }
+  .head a,
+  .card .copy a {
+    color: var(--accent-2);
+    text-decoration: underline;
+    text-decoration-color: rgba(255, 201, 122, 0.35);
+    text-underline-offset: 3px;
+  }
+
+  /* ---------- the feature cards ---------- */
+  .bento {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 16px;
+  }
+  .card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    grid-column: span 2;
+    min-height: 330px;
+    border-radius: 20px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015));
+    box-shadow: inset 0 0 0 1px var(--line);
+    overflow: hidden;
+    transition: box-shadow 0.35s ease;
+  }
+  /* a card lights up from above when the pointer is on it */
+  .card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(80% 60% at 50% -10%, rgba(255, 201, 122, 0.12), transparent 70%);
+    opacity: 0;
+    transition: opacity 0.35s ease;
+    pointer-events: none;
+  }
+  .card:hover {
+    box-shadow: inset 0 0 0 1px rgba(255, 201, 122, 0.22);
+  }
+  .card:hover::before {
+    opacity: 1;
+  }
+  .card .copy {
+    position: relative;
+    padding: 24px 26px 26px;
+  }
+  .card h3 {
+    font-size: 1.16rem;
+    letter-spacing: -0.02em;
+  }
+  .card .copy p {
+    margin-top: 8px;
+    color: var(--fg-3);
+    font-size: 0.97rem;
+    line-height: 1.55;
+  }
+  .card code {
+    font-size: 0.84em;
+    color: #f1e4cc;
+  }
+  .art {
+    position: relative;
+    flex: 1;
+    min-height: 170px;
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+
+  /* files */
+  .c-files {
+    grid-column: span 4;
+    flex-direction: row;
+    align-items: stretch;
+  }
+  .c-files .copy {
+    flex: 1 1 54%;
+    padding: 30px 8px 30px 30px;
+    align-self: center;
+  }
+  .c-files h3 {
+    font-size: 1.5rem;
+    letter-spacing: -0.028em;
+  }
+  .does {
+    display: grid;
+    gap: 10px;
+    margin: 22px 0 0;
+  }
+  .does div {
+    display: grid;
+    grid-template-columns: 104px 1fr;
+    gap: 12px;
+    align-items: baseline;
+  }
+  .does dt {
+    white-space: nowrap;
+  }
+  .does dd {
+    margin: 0;
+    color: var(--fg-2);
+    font-size: 0.95rem;
+  }
+  .art-drag {
+    flex: 1 1 46%;
+    min-height: 260px;
+  }
+  .art-drag .drop {
+    position: absolute;
+    right: 28px;
+    top: 50%;
+    width: 62%;
+    height: 132px;
+    transform: translateY(-50%);
+    display: grid;
+    place-items: end center;
+    padding-bottom: 14px;
+    border-radius: 16px;
+    border: 1.5px dashed rgba(228, 225, 238, 0.2);
+    background: rgba(255, 255, 255, 0.02);
+    font-family: var(--sans);
+    font-size: 12.5px;
+    color: var(--fg-4);
+  }
+  .art-drag .chip {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 13px 7px 10px;
+    border-radius: 10px;
+    background: rgba(31, 28, 44, 0.96);
+    color: #f3a6c8;
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.14),
+      0 18px 40px -10px rgba(0, 0, 0, 0.8),
+      0 0 40px -10px rgba(255, 190, 110, 0.5);
+    animation: carry 5.5s cubic-bezier(0.5, 0, 0.3, 1) infinite;
+  }
+  .art-drag .chip svg {
+    width: 15px;
+    height: 15px;
+  }
+  .art-drag .pointer {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 22px;
+    height: 22px;
+    margin: 12px 0 0 46px;
+    filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.5));
+    animation: carry 5.5s cubic-bezier(0.5, 0, 0.3, 1) infinite;
+  }
+  @keyframes carry {
+    0%,
+    12% {
+      transform: translate(-150%, -150%);
+    }
+    55%,
+    100% {
+      transform: translate(-28%, -70%);
+    }
+    0% {
+      opacity: 0;
+    }
+    8%,
+    88% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+
+  /* pictures */
+  .art-pics {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    align-content: center;
+    padding: 30px 26px 4px;
+  }
+  .art-pics .pic {
+    aspect-ratio: 16 / 11;
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.8);
+    transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .art-pics .pic :global(svg) {
+    width: 100%;
+    height: 100%;
+  }
+  .c-pics:hover .pic:nth-child(1) {
+    transform: translateY(-4px) rotate(-2deg);
+  }
+  .c-pics:hover .pic:nth-child(2) {
+    transform: translateY(-8px);
+  }
+  .c-pics:hover .pic:nth-child(3) {
+    transform: translateY(-4px) rotate(2deg);
+  }
+
+  /* fast */
+  .art-bars {
+    display: grid;
+    gap: 7px;
+    align-content: center;
+    padding: 30px 26px 4px;
+  }
+  .art-bars span {
+    font-family: var(--sans);
+    font-size: 12.5px;
+    color: var(--fg-4);
+  }
+  .art-bars .bar + span {
+    margin-top: 12px;
+  }
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--fg-3);
+    font-variant-numeric: tabular-nums;
+  }
+  .bar i {
+    height: 12px;
+    border-radius: 99px;
+    background: rgba(228, 225, 238, 0.14);
+  }
+  .bar b {
+    font-weight: 400;
+    white-space: nowrap;
+  }
+  .bar.slow i {
+    width: 72%;
+  }
+  .bar.fast i {
+    width: 9.4%;
+    background: linear-gradient(90deg, #ffe0ae, #ffc97a);
+    box-shadow: 0 0 22px 2px rgba(255, 190, 110, 0.6);
+  }
+  .bar.fast b {
+    color: var(--accent);
+  }
+
+  /* search */
+  .art-search {
+    padding: 22px 26px 0;
+    color: var(--fg-3);
+    line-height: 1.75;
+  }
+  .art-search p {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .art-search .field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    margin-bottom: 14px;
+    padding: 0 12px 0 10px;
+    border-radius: 9px;
+    background: rgba(31, 28, 44, 0.9);
+    box-shadow: inset 0 0 0 1px rgba(255, 201, 122, 0.4);
+    font-family: var(--sans);
+    color: var(--fg);
+  }
+  .art-search .field svg {
+    width: 14px;
+    height: 14px;
+    color: var(--fg-3);
+  }
+  .art-search .field span {
+    flex: 1;
+  }
+  .art-search .field span::after {
+    content: '';
+    display: inline-block;
+    width: 1.5px;
+    height: 1em;
+    margin-left: 2px;
+    vertical-align: -2px;
+    background: var(--accent);
+    animation: caret 1.1s steps(1) infinite;
+  }
+  @keyframes caret {
+    50% {
+      opacity: 0;
+    }
+  }
+  .art-search .field em {
+    font-style: normal;
+    color: var(--fg-3);
+    font-size: 12.5px;
+  }
+  .art-search mark {
+    border-radius: 2px;
+    background: rgba(255, 201, 122, 0.28);
+    color: var(--fg);
+  }
+  .art-search mark.on {
+    background: var(--accent);
+    color: var(--accent-ink);
+  }
+
+  /* panes */
+  .art-panes {
+    padding: 26px 26px 0;
+  }
+  .strip {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .strip i {
+    width: 54px;
+    height: 8px;
+    border-radius: 99px;
+    background: rgba(228, 225, 238, 0.1);
+  }
+  .strip i.on {
+    background: rgba(228, 225, 238, 0.24);
+    box-shadow: 0 5px 0 -3px var(--accent);
+  }
+  .panes {
+    display: grid;
+    grid-template-columns: 1.15fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 1px;
+    height: 128px;
+    border-radius: 10px;
+    overflow: hidden;
+    background: rgba(228, 225, 238, 0.14);
+    box-shadow: 0 0 0 1px rgba(228, 225, 238, 0.14);
+  }
+  .pane {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 12px;
+    background: #12111a;
+  }
+  .pane.a {
+    grid-row: span 2;
+  }
+  .pane s {
+    display: block;
+    height: 5px;
+    border-radius: 99px;
+    background: rgba(228, 225, 238, 0.13);
+  }
+  .pane s:nth-child(1) {
+    width: 70%;
+    background: rgba(140, 180, 255, 0.45);
+  }
+  .pane s:nth-child(2) {
+    width: 48%;
+  }
+  .pane s:nth-child(3) {
+    width: 60%;
+  }
+  .pane u {
+    width: 6px;
+    height: 11px;
+    border-radius: 1.5px;
+    background: var(--accent-2);
+    box-shadow: 0 0 12px 2px rgba(255, 190, 110, 0.6);
+  }
+
+  /* cursor */
+  .art-cursor {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-size: 26px;
+    color: var(--fg);
+  }
+  .art-cursor .lamp {
+    width: 15px;
+    height: 32px;
+    border-radius: 3px;
+    background: #ffd9a0;
+    box-shadow:
+      0 0 24px 4px rgba(255, 201, 122, 0.6),
+      0 0 90px 20px rgba(255, 190, 110, 0.28);
+    animation: breathe 2.6s ease-in-out infinite;
+  }
+  @keyframes breathe {
+    50% {
+      opacity: 0.55;
+      box-shadow:
+        0 0 14px 2px rgba(255, 201, 122, 0.35),
+        0 0 50px 10px rgba(255, 190, 110, 0.14);
+    }
+  }
+
+  /* config */
+  .art-config {
+    padding: 22px 26px 0;
+  }
+  .art-config pre {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--fg-3);
+  }
+  .art-config .t {
+    color: var(--accent);
+  }
+  .art-config .k {
+    color: #b0ccff;
+  }
+  .art-config .n {
+    color: var(--yellow);
+  }
+  .art-config .s {
+    color: var(--green);
+  }
+  .art-config .toast {
+    position: absolute;
+    right: 22px;
+    bottom: 6px;
+    padding: 6px 13px;
+    border-radius: 99px;
+    background: rgba(31, 28, 44, 0.96);
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.12),
+      0 14px 34px -8px rgba(0, 0, 0, 0.8);
+    font-family: var(--sans);
+    font-size: 12.5px;
+    color: var(--fg);
+  }
+
+  /* protocols */
+  .c-speaks {
+    justify-content: space-between;
+  }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 0;
+    padding: 0 26px 28px;
+    list-style: none;
+  }
+  .chips li {
+    padding: 5px 11px;
+    border-radius: 99px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--fg-2);
+    background: rgba(255, 255, 255, 0.04);
+    box-shadow: inset 0 0 0 1px var(--line);
+  }
+
+  /* ---------- tools ---------- */
+  .shot {
+    position: relative;
+    margin: 0 auto;
+    max-width: 1000px;
+  }
+  .shot::before {
+    content: '';
+    position: absolute;
+    inset: 8% -4% -6%;
+    z-index: -1;
+    background:
+      radial-gradient(50% 60% at 30% 50%, rgba(150, 110, 255, 0.2), transparent 70%),
+      radial-gradient(50% 60% at 72% 50%, rgba(255, 190, 110, 0.14), transparent 70%);
+    filter: blur(30px);
+  }
+  .shot img {
+    width: 100%;
+    height: auto;
+    border-radius: 12px;
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.08),
+      0 50px 120px -30px rgba(0, 0, 0, 0.9);
+  }
+  .tools {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+    margin: 40px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .tools a {
+    position: relative;
+    display: block;
+    height: 100%;
+    padding: 18px 20px 20px;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.03);
+    box-shadow: inset 0 0 0 1px var(--line);
+    transition:
+      box-shadow 0.25s,
+      background 0.25s;
+  }
+  .tools a:hover {
+    background: rgba(255, 255, 255, 0.05);
+    box-shadow: inset 0 0 0 1px rgba(255, 201, 122, 0.3);
+  }
+  .tools code {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--accent);
+  }
+  .tools span {
+    display: block;
+    margin-top: 6px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--fg-3);
+  }
+  .tools svg {
+    position: absolute;
+    top: 18px;
+    right: 16px;
+    width: 14px;
+    height: 14px;
+    color: var(--fg-4);
+    transition:
+      transform 0.2s,
+      color 0.2s;
+  }
+  .tools a:hover svg {
+    color: var(--accent);
+    transform: translate(2px, -2px);
+  }
+
+  /* ---------- install ---------- */
+  .install {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+    gap: clamp(28px, 5vw, 72px);
+    align-items: center;
+  }
+  .install h2 {
+    font-size: clamp(1.8rem, 3.8vw, 2.7rem);
+  }
+  .more {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 22px;
+    color: var(--accent-2);
+    font-size: 0.98rem;
+    font-weight: 500;
+  }
+  .more svg {
+    width: 15px;
+    height: 15px;
+    flex: none;
+    transition: transform 0.2s;
+  }
+  .more:hover svg {
+    transform: translateX(3px);
+  }
+  .code pre {
+    margin: 0;
+    padding: 22px 24px;
+    font-size: 14.5px;
+    line-height: 1.75;
+    border-radius: 16px;
+    color: var(--fg);
+    box-shadow:
+      inset 0 0 0 1px var(--line-2),
+      0 40px 100px -40px rgba(0, 0, 0, 0.9),
+      0 0 100px -40px rgba(255, 190, 110, 0.35);
+  }
+  .code .c {
+    color: var(--fg-4);
+    font-style: italic;
+  }
+  .code .f {
+    color: var(--blue);
+  }
+
+  /* ---------- roadmap ---------- */
+  .road {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .road li {
+    position: relative;
+    padding: 24px 24px 26px;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.025);
+    box-shadow: inset 0 0 0 1px var(--line);
+  }
+  .road li.next {
+    background: linear-gradient(180deg, rgba(255, 201, 122, 0.09), rgba(255, 201, 122, 0.02));
+    box-shadow: inset 0 0 0 1px rgba(255, 201, 122, 0.28);
+  }
+  .road .mark {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 99px;
+    font-size: 12px;
+    font-weight: 550;
+    color: var(--green);
+    background: rgba(143, 223, 168, 0.1);
+  }
+  .road .next .mark {
+    color: var(--accent);
+    background: rgba(255, 201, 122, 0.13);
+  }
+  .road h3 {
+    display: flex;
+    gap: 10px;
+    margin-top: 14px;
+    font-size: 1.14rem;
+  }
+  .road h3 span {
+    color: var(--fg-4);
+    font-family: var(--mono);
+    font-weight: 400;
+  }
+  .road p {
+    margin-top: 8px;
+    color: var(--fg-3);
+    font-size: 0.96rem;
+    line-height: 1.55;
+  }
+
+  /* ---------- last word ---------- */
+  .last {
+    position: relative;
+    margin-top: clamp(90px, 13vw, 168px);
+    padding-block: 20px;
+    text-align: center;
+  }
+  .last::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: -60px;
+    width: min(760px, 100%);
+    height: 420px;
+    transform: translateX(-50%);
+    z-index: -1;
+    background: radial-gradient(50% 50% at 50% 40%, rgba(255, 190, 110, 0.2), transparent 70%);
+    pointer-events: none;
+  }
+  .last img {
+    margin: 0 auto;
+    border-radius: 22px;
+    filter: drop-shadow(0 0 40px rgba(255, 190, 110, 0.4));
+  }
+  .last h2 {
+    margin-top: 26px;
+    font-size: clamp(2.2rem, 5.6vw, 4rem);
+    letter-spacing: -0.04em;
+  }
+
+  /* ---------- narrower screens ---------- */
+  br.wide {
+    display: none;
+  }
+  @media (min-width: 900px) {
+    br.wide {
+      display: inline;
+    }
+  }
+  @media (max-width: 1020px) {
+    .bento {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .card,
+    .c-files {
+      grid-column: span 1;
+    }
+    .c-files {
+      grid-column: span 2;
+    }
+    .tools {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  @media (max-width: 760px) {
+    .install {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .road {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .c-files {
+      flex-direction: column;
+    }
+    .c-files .copy {
+      padding: 26px 26px 6px;
+      align-self: stretch;
+    }
+    .art-drag {
+      min-height: 210px;
+    }
+    .art-drag .drop {
+      left: 26px;
+      right: 26px;
+      width: auto;
+    }
+  }
+  @media (max-width: 620px) {
+    .bento {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .c-files {
+      grid-column: span 1;
+    }
+    .card {
+      min-height: 0;
+    }
+    .tools {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .code pre {
+      font-size: 12.5px;
+      padding: 18px;
+    }
+  }
+</style>

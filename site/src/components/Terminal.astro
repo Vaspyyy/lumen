@@ -1,0 +1,779 @@
+---
+// The front page's terminal: lumen drawn in HTML. The names in the listing
+// can be clicked as in the real one, the search field searches, and the
+// tabs change what is shown.
+
+import { thumbnails } from '../data/pictures';
+
+const listing = [
+  { kind: 'dir', name: 'edits', info: '5 items' },
+  { kind: 'dir', name: 'raw', info: '212 items' },
+  { kind: 'image', name: 'harbor.jpg', info: '4032×3024' },
+  { kind: 'image', name: 'dunes.jpg', info: '4032×3024' },
+  { kind: 'text', name: 'notes.md', info: '48 lines' },
+  { kind: 'text', name: 'route.gpx', info: '1310 lines' },
+];
+
+const log = [
+  ['12:04:01', 'info', 'listening on :8080'],
+  ['12:04:07', 'info', 'GET /health 200 1ms'],
+  ['12:04:09', 'warn', 'slow query: 412ms users_by_team'],
+  ['12:04:12', 'info', 'GET /teams/7 200 418ms'],
+  ['12:04:15', 'error', 'upstream timed out: billing'],
+  ['12:04:15', 'info', 'POST /invoices 502 5003ms'],
+  ['12:04:21', 'warn', 'retrying billing (1 of 3)'],
+  ['12:04:22', 'info', 'POST /invoices 201 88ms'],
+  ['12:04:30', 'info', 'billing is back'],
+];
+
+const pictures = thumbnails('t');
+
+const icon = {
+  dir: `<svg viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3.2c.4 0 .8.2 1.1.5l.9 1H13a1.5 1.5 0 0 1 1.5 1.5v6.5A1.5 1.5 0 0 1 13 13H3a1.5 1.5 0 0 1-1.5-1.5z"/></svg>`,
+  image: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2.5" width="12" height="11" rx="2"/><circle cx="6" cy="6.5" r="1.2" fill="currentColor" stroke="none"/><path d="m3 12 3.5-3.5 2.5 2.5 2-2 2.5 2.5" stroke-linejoin="round"/></svg>`,
+  text: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 1.8h5.2L12.5 5v8.2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2.8a1 1 0 0 1 1-1z"/><path d="M5.5 8h5M5.5 10.5h5" stroke-linecap="round"/></svg>`,
+};
+const chevron = `<svg class="lt-chev" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m2.5 3.5 5 4.5-5 4.5"/></svg>`;
+---
+
+<div class="lt" data-term>
+  <div class="lt-chips" role="group" aria-label="What the sketch shows">
+    <button type="button" data-scene="files" aria-pressed="true">Files</button>
+    <button type="button" data-scene="images" aria-pressed="false">Pictures</button>
+    <button type="button" data-scene="search" aria-pressed="false">Search</button>
+  </div>
+
+  <div class="lt-glow" aria-hidden="true"></div>
+
+  <figure class="lt-win" aria-label="A sketch of lumen that can be tried">
+    <div class="lt-bar">
+      <div class="lt-tabs">
+        <button type="button" class="lt-tab" data-scene="files" aria-pressed="true"
+          ><span>~/trip</span><i aria-hidden="true"></i></button
+        >
+        <button type="button" class="lt-tab" data-scene="images" aria-pressed="false"
+          ><span>~/trip/edits</span><i aria-hidden="true"></i></button
+        >
+        <button type="button" class="lt-tab" data-scene="search" aria-pressed="false"
+          ><span>~/code/api</span><i aria-hidden="true"></i></button
+        >
+        <span class="lt-plus" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+            ><path d="M8 3.5v9M3.5 8h9"></path></svg
+          >
+        </span>
+      </div>
+      <div class="lt-ctl" aria-hidden="true">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"
+          ><path d="M4 8h8"></path></svg
+        >
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
+          ><rect x="4.2" y="4.2" width="7.6" height="7.6" rx="1.6"></rect></svg
+        >
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"
+          ><path d="m4.5 4.5 7 7M11.5 4.5l-7 7"></path></svg
+        >
+      </div>
+    </div>
+
+    <div class="lt-body">
+      <!-- files: names that are files -->
+      <div class="lt-scene" data-pane="files">
+        <div class="lt-line">
+          <span class="lt-cwd">~/trip</span>
+          <Fragment set:html={chevron} />
+          <span class="lt-cmd" data-type="glint -p">glint -p</span>
+        </div>
+        <div class="lt-out" data-out>
+          <div class="lt-list">
+            {
+              listing.map((file) => (
+                <>
+                  <span class={`lt-ico lt-${file.kind}`} set:html={icon[file.kind as keyof typeof icon]} />
+                  <button type="button" class={`lt-name lt-${file.kind}`} data-file={file.name}>
+                    {file.name}
+                  </button>
+                  <span class="lt-info">{file.info}</span>
+                </>
+              ))
+            }
+          </div>
+          <div class="lt-line">
+            <span class="lt-cwd">~/trip</span>
+            <Fragment set:html={chevron} />
+            <span class="lt-cursor" aria-hidden="true"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- images: thumbnails between the lines -->
+      <div class="lt-scene" data-pane="images" hidden>
+        <div class="lt-line">
+          <span class="lt-cwd">~/trip/edits</span>
+          <Fragment set:html={chevron} />
+          <span class="lt-cmd">glint --thumbs</span>
+        </div>
+        <div class="lt-thumbs">
+          {
+            pictures.map((picture) => (
+              <div class="lt-thumb">
+                <div class="lt-pic" set:html={picture.svg} />
+                <div class="lt-cap">
+                  <span class="lt-ico lt-image" set:html={icon.image} />
+                  <button type="button" class="lt-name lt-image" data-file={picture.name}>
+                    {picture.name}
+                  </button>
+                </div>
+              </div>
+            ))
+          }
+        </div>
+        <div class="lt-line">
+          <span class="lt-cwd">~/trip/edits</span>
+          <Fragment set:html={chevron} />
+          <span class="lt-cursor" aria-hidden="true"></span>
+        </div>
+      </div>
+
+      <!-- search: what scrolled past -->
+      <div class="lt-scene" data-pane="search" hidden>
+        <label class="lt-find">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"
+            ><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg
+          >
+          <span class="sr-only">Search what the sketch has printed</span>
+          <input type="text" value="billing" spellcheck="false" autocomplete="off" autocapitalize="off" data-find />
+          <span class="lt-count" data-count></span>
+        </label>
+        <div class="lt-line">
+          <span class="lt-cwd">~/code/api</span>
+          <Fragment set:html={chevron} />
+          <span class="lt-cmd">tail -n 9 api.log</span>
+        </div>
+        <div class="lt-log" data-log>
+          {
+            log.map(([time, level, text]) => (
+              <div class={`lt-row lt-lv-${level}`}>
+                <span class="lt-time">{time}</span> <span class="lt-level">{level.padEnd(5)}</span>{' '}
+                <span data-text>{text}</span>
+              </div>
+            ))
+          }
+        </div>
+        <div class="lt-line">
+          <span class="lt-cwd">~/code/api</span>
+          <Fragment set:html={chevron} />
+          <span class="lt-cursor" aria-hidden="true"></span>
+        </div>
+      </div>
+
+      <div class="lt-notice" data-notice role="status" aria-live="polite"></div>
+    </div>
+  </figure>
+
+  <p class="lt-hint" data-hint>
+    <span data-hint-text>This is a sketch of lumen. Click a name to copy the file; Ctrl+click opens it.</span>
+  </p>
+</div>
+
+<style is:global>
+  .lt {
+    position: relative;
+    width: 100%;
+    max-width: 900px;
+    margin-inline: auto;
+  }
+
+  .lt-chips {
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+    margin-bottom: 18px;
+  }
+  .lt-chips button {
+    height: 32px;
+    padding: 0 14px;
+    border-radius: 99px;
+    font-size: 13.5px;
+    color: var(--fg-3);
+    box-shadow: inset 0 0 0 1px var(--line);
+    transition:
+      color 0.2s,
+      background 0.2s,
+      box-shadow 0.2s;
+  }
+  .lt-chips button:hover {
+    color: var(--fg);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+  }
+  .lt-chips button[aria-pressed='true'] {
+    color: var(--accent-ink);
+    background: var(--accent);
+    box-shadow: 0 0 24px -4px rgba(255, 190, 110, 0.6);
+    font-weight: 550;
+  }
+
+  /* the lamp behind the window */
+  .lt-glow {
+    position: absolute;
+    inset: 6% -12% -14%;
+    z-index: 0;
+    background:
+      radial-gradient(46% 52% at 50% 58%, rgba(255, 190, 110, 0.34), transparent 72%),
+      radial-gradient(48% 60% at 18% 56%, rgba(150, 110, 255, 0.36), transparent 72%),
+      radial-gradient(46% 58% at 84% 58%, rgba(110, 150, 255, 0.26), transparent 72%);
+    filter: blur(44px);
+    pointer-events: none;
+  }
+
+  .lt-win {
+    position: relative;
+    z-index: 1;
+    margin: 0;
+    border-radius: 14px;
+    background: #12111a;
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.09),
+      inset 0 1px 0 rgba(255, 255, 255, 0.06),
+      0 30px 70px -34px rgba(0, 0, 0, 0.85);
+    overflow: hidden;
+    text-align: left;
+  }
+
+  .lt-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    height: 46px;
+    padding: 0 10px 0 9px;
+    font-family: var(--sans);
+  }
+  .lt-tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+  }
+  .lt-tab {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    height: 29px;
+    padding: 0 11px 0 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--fg-4);
+    white-space: nowrap;
+    min-width: 0;
+    transition:
+      color 0.2s,
+      background 0.2s;
+  }
+  .lt-tab span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .lt-tab:hover {
+    color: var(--fg-2);
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .lt-tab i {
+    position: relative;
+    width: 8px;
+    height: 8px;
+    flex: none;
+    opacity: 0;
+  }
+  .lt-tab i::before,
+  .lt-tab i::after {
+    content: '';
+    position: absolute;
+    left: -1px;
+    right: -1px;
+    top: 3.25px;
+    height: 1.5px;
+    border-radius: 2px;
+    background: currentColor;
+    transform: rotate(45deg);
+  }
+  .lt-tab i::after {
+    transform: rotate(-45deg);
+  }
+  .lt-tab[aria-pressed='true'] {
+    color: var(--fg);
+    background: rgba(255, 255, 255, 0.075);
+  }
+  .lt-tab[aria-pressed='true'] i {
+    opacity: 0.7;
+  }
+  /* lumen's own light: the line under the active tab */
+  .lt-tab[aria-pressed='true']::after {
+    content: '';
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    bottom: -6px;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--accent);
+    box-shadow: 0 0 12px rgba(255, 201, 122, 0.8);
+  }
+  .lt-plus {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    color: var(--fg-4);
+    flex: none;
+  }
+  .lt-plus svg,
+  .lt-ctl svg {
+    width: 16px;
+    height: 16px;
+  }
+  .lt-ctl {
+    display: flex;
+    gap: 16px;
+    padding-right: 6px;
+    color: var(--fg-3);
+    flex: none;
+  }
+
+  .lt-body {
+    position: relative;
+    min-height: 336px;
+    padding: 10px 16px 18px;
+    font-family: var(--mono);
+    font-size: 14.5px;
+    line-height: 1.62;
+    color: #e4e1ee;
+  }
+  .lt-scene[hidden] {
+    display: none;
+  }
+  .lt-line {
+    display: flex;
+    align-items: center;
+    gap: 0.6ch;
+    min-height: 1.62em;
+    white-space: nowrap;
+  }
+  .lt-cwd {
+    color: #8cb4ff;
+  }
+  .lt-chev {
+    width: 0.62em;
+    height: 1em;
+    color: #8fdfa8;
+    flex: none;
+  }
+  .lt-cmd {
+    color: #e4e1ee;
+  }
+  .lt-cursor {
+    display: inline-block;
+    width: 0.62em;
+    height: 1.25em;
+    border-radius: 2px;
+    background: #ffd9a0;
+    box-shadow:
+      0 0 14px 2px rgba(255, 201, 122, 0.55),
+      0 0 40px 8px rgba(255, 190, 110, 0.22);
+    animation: lt-breathe 2.4s ease-in-out infinite;
+  }
+  /* the cursor dims and comes back, it never goes out */
+  @keyframes lt-breathe {
+    50% {
+      opacity: 0.5;
+      box-shadow:
+        0 0 8px 1px rgba(255, 201, 122, 0.3),
+        0 0 24px 4px rgba(255, 190, 110, 0.12);
+    }
+  }
+
+  .lt-list {
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    column-gap: 1ch;
+    align-items: center;
+    width: max-content;
+    max-width: 100%;
+  }
+  .lt-ico {
+    display: inline-grid;
+    place-items: center;
+    width: 1.05em;
+    height: 1.62em;
+  }
+  .lt-ico svg {
+    width: 1em;
+    height: 1em;
+  }
+  .lt-ico.lt-dir {
+    color: #8cb4ff;
+  }
+  .lt-ico.lt-image {
+    color: #f3a6c8;
+  }
+  .lt-ico.lt-text {
+    color: #8d88a3;
+  }
+  .lt-name {
+    justify-self: start;
+    padding: 0;
+    font: inherit;
+    line-height: inherit;
+    text-align: left;
+    border-radius: 3px;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: transparent;
+    text-underline-offset: 3px;
+    text-decoration-thickness: 1px;
+    transition: text-decoration-color 0.12s;
+    margin-right: 3ch;
+  }
+  .lt-name:hover,
+  .lt-name:focus-visible {
+    text-decoration-color: currentColor;
+  }
+  .lt-name.lt-dir {
+    color: #8cb4ff;
+    font-weight: 700;
+  }
+  .lt-name.lt-image {
+    color: #f3a6c8;
+  }
+  .lt-name.lt-text {
+    color: #e4e1ee;
+  }
+  .lt-info {
+    color: #6c6880;
+    white-space: nowrap;
+  }
+
+  .lt-thumbs {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 14px 16px;
+    padding: 10px 0 12px;
+  }
+  .lt-pic {
+    aspect-ratio: 16 / 11;
+    border-radius: 3px;
+    overflow: hidden;
+    background: #1b1927;
+  }
+  .lt-pic svg {
+    width: 100%;
+    height: 100%;
+  }
+  .lt-cap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.7ch;
+    margin-top: 6px;
+    font-size: 0.9em;
+    min-width: 0;
+  }
+  .lt-cap .lt-name {
+    margin-right: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .lt-find {
+    position: absolute;
+    top: 8px;
+    right: 14px;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 236px;
+    height: 34px;
+    padding: 0 12px 0 10px;
+    border-radius: 9px;
+    background: rgba(31, 28, 44, 0.94);
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.1),
+      0 12px 30px -8px rgba(0, 0, 0, 0.7);
+    font-family: var(--sans);
+    font-size: 13px;
+    cursor: text;
+  }
+  .lt-find:focus-within {
+    box-shadow:
+      0 0 0 1px rgba(255, 201, 122, 0.5),
+      0 12px 30px -8px rgba(0, 0, 0, 0.7);
+  }
+  .lt-find svg {
+    width: 14px;
+    height: 14px;
+    color: #8d88a3;
+    flex: none;
+  }
+  .lt-find input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: none;
+    color: #e4e1ee;
+    font: inherit;
+    caret-color: var(--accent);
+  }
+  .lt-count {
+    color: #8d88a3;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .lt-row {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .lt-time {
+    color: #6c6880;
+  }
+  .lt-lv-info .lt-level {
+    color: #8cb4ff;
+  }
+  .lt-lv-warn .lt-level {
+    color: #ffd08a;
+  }
+  .lt-lv-error .lt-level {
+    color: #f27a93;
+  }
+  .lt-row mark {
+    border-radius: 2px;
+    background: rgba(255, 201, 122, 0.3);
+    color: inherit;
+  }
+  .lt-row mark.lt-on {
+    background: #ffc97a;
+    color: #12111a;
+  }
+
+  /* what lumen says in passing, at the bottom of the window */
+  .lt-notice {
+    position: absolute;
+    left: 50%;
+    bottom: 16px;
+    z-index: 3;
+    max-width: calc(100% - 32px);
+    padding: 7px 14px;
+    border-radius: 99px;
+    background: rgba(31, 28, 44, 0.96);
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.12),
+      0 14px 40px -8px rgba(0, 0, 0, 0.8);
+    font-family: var(--sans);
+    font-size: 13px;
+    color: #e4e1ee;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0;
+    transform: translate(-50%, 8px);
+    transition:
+      opacity 0.2s ease,
+      transform 0.2s ease;
+    pointer-events: none;
+  }
+  .lt-notice.lt-shown {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+
+  .lt-hint {
+    position: relative;
+    z-index: 1;
+    margin-top: 18px;
+    min-height: 3em;
+    text-align: center;
+    color: var(--fg-3);
+    font-size: 14.5px;
+  }
+
+  /* the listing arrives a row at a time, once, when the page opens */
+  .lt[data-typing] [data-out] {
+    visibility: hidden;
+  }
+  .lt[data-revealing] .lt-list > * {
+    animation: lt-row-in 0.28s ease-out backwards;
+  }
+  @keyframes lt-row-in {
+    from {
+      opacity: 0;
+      transform: translateY(3px);
+    }
+  }
+
+  @media (max-width: 720px) {
+    .lt-body {
+      font-size: 12.5px;
+      min-height: 288px;
+      padding-inline: 12px;
+    }
+    .lt-thumbs {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .lt-thumb:nth-child(n + 4) {
+      display: none;
+    }
+    .lt-find {
+      width: 190px;
+      right: 10px;
+    }
+    .lt-ctl {
+      gap: 12px;
+    }
+    .lt-tab {
+      gap: 10px;
+      padding-inline: 9px;
+      font-size: 12px;
+    }
+  }
+  @media (max-width: 480px) {
+    .lt-body {
+      font-size: 11.5px;
+    }
+    .lt-tab:not([aria-pressed='true']) span {
+      max-width: 5.5ch;
+    }
+    .lt-name {
+      margin-right: 1ch;
+    }
+    .lt-ctl svg:not(:last-child) {
+      display: none;
+    }
+    .lt-log {
+      padding-top: 30px;
+    }
+  }
+</style>
+
+<script>
+  const root = document.querySelector<HTMLElement>('[data-term]');
+  if (root) {
+    const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const hint = root.querySelector<HTMLElement>('[data-hint-text]')!;
+    const notice = root.querySelector<HTMLElement>('[data-notice]')!;
+
+    const hints: Record<string, string> = {
+      files: 'This is a sketch of lumen. Click a name to copy the file; Ctrl+click opens it.',
+      images: 'Pictures a program sends are drawn in place and scroll with the text. Their names are files too.',
+      search: 'Type in the search field. Enter goes to the match before, Shift+Enter to the one after.',
+    };
+
+    // ---- tabs ----
+    function show(scene: string) {
+      root!.querySelectorAll<HTMLElement>('[data-scene]').forEach((button) => {
+        button.setAttribute('aria-pressed', String(button.dataset.scene === scene));
+      });
+      root!.querySelectorAll<HTMLElement>('[data-pane]').forEach((pane) => {
+        pane.hidden = pane.dataset.pane !== scene;
+      });
+      hint.textContent = hints[scene];
+      notice.classList.remove('lt-shown');
+      if (scene === 'search') find();
+    }
+    root.querySelectorAll<HTMLElement>('[data-scene]').forEach((button) => {
+      button.addEventListener('click', () => show(button.dataset.scene!));
+    });
+
+    // ---- names that are files ----
+    let hide = 0;
+    function say(text: string) {
+      notice.textContent = text;
+      notice.classList.add('lt-shown');
+      window.clearTimeout(hide);
+      hide = window.setTimeout(() => notice.classList.remove('lt-shown'), 2200);
+    }
+    root.querySelectorAll<HTMLElement>('[data-file]').forEach((name) => {
+      name.addEventListener('click', (event) => {
+        const file = name.dataset.file!;
+        if (event.ctrlKey || event.metaKey) {
+          notice.classList.remove('lt-shown');
+          hint.textContent = `In lumen, Ctrl+click opens ${file} in its program.`;
+        } else {
+          say(`Copied ${file}`);
+          hint.textContent = `In lumen, ${file} is on the clipboard now, as a file: paste it into a folder, a mail, a chat.`;
+        }
+      });
+    });
+
+    // ---- search ----
+    const field = root.querySelector<HTMLInputElement>('[data-find]')!;
+    const count = root.querySelector<HTMLElement>('[data-count]')!;
+    const texts = [...root.querySelectorAll<HTMLElement>('[data-log] [data-text]')];
+    const lines = texts.map((line) => line.textContent ?? '');
+    let on = -1;
+
+    function find(step = 0) {
+      const query = field.value;
+      // as lumen does: case counts only when the query has a capital in it
+      const exact = /\p{Lu}/u.test(query);
+      const needle = exact ? query : query.toLowerCase();
+      const marks: HTMLElement[] = [];
+      texts.forEach((line, i) => {
+        const text = lines[i];
+        const hay = exact ? text : text.toLowerCase();
+        const parts: (string | HTMLElement)[] = [];
+        let from = 0;
+        while (needle) {
+          const at = hay.indexOf(needle, from);
+          if (at < 0) break;
+          parts.push(text.slice(from, at));
+          const mark = document.createElement('mark');
+          mark.textContent = text.slice(at, at + needle.length);
+          parts.push(mark);
+          marks.push(mark);
+          from = at + needle.length;
+        }
+        parts.push(text.slice(from));
+        line.replaceChildren(...parts);
+      });
+      // a search starts at the newest match, the one at the bottom
+      on = step && marks.length ? (on + step + marks.length) % marks.length : marks.length - 1;
+      marks[on]?.classList.add('lt-on');
+      count.textContent = !query ? '' : marks.length ? `${on + 1} of ${marks.length}` : 'none';
+    }
+    field.addEventListener('input', () => find());
+    field.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        find(event.shiftKey ? 1 : -1);
+      }
+    });
+
+    // ---- the first command is typed, once ----
+    const typed = root.querySelector<HTMLElement>('[data-type]');
+    if (typed && !still) {
+      const text = typed.dataset.type!;
+      typed.textContent = '';
+      root.setAttribute('data-typing', '');
+      let i = 0;
+      const step = () => {
+        typed.textContent = text.slice(0, ++i);
+        if (i < text.length) {
+          window.setTimeout(step, 70 + Math.random() * 60);
+        } else {
+          window.setTimeout(() => {
+            root.removeAttribute('data-typing');
+            root.setAttribute('data-revealing', '');
+            root.querySelectorAll<HTMLElement>('.lt-list > *').forEach((cell, n) => {
+              cell.style.animationDelay = `${Math.floor(n / 3) * 45}ms`;
+            });
+          }, 260);
+        }
+      };
+      window.setTimeout(step, 700);
+    }
+  }
+</script>

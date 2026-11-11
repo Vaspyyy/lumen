@@ -1,0 +1,379 @@
+---
+import Base from './Base.astro';
+import { docsNav, docsOrder, docHref } from '../data/nav';
+import { site } from '../data/site';
+import { url } from '../lib/url';
+
+interface Props {
+  slug: string;
+  title: string;
+  description: string;
+  headings: { depth: number; slug: string; text: string }[];
+  /** Every page's name in the sidebar, by slug. */
+  names: Record<string, string>;
+}
+
+const { slug, title, description, headings, names } = Astro.props;
+const group = docsNav.find((g) => g.pages.includes(slug));
+const at = docsOrder.indexOf(slug);
+const before = at > 0 ? docsOrder[at - 1] : null;
+const after = at >= 0 && at < docsOrder.length - 1 ? docsOrder[at + 1] : null;
+const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
+const source = `${site.repo}/edit/main/site/src/content/docs/${slug}.md`;
+---
+
+<Base title={title} description={description}>
+  <div class="wrap docs">
+    <aside class="side" data-side data-pagefind-ignore>
+      <button class="side-toggle" type="button" data-side-toggle aria-expanded="false" aria-controls="docs-nav">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+          ><path d="M2.5 4h11M2.5 8h11M2.5 12h7"></path></svg
+        >
+        <span>{group?.title ?? 'Docs'}</span>
+        <b>{names[slug] ?? title}</b>
+      </button>
+      <nav id="docs-nav" aria-label="Docs">
+        {
+          docsNav.map((section) => (
+            <section>
+              <h2>{section.title}</h2>
+              <ul>
+                {section.pages.map((page) => (
+                  <li>
+                    <a href={url(docHref(page))} aria-current={page === slug ? 'page' : undefined}>
+                      {names[page] ?? page}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))
+        }
+      </nav>
+    </aside>
+
+    <article class="page">
+      <header>
+        <p class="crumb">{group?.title ?? 'Docs'}</p>
+        <h1>{title}</h1>
+        <p class="lead">{description}</p>
+      </header>
+      <div class="prose" data-prose>
+        <slot />
+      </div>
+      <footer data-pagefind-ignore>
+        <div class="pager">
+          {
+            before ? (
+              <a class="prev" href={url(docHref(before))}>
+                <span>Before</span>
+                <b>{names[before]}</b>
+              </a>
+            ) : (
+              <span />
+            )
+          }
+          {
+            after && (
+              <a class="next" href={url(docHref(after))}>
+                <span>Next</span>
+                <b>{names[after]}</b>
+              </a>
+            )
+          }
+        </div>
+        <a class="edit" href={source}>
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"
+            ><path d="M11 2.5 13.5 5 6 12.5l-3.2.7.7-3.2z"></path></svg
+          >
+          Something wrong on this page? Edit it on GitHub
+        </a>
+      </footer>
+    </article>
+
+    <aside class="toc" data-pagefind-ignore>
+      {
+        toc.length > 1 && (
+          <nav aria-label="On this page">
+            <h2>On this page</h2>
+            <ul data-toc>
+              {toc.map((h) => (
+                <li class={`d${h.depth}`}>
+                  <a href={`#${h.slug}`}>{h.text}</a>
+                </li>
+              ))}
+            </ul>
+          </nav>
+        )
+      }
+    </aside>
+  </div>
+</Base>
+
+<style>
+  .docs {
+    display: grid;
+    grid-template-columns: 232px minmax(0, 1fr) 208px;
+    gap: clamp(28px, 4vw, 56px);
+    padding-top: 40px;
+    align-items: start;
+  }
+
+  /* ---------- the sidebar ---------- */
+  .side {
+    position: sticky;
+    top: calc(var(--nav-h) + 24px);
+    max-height: calc(100dvh - var(--nav-h) - 40px);
+    overflow-y: auto;
+    padding-bottom: 24px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-2) transparent;
+  }
+  .side-toggle {
+    display: none;
+  }
+  .side section + section {
+    margin-top: 22px;
+  }
+  .side h2,
+  .toc h2 {
+    margin-bottom: 8px;
+    font-size: 12.5px;
+    font-weight: 500;
+    letter-spacing: 0.03em;
+    color: var(--fg-4);
+  }
+  .side ul,
+  .toc ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .side a {
+    position: relative;
+    display: block;
+    padding: 5px 12px;
+    margin-left: -12px;
+    border-radius: 8px;
+    font-size: 14.5px;
+    color: var(--fg-3);
+    transition:
+      color 0.15s,
+      background 0.15s;
+  }
+  .side a:hover {
+    color: var(--fg);
+  }
+  .side a[aria-current='page'] {
+    color: var(--accent);
+    background: rgba(255, 201, 122, 0.08);
+  }
+
+  /* ---------- the page ---------- */
+  .page {
+    min-width: 0;
+    max-width: 740px;
+    padding-bottom: 20px;
+  }
+  .crumb {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .page h1 {
+    margin-top: 10px;
+    font-size: clamp(2rem, 4.4vw, 2.7rem);
+    letter-spacing: -0.035em;
+    line-height: 1.08;
+  }
+  .lead {
+    margin-top: 14px;
+    font-size: 1.14rem;
+    line-height: 1.55;
+    color: var(--fg-3);
+  }
+  .prose {
+    margin-top: 34px;
+  }
+  .page footer {
+    margin-top: 64px;
+  }
+  .pager {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  .pager a {
+    display: block;
+    padding: 14px 18px 15px;
+    border-radius: 14px;
+    box-shadow: inset 0 0 0 1px var(--line);
+    transition:
+      box-shadow 0.2s,
+      background 0.2s;
+  }
+  .pager a:hover {
+    background: rgba(255, 255, 255, 0.03);
+    box-shadow: inset 0 0 0 1px rgba(255, 201, 122, 0.3);
+  }
+  .pager .next {
+    text-align: right;
+  }
+  .pager span {
+    display: block;
+    font-size: 12.5px;
+    color: var(--fg-4);
+  }
+  .pager b {
+    display: block;
+    margin-top: 2px;
+    font-weight: 550;
+    color: var(--fg);
+  }
+  .edit {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 22px;
+    font-size: 13.5px;
+    color: var(--fg-4);
+    transition: color 0.2s;
+  }
+  .edit:hover {
+    color: var(--fg-2);
+  }
+  .edit svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  /* ---------- on this page ---------- */
+  .toc {
+    position: sticky;
+    top: calc(var(--nav-h) + 24px);
+    max-height: calc(100dvh - var(--nav-h) - 40px);
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-2) transparent;
+  }
+  .toc ul {
+    border-left: 1px solid var(--line);
+  }
+  .toc a {
+    display: block;
+    margin-left: -1px;
+    padding: 4px 0 4px 14px;
+    border-left: 1px solid transparent;
+    font-size: 13.5px;
+    line-height: 1.4;
+    color: var(--fg-3);
+    transition:
+      color 0.15s,
+      border-color 0.15s;
+  }
+  .toc .d3 a {
+    padding-left: 26px;
+    font-size: 13px;
+  }
+  .toc a:hover {
+    color: var(--fg);
+  }
+  .toc a[data-on] {
+    color: var(--accent);
+    border-left-color: var(--accent);
+  }
+
+  @media (max-width: 1100px) {
+    .docs {
+      grid-template-columns: 220px minmax(0, 1fr);
+    }
+    .toc {
+      display: none;
+    }
+  }
+  @media (max-width: 800px) {
+    .docs {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 22px;
+      padding-top: 16px;
+    }
+    .side {
+      position: static;
+      max-height: none;
+      overflow: visible;
+      padding-bottom: 0;
+    }
+    .side-toggle {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      height: 44px;
+      padding: 0 14px;
+      border-radius: 12px;
+      font-size: 14px;
+      color: var(--fg-3);
+      background: rgba(255, 255, 255, 0.03);
+      box-shadow: inset 0 0 0 1px var(--line);
+      text-align: left;
+    }
+    .side-toggle svg {
+      width: 16px;
+      height: 16px;
+      flex: none;
+    }
+    .side-toggle b {
+      margin-left: auto;
+      font-weight: 550;
+      color: var(--fg);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .side nav {
+      display: none;
+      margin-top: 10px;
+      padding: 18px 18px 16px 30px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.025);
+      box-shadow: inset 0 0 0 1px var(--line);
+    }
+    .side[data-open] nav {
+      display: block;
+    }
+    .side a {
+      padding-block: 7px;
+      font-size: 15.5px;
+    }
+  }
+</style>
+
+<script>
+  // the sidebar folds away on a phone
+  const side = document.querySelector<HTMLElement>('[data-side]');
+  const toggle = document.querySelector<HTMLButtonElement>('[data-side-toggle]');
+  toggle?.addEventListener('click', () => {
+    const open = side!.toggleAttribute('data-open');
+    toggle.setAttribute('aria-expanded', String(open));
+  });
+
+  // "on this page" follows the reading
+  const links = [...document.querySelectorAll<HTMLAnchorElement>('[data-toc] a')];
+  if (links.length) {
+    const heads = links
+      .map((link) => document.getElementById(decodeURIComponent(link.hash.slice(1))))
+      .filter((head): head is HTMLElement => head !== null);
+    const mark = () => {
+      const line = 120;
+      let current = 0;
+      heads.forEach((head, i) => {
+        if (head.getBoundingClientRect().top <= line) current = i;
+      });
+      links.forEach((link, i) => link.toggleAttribute('data-on', i === current));
+    };
+    mark();
+    window.addEventListener('scroll', mark, { passive: true });
+  }
+</script>

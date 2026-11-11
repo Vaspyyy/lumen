@@ -1,0 +1,135 @@
+---
+import { site } from '../data/site';
+import { url } from '../lib/url';
+
+const columns = [
+  {
+    title: 'lumen',
+    links: [
+      { label: 'Features', href: url('/#features') },
+      { label: 'Install', href: url('/docs/install/') },
+      { label: 'Release notes', href: url('/releases/') },
+      { label: 'Roadmap', href: url('/docs/roadmap/') },
+    ],
+  },
+  {
+    title: 'Docs',
+    links: [
+      { label: 'First steps', href: url('/docs/first-steps/') },
+      { label: 'Keys', href: url('/docs/keys/') },
+      { label: 'Configuration', href: url('/docs/configuration/') },
+      { label: 'Troubleshooting', href: url('/docs/troubleshooting/') },
+    ],
+  },
+  {
+    title: 'Project',
+    links: [
+      { label: 'GitHub', href: site.repo },
+      { label: 'Issues', href: `${site.repo}/issues` },
+      { label: 'How it works', href: url('/docs/how-it-works/') },
+      { label: 'Release feed', href: url('/rss.xml') },
+    ],
+  },
+];
+---
+
+<footer class="foot">
+  <div class="wrap grid">
+    <div class="about">
+      <a class="brand" href={url('/')}>
+        <img src={url('/icon-96.png')} width="30" height="30" alt="" loading="lazy" />
+        <span>lumen</span>
+      </a>
+      <p>A terminal that understands what it shows. Free software, written in Rust, for Linux.</p>
+    </div>
+    {
+      columns.map((column) => (
+        <nav aria-label={column.title}>
+          <h2>{column.title}</h2>
+          <ul>
+            {column.links.map((link) => (
+              <li>
+                <a href={link.href}>{link.label}</a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      ))
+    }
+  </div>
+  <div class="wrap legal">
+    <span>Released under the {site.license} license.</span>
+    <span>This site sets no cookies and loads nothing from other servers.</span>
+  </div>
+</footer>
+
+<style>
+  .foot {
+    margin-top: clamp(80px, 12vw, 150px);
+    border-top: 1px solid var(--line);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent 60%);
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: minmax(220px, 1.5fr) repeat(3, minmax(120px, 1fr));
+    gap: 40px 32px;
+    padding-block: 56px 40px;
+  }
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  .brand img {
+    border-radius: 8px;
+  }
+  .about p {
+    margin-top: 14px;
+    max-width: 30ch;
+    color: var(--fg-3);
+    font-size: 14.5px;
+  }
+  h2 {
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    color: var(--fg-4);
+    margin-bottom: 14px;
+  }
+  ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 9px;
+  }
+  li a {
+    color: var(--fg-2);
+    font-size: 14.5px;
+    transition: color 0.2s;
+  }
+  li a:hover {
+    color: var(--accent);
+  }
+  .legal {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 8px 24px;
+    padding-block: 22px 40px;
+    border-top: 1px solid var(--line);
+    color: var(--fg-4);
+    font-size: 13px;
+  }
+  @media (max-width: 760px) {
+    .grid {
+      grid-template-columns: 1fr 1fr;
+    }
+    .about {
+      grid-column: 1 / -1;
+    }
+  }
+</style>

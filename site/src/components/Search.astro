@@ -1,0 +1,296 @@
+---
+// The docs' search: Pagefind's index, made when the site is built, behind a
+// field that opens with Ctrl+K.
+import { url } from '../lib/url';
+---
+
+<dialog class="sx" data-search data-bundle={url('/pagefind/pagefind.js')} aria-label="Search the docs">
+  <div class="sx-box">
+    <label class="sx-field">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"
+        ><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg
+      >
+      <span class="sr-only">Search the docs</span>
+      <input
+        type="search"
+        placeholder="Search the docs and the release notes"
+        autocomplete="off"
+        autocapitalize="off"
+        spellcheck="false"
+        data-search-input
+      />
+      <kbd>Esc</kbd>
+    </label>
+    <ul class="sx-results" data-search-results></ul>
+    <p class="sx-hint" data-search-hint>Try “prewarm”, “copy a file” or “opacity”.</p>
+  </div>
+</dialog>
+
+<style is:global>
+  .sx {
+    width: min(640px, calc(100vw - 28px));
+    max-height: min(560px, calc(100dvh - 120px));
+    margin: 90px auto auto;
+    padding: 0;
+    border: 0;
+    border-radius: 16px;
+    background: rgba(23, 21, 34, 0.92);
+    backdrop-filter: blur(22px) saturate(150%);
+    -webkit-backdrop-filter: blur(22px) saturate(150%);
+    color: var(--fg);
+    box-shadow:
+      0 0 0 1px var(--line-2),
+      0 40px 120px -20px rgba(0, 0, 0, 0.9),
+      0 0 120px -30px rgba(255, 190, 110, 0.25);
+    overflow: hidden;
+  }
+  .sx[open] {
+    display: flex;
+    animation: sx-in 0.18s ease-out;
+  }
+  .sx::backdrop {
+    background: rgba(6, 5, 10, 0.6);
+    backdrop-filter: blur(3px);
+  }
+  @keyframes sx-in {
+    from {
+      opacity: 0;
+      transform: translateY(-8px) scale(0.985);
+    }
+  }
+  .sx-box {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    min-height: 0;
+  }
+  .sx-field {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 16px;
+    height: 56px;
+    flex: none;
+    border-bottom: 1px solid var(--line);
+  }
+  .sx-field svg {
+    width: 18px;
+    height: 18px;
+    color: var(--fg-3);
+    flex: none;
+  }
+  .sx-field input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    border: 0;
+    outline: 0;
+    background: none;
+    color: var(--fg);
+    font: inherit;
+    font-size: 16px;
+  }
+  .sx-field input::placeholder {
+    color: var(--fg-4);
+  }
+  .sx-field input::-webkit-search-cancel-button {
+    display: none;
+  }
+  .sx-field kbd {
+    font-size: 11px;
+    color: var(--fg-3);
+  }
+  .sx-results {
+    margin: 0;
+    padding: 8px;
+    list-style: none;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .sx-results:empty {
+    display: none;
+  }
+  .sx-results a {
+    display: block;
+    padding: 10px 12px;
+    border-radius: 10px;
+  }
+  .sx-results a[aria-selected='true'] {
+    background: rgba(255, 201, 122, 0.1);
+    box-shadow: inset 0 0 0 1px rgba(255, 201, 122, 0.22);
+  }
+  .sx-title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 15px;
+    font-weight: 550;
+    color: var(--fg);
+  }
+  .sx-title small {
+    font-size: 12.5px;
+    font-weight: 400;
+    color: var(--fg-4);
+  }
+  .sx-excerpt {
+    margin-top: 2px;
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: var(--fg-3);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .sx-excerpt mark {
+    background: none;
+    color: var(--accent);
+    font-weight: 550;
+  }
+  .sx-hint {
+    padding: 16px 18px 18px;
+    color: var(--fg-4);
+    font-size: 14px;
+  }
+  .sx-hint[hidden] {
+    display: none;
+  }
+</style>
+
+<script>
+  type Result = { url: string; excerpt: string; meta: { title?: string }; sub_results?: SubResult[] };
+  type SubResult = { url: string; title: string; excerpt: string };
+  type Pagefind = {
+    init(): Promise<void>;
+    debouncedSearch(query: string, options?: object, wait?: number): Promise<{ results: { data(): Promise<Result> }[] } | null>;
+  };
+
+  const dialog = document.querySelector<HTMLDialogElement>('[data-search]')!;
+  const input = dialog.querySelector<HTMLInputElement>('[data-search-input]')!;
+  const list = dialog.querySelector<HTMLUListElement>('[data-search-results]')!;
+  const hint = dialog.querySelector<HTMLElement>('[data-search-hint]')!;
+  const firstHint = hint.textContent ?? '';
+
+  let pagefind: Pagefind | null | undefined;
+  let selected = 0;
+
+  async function load(): Promise<Pagefind | null> {
+    if (pagefind !== undefined) return pagefind;
+    try {
+      const found: Pagefind = await import(/* @vite-ignore */ dialog.dataset.bundle!);
+      await found.init();
+      pagefind = found;
+    } catch {
+      // the index is made when the site is built: a development server has none
+      pagefind = null;
+    }
+    return pagefind;
+  }
+
+  function open() {
+    if (dialog.open) return;
+    dialog.showModal();
+    input.select();
+    void load();
+  }
+
+  function say(text: string) {
+    hint.textContent = text;
+    hint.hidden = false;
+  }
+
+  function select(index: number) {
+    const links = list.querySelectorAll('a');
+    if (!links.length) return;
+    selected = (index + links.length) % links.length;
+    links.forEach((link, i) => link.setAttribute('aria-selected', String(i === selected)));
+    links[selected].scrollIntoView({ block: 'nearest' });
+  }
+
+  async function search() {
+    const query = input.value.trim();
+    if (!query) {
+      list.replaceChildren();
+      say(firstHint);
+      return;
+    }
+    const engine = await load();
+    if (!engine) {
+      list.replaceChildren();
+      say('The search index is made when the site is built, and this copy has none.');
+      return;
+    }
+    const found = await engine.debouncedSearch(query, {}, 90);
+    // null: a newer search has started since
+    if (!found) return;
+    const pages = await Promise.all(found.results.slice(0, 7).map((result) => result.data()));
+    if (input.value.trim() !== query) return;
+    list.replaceChildren(
+      ...pages.map((page) => {
+        // the part of the page the match is in, when it is under a heading of its own
+        const part = page.sub_results?.find((sub) => sub.url !== page.url) ?? null;
+        const item = document.createElement('li');
+        const link = document.createElement('a');
+        link.href = part?.url ?? page.url;
+        const title = document.createElement('div');
+        title.className = 'sx-title';
+        title.textContent = page.meta.title ?? 'lumen';
+        if (part) {
+          const where = document.createElement('small');
+          where.textContent = part.title;
+          title.append(where);
+        }
+        const excerpt = document.createElement('div');
+        excerpt.className = 'sx-excerpt';
+        // Pagefind's excerpt is the page's own text, escaped, with <mark> around the matches
+        excerpt.innerHTML = part?.excerpt ?? page.excerpt;
+        link.append(title, excerpt);
+        item.append(link);
+        return item;
+      }),
+    );
+    if (pages.length) {
+      hint.hidden = true;
+      select(0);
+    } else {
+      say(`Nothing found for “${query}”.`);
+    }
+  }
+
+  document.querySelectorAll('[data-search-open]').forEach((button) => button.addEventListener('click', open));
+
+  document.addEventListener('keydown', (event) => {
+    const typing = (event.target as HTMLElement).closest('input, textarea, [contenteditable]');
+    if ((event.key === 'k' && (event.ctrlKey || event.metaKey)) || (event.key === '/' && !typing)) {
+      event.preventDefault();
+      open();
+    }
+  });
+
+  input.addEventListener('input', () => void search());
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      select(selected + 1);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      select(selected - 1);
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      list.querySelectorAll('a')[selected]?.click();
+    }
+  });
+
+  list.addEventListener('pointermove', (event) => {
+    const link = (event.target as HTMLElement).closest('a');
+    if (link) select([...list.querySelectorAll('a')].indexOf(link));
+  });
+  list.addEventListener('click', (event) => {
+    if ((event.target as HTMLElement).closest('a')) dialog.close();
+  });
+
+  // a click beside the box closes it
+  dialog.addEventListener('click', (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+</script>

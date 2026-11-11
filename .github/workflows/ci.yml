@@ -1,9 +1,12 @@
 name: CI
 
+# The website has a workflow of its own: a change to it alone needs no Rust.
 on:
   push:
     branches: [main]
+    paths-ignore: ['site/**', '.github/workflows/site.yml']
   pull_request:
+    paths-ignore: ['site/**', '.github/workflows/site.yml']
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -14,7 +17,7 @@ jobs:
     name: Format, lint, test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
