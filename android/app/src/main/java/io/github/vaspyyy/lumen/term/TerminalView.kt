@@ -73,7 +73,8 @@ class TerminalView(context: Context, private val mods: StickyMods) : View(contex
     var host: Host? = null
 
     private var tab: Tab? = null
-    private val dm = resources.displayMetrics
+    /** Read anew each time: Android swaps it when the density or the font scale changes. */
+    private val dm get() = resources.displayMetrics
 
     // ------------------------------------------------------------ fonts and metrics
 

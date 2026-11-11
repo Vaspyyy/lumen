@@ -68,9 +68,9 @@ lumen changes nothing else: not the SSH server's settings, not its keys, not the
 
 The code carries the fingerprints of the PC's SSH keys. The phone logs in only to a machine that proves it has one of them. Another machine at the same address is refused, on the first connection as on every later one, and the app says so. The phone never trusts a machine because it was the first to answer.
 
-The phone also remembers which of those keys the PC proved when it was paired. Only a machine that proves that same key counts as the same PC when you pair again: a code that merely names your PC's key, made by somebody else, pairs as a PC of its own and leaves the real one alone.
+The phone also remembers which of those keys the PC proved when it was paired. Only a machine that proves that same key counts as the same PC when you pair again: a code that merely names your PC's key, made by somebody else, pairs as a PC of its own and leaves the real one alone. So does a PC whose SSH server got new keys, after a reinstall for example: the old entry stays until you remove it, in the app with the bin and on the PC with `lumen unpair`.
 
-What a program on the PC prints can't act on the phone by itself. A link says where it leads before it is opened, and a program can put text on the phone's clipboard only from the terminal you are looking at.
+What a program on the PC prints can't act on the phone by itself. A link says where it leads before it is opened, and a program can put text on the phone's clipboard only from the tab that is open in the app, not from one behind it.
 
 `lumen pair --yes` asks nothing, also not before a phone's new key takes the place of its old one. It is for scripts that pair a phone they hold.
 

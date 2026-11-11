@@ -217,9 +217,9 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         if (!started) return
         when (val c = conn) {
             is Conn.Connected -> checkAlive()
-            Conn.AuthCancelled -> if (waitsForFront) connect()
+            Conn.AuthCancelled -> if (waitsForFront && calm()) connect()
             // it may have been the network, which may be back
-            is Conn.Failed -> if (c.network) connect()
+            is Conn.Failed -> if (c.network && calm()) connect()
             else -> Unit
         }
     }
@@ -230,8 +230,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         when (val c = conn) {
             // what was connected over the old network is gone with it: find out now, not at the next keepalive
             is Conn.Connected -> checkAlive()
-            is Conn.Failed -> if (c.network) connect(auto = true)
-            is Conn.Reconnecting -> connect(auto = true)
+            is Conn.Failed -> if (c.network && calm()) connect(auto = true)
+            is Conn.Reconnecting -> if (calm()) connect(auto = true)
             else -> Unit
         }
     }
@@ -304,7 +304,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     /** Back from the scan, code or pairing screens. Returns false if there is nowhere to go back to. */
     fun back(): Boolean = when (route) {
-        Route.Scan, Route.TypeCode -> { route = pairFrom; true }
+        Route.Scan, Route.TypeCode -> { route = pairFrom; connectStored(); true }
         Route.Pairing -> { cancelPairing(); true }
         Route.Terminal -> if (conn == Conn.Demo) { leaveDemo(); true } else false
         Route.Welcome -> false
@@ -343,10 +343,23 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         connectStored()
     }
 
-    /** A link came first when it opened the app: once it is dealt with, the PC that is stored gets its turn. */
+    /**
+     * A question about a pairing came first: once it is dealt with, the PC
+     * that is stored gets its turn, if logging in to it was put off or waits
+     * for something that may have happened meanwhile.
+     */
     private fun connectStored() {
-        if (route == Route.Terminal && conn == Conn.Idle && current != null) connect()
+        if (!calm() || current == null) return
+        val c = conn
+        if (c == Conn.Idle || (c is Conn.Failed && c.network) || (c == Conn.AuthCancelled && waitsForFront)) connect()
     }
+
+    /**
+     * Nothing about a pairing is on the screen. While something is, the app
+     * does not start logging in by itself: the system's prompt would come up
+     * in front of the question, or of the camera.
+     */
+    private fun calm() = pending == null && route == Route.Terminal
 
     fun acceptPending() {
         val p = pending ?: return
@@ -457,7 +470,6 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             if (before.isNotEmpty()) {
                 L.i("pair: replaces ${before.size} earlier pairing(s) with this PC")
                 if (before.any { it.id == current?.id }) disconnectNow()
-                before.forEach { KeyVault.delete(it.keyAlias) }
             }
             val pc = Pc(
                 id = UUID.randomUUID().toString(),
@@ -468,9 +480,13 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 addresses = offer.addresses,
                 tabs = before.flatMap { it.tabs }.distinct(),
             )
+            // The new pairing is stored before the old keys go: if the app ends
+            // in between, a key without a pairing is left, which the next start
+            // sweeps away, and not a pairing without its key.
             savePcs(pcs - before.toSet() + pc)
             pairKey = null
             enrollId = 0L
+            before.forEach { old -> detached.launch { KeyVault.delete(old.keyAlias) } }
             pairing = pairing?.copy(step = PairStep.Done)
             delay(1700)
             if (gen != pairGen) return@launch

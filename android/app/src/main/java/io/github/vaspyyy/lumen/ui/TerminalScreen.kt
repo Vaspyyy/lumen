@@ -217,7 +217,8 @@ fun TerminalScreen(model: AppModel, onOpenSheet: () -> Unit) {
             }
 
             // A link that was tapped says where it leads before anything is done with it.
-            LaunchedEffect(activeTab?.id) { link = null }
+            // It belongs to what was on the screen: another tab, or a connection that went, ends it.
+            LaunchedEffect(activeTab?.id, live) { link = null }
             androidx.compose.animation.AnimatedVisibility(
                 link != null && live,
                 enter = fadeIn(tween(120)) + slideInVertically(spring(0.75f, Spring.StiffnessMedium)) { it / 2 },
@@ -541,11 +542,12 @@ private fun StatusDot(conn: Conn, onClick: () -> Unit) {
     val busy = conn == Conn.Checking || conn == Conn.Auth || conn is Conn.Connecting || conn is Conn.Reconnecting
     // The pulse runs only while something is under way: an animation that never
     // ends would redraw the screen on every frame, for nothing.
+    // It is read where the dot is drawn, so that a frame of it draws and no more.
     val pulse = if (busy) {
         val t = rememberInfiniteTransition(label = "pulse")
-        t.animateFloat(0.35f, 1f, infiniteRepeatable(tween(800, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "p").value
+        t.animateFloat(0.35f, 1f, infiniteRepeatable(tween(800, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "p")
     } else {
-        1f
+        null
     }
     val desc = stringResource(R.string.connection_and_pcs)
     Box(
@@ -561,10 +563,10 @@ private fun StatusDot(conn: Conn, onClick: () -> Unit) {
             Modifier
                 .size(22.dp)
                 .drawBehind {
-                    drawCircle(Brush.radialGradient(listOf(c.copy(alpha = 0.45f * pulse), Color.Transparent)))
+                    drawCircle(Brush.radialGradient(listOf(c.copy(alpha = 0.45f * (pulse?.value ?: 1f)), Color.Transparent)))
                 },
         )
-        Box(Modifier.size(9.dp).graphicsLayer { alpha = pulse }.clip(CircleShape).background(c))
+        Box(Modifier.size(9.dp).graphicsLayer { alpha = pulse?.value ?: 1f }.clip(CircleShape).background(c))
     }
 }
 
