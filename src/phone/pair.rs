@@ -283,8 +283,8 @@ impl Pairing {
             },
         };
         let device = lumen_link::clean_name(&request.device);
-        if !self.confirm(&device, &request.from, &key) {
-            refuse(&mut stream, "The PC's user did not let this phone in.".into());
+        if !self.confirm(&device, &request.from, &key, &stream) {
+            refuse(&mut stream, "The answer on the PC was no.".into());
             return None;
         }
 
@@ -311,7 +311,10 @@ impl Pairing {
         }
     }
 
-    fn confirm(&self, device: &str, from: &str, key: &PhoneKey) -> bool {
+    /// Asks the PC's user about a phone. `phone` is the connection its
+    /// request came on: a phone that gives up while the question stands is
+    /// not added, whatever is answered afterwards.
+    fn confirm(&self, device: &str, from: &str, key: &PhoneKey, phone: &UnixStream) -> bool {
         if self.yes {
             return true;
         }
@@ -335,9 +338,16 @@ impl Pairing {
         } else {
             eprint!("{question}");
         }
-        if !readable(0, QUESTION_TIME) {
-            eprintln!("\nlumen: no answer: {device} was not added.");
-            return false;
+        match wait_for(0, phone.as_raw_fd(), QUESTION_TIME) {
+            Waited::Ready => {},
+            Waited::Gone => {
+                eprintln!("\nlumen: {device} stopped waiting: it was not added.");
+                return false;
+            },
+            Waited::TimedOut => {
+                eprintln!("\nlumen: no answer: {device} was not added.");
+                return false;
+            },
         }
         let mut answer = String::new();
         if io::stdin().lock().read_line(&mut answer).unwrap_or(0) == 0 {
@@ -376,6 +386,39 @@ fn line_within(fd: i32, timeout: Duration) -> Option<String> {
         }
     }
     String::from_utf8(line).ok()
+}
+
+enum Waited {
+    Ready,
+    Gone,
+    TimedOut,
+}
+
+/// Waits until `fd` can be read, while watching that whoever is on the
+/// other end of `peer` is still there. Only an end that is closed for good
+/// counts as gone, not one that has merely said all it had to say.
+fn wait_for(fd: i32, peer: i32, timeout: Duration) -> Waited {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let Some(left) = deadline.checked_duration_since(Instant::now()) else { return Waited::TimedOut };
+        // asking for no events still tells of a hangup or an error
+        let mut polls =
+            [libc::pollfd { fd, events: libc::POLLIN, revents: 0 }, libc::pollfd { fd: peer, events: 0, revents: 0 }];
+        // SAFETY: two pollfds, and their count
+        let ready = unsafe { libc::poll(polls.as_mut_ptr(), 2, left.as_millis().min(i32::MAX as u128) as i32) };
+        if ready < 0 && io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+            return Waited::TimedOut;
+        }
+        if ready <= 0 {
+            continue;
+        }
+        if polls[0].revents != 0 {
+            return Waited::Ready;
+        }
+        if polls[1].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+            return Waited::Gone;
+        }
+    }
 }
 
 /// Waits until a descriptor can be read, at most this long.
@@ -661,8 +704,13 @@ pub fn enroll(args: &[String]) -> i32 {
     if stream.write_all(format!("{line}\n").as_bytes()).is_err() {
         return fail();
     }
-    // the PC's user may take a while to answer
-    let _ = stream.set_read_timeout(Some(ANSWER_WAIT));
+    // The PC's user may take a while to answer. A phone that gives up in
+    // the meantime closes its connection, and sshd its end of this
+    // program's output: then this ends, and with it the question on the PC.
+    if !matches!(wait_for(stream.as_raw_fd(), 1, ANSWER_WAIT), Waited::Ready) {
+        return 1;
+    }
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     match read_line(&mut stream) {
         Ok(reply) if !reply.trim().is_empty() => {
             println!("{reply}");

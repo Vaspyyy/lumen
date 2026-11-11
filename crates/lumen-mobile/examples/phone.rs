@@ -121,7 +121,9 @@ fn main() {
             let dir = Path::new(dir);
             let key = FileKey::make(dir);
             let device = device.first().copied().unwrap_or("phone on the command line");
-            match runtime().block_on(link::enroll(link, device, &key.public_line())) {
+            match runtime()
+                .block_on(link::enroll(link, device, &key.public_line(), || eprintln!("phone: the PC is asking")))
+            {
                 Ok(host) => {
                     let stored = serde_json::to_string_pretty(&host).expect("a host is JSON");
                     std::fs::write(dir.join("host.json"), &stored).unwrap_or_else(|e| fail(e));
@@ -180,6 +182,12 @@ fn main() {
                 if !line.is_empty() {
                     println!("{line}");
                 }
+            }
+            if std::env::var_os("PHONE_COLORS").is_some() {
+                // the screen's own colors, as the app is told them: background, foreground, cursor
+                let _ = tab.screen.snapshot(&mut snapshot);
+                let word = |at: usize| u32::from_le_bytes(snapshot[at..at + 4].try_into().expect("four bytes"));
+                println!("[colors {:08x} {:08x} {:08x}]", word(20), word(24), word(28));
             }
             tab.close();
             runtime().block_on(link.disconnect());

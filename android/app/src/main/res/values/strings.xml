@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">lumen</string>
+
+    <!-- welcome -->
+    <string name="welcome_title">Your terminal, in your pocket.</string>
+    <string name="welcome_body">This phone opens terminals that keep running on your PC. It logs in with a key that stays in the phone\'s secure hardware.</string>
+    <string name="welcome_step1">Install lumen on your PC.</string>
+    <string name="welcome_step2">Run this there. It shows a code.</string>
+    <string name="welcome_step3">Scan that code with this phone.</string>
+    <string name="scan_code">Scan the code</string>
+    <string name="type_code_instead">Type the code instead</string>
+    <string name="debug_demo">Open a demo terminal (debug build)</string>
+
+    <!-- scan -->
+    <string name="scan_title">Scan the code</string>
+    <string name="scan_hint">Point the camera at the code that lumen pair shows on your PC.</string>
+    <string name="scan_found">Found it.</string>
+    <string name="torch_on">Turn the light on</string>
+    <string name="torch_off">Turn the light off</string>
+    <string name="camera_title">The camera reads the code.</string>
+    <string name="camera_body">lumen uses the camera only on this screen, to read the pairing code. Nothing is recorded or sent anywhere.</string>
+    <string name="camera_denied">Camera access is off for lumen. You can turn it on in the settings, or type the code instead.</string>
+    <string name="camera_allow">Allow the camera</string>
+    <string name="open_settings">Open settings</string>
+    <string name="not_a_code">This is not a lumen pairing code.</string>
+
+    <!-- type the code -->
+    <string name="type_title">Type the code</string>
+    <string name="type_body">lumen pair prints the code as text under the picture too. It starts with lumen://pair/.</string>
+    <string name="paste">Paste</string>
+    <string name="pair">Pair</string>
+    <string name="pair_with">Pair with %1$s</string>
+    <string name="as_user">as %1$s</string>
+
+    <!-- a link from outside -->
+    <string name="confirm_link_title">Pair with %1$s as %2$s?</string>
+    <string name="confirm_link_body">This pairing link came from another app. Pair only if you just ran lumen pair on your PC.</string>
+    <string name="not_now">Not now</string>
+
+    <!-- pairing -->
+    <string name="pairing_title">Pairing with %1$s</string>
+    <string name="step_key">Making a key in this phone\'s secure hardware</string>
+    <string name="step_key_detail">It never leaves the phone. Only its public half goes to the PC.</string>
+    <string name="step_reach">Reaching %1$s</string>
+    <string name="step_confirm">Confirm on your PC</string>
+    <string name="step_confirm_detail">It asks whether to add this phone. Say yes there if it shows this key.</string>
+    <string name="step_confirm_key">This phone\'s key</string>
+    <string name="paired_title">Paired.</string>
+    <string name="paired_body">Opening your first terminal on %1$s.</string>
+    <string name="pair_key_failed">This phone could not make a key: %1$s</string>
+    <string name="pair_key_unusable">This phone made a key that lumen cannot use.</string>
+    <string name="pair_failed_generic">Pairing did not work.</string>
+    <string name="try_again">Try again</string>
+    <string name="back">Back</string>
+    <string name="no_lock_title">lumen needs a screen lock</string>
+    <string name="no_lock_body">The key that logs in to your PC is only as safe as this phone\'s lock. Set a PIN, pattern, password or fingerprint, then try again.</string>
+    <string name="open_security_settings">Open security settings</string>
+
+    <!-- the fingerprint prompt -->
+    <string name="auth_title">Log in to %1$s</string>
+    <string name="auth_subtitle">Unlock the key for this PC</string>
+
+    <!-- connection -->
+    <string name="conn_idle">Not connected to %1$s.</string>
+    <string name="conn_demo">A demo terminal, with no PC behind it.</string>
+    <string name="conn_checking">Checking the key</string>
+    <string name="conn_auth">Waiting for your fingerprint or screen lock</string>
+    <string name="conn_connecting">Connecting to %1$s</string>
+    <string name="conn_connected">Connected to %1$s.</string>
+    <string name="conn_reconnecting">Connection lost. Trying again in %1$d s</string>
+    <string name="conn_auth_cancelled">The key was not unlocked, so lumen did not log in.</string>
+    <string name="conn_refused">This PC no longer accepts this phone.</string>
+    <string name="conn_wrong_host">This is not the PC this phone was paired with.</string>
+    <string name="conn_key_gone">The key for this PC is gone.</string>
+    <string name="conn_no_lock">This phone has no screen lock any more.</string>
+    <string name="conn_failed_generic">Could not connect.</string>
+    <string name="conn_lost_generic">The connection was lost.</string>
+    <string name="conn_stopped_answering">The PC stopped answering.</string>
+    <string name="conn_key_failed">The key could not sign: %1$s</string>
+    <string name="failed_title">Could not connect to %1$s</string>
+    <string name="auth_cancelled_title">Not logged in</string>
+    <string name="refused_title">This PC no longer accepts this phone</string>
+    <string name="refused_body">%1$s turned this phone away. It was probably unpaired there. Pair again, or remove %1$s from this phone.</string>
+    <string name="wrong_host_title">This is not the PC this phone was paired with</string>
+    <string name="wrong_host_body">Something else answered at the address of %1$s, so lumen did not log in. If %1$s was reinstalled, remove it here and pair again.</string>
+    <string name="key_gone_title">The key is gone</string>
+    <string name="key_gone_body">The key for %1$s is no longer on this phone. That happens when the screen lock is removed. Pair %1$s again.</string>
+    <string name="pair_again">Pair again</string>
+
+    <!-- terminal -->
+    <string name="new_terminal">New terminal</string>
+    <string name="close_tab">Close</string>
+    <string name="close_and_end">Close and end it on the PC</string>
+    <string name="keep_running">Keep running on the PC</string>
+    <string name="connection_and_pcs">Connection and PCs</string>
+    <string name="to_bottom">Back to the bottom</string>
+    <string name="copy">Copy</string>
+    <string name="copied">Copied to the clipboard</string>
+    <string name="program_copied">The program copied text to the clipboard</string>
+    <string name="empty_title">No terminal open</string>
+    <string name="empty_body">Open a new terminal on %1$s. It keeps running there when you close the app.</string>
+    <string name="running_on_pc">Running on %1$s</string>
+    <string name="open">Open</string>
+    <string name="key_left">Left</string>
+    <string name="key_right">Right</string>
+    <string name="key_up">Up</string>
+    <string name="key_down">Down</string>
+    <string name="font_size_value">%1$s sp</string>
+
+    <!-- PC sheet -->
+    <string name="sheet_title">Your PCs</string>
+    <string name="sheet_demo">You are in the demo terminal. Pick a PC to leave it.</string>
+    <string name="connected">Connected</string>
+    <string name="not_connected">Not connected</string>
+    <string name="pair_another">Pair another PC</string>
+    <string name="remove_pc">Remove %1$s</string>
+    <string name="remove_title">Remove %1$s?</string>
+    <string name="remove_body">This deletes the key for %1$s from this phone. Run lumen unpair on the PC to finish the job there.</string>
+    <string name="remove">Remove</string>
+    <string name="keep">Keep</string>
+    <string name="removed_pc">Removed %1$s</string>
+    <string name="font_size">Font size</string>
+    <string name="font_preview" translatable="false">~/src ❯ git status</string>
+    <string name="version_line" translatable="false">lumen %1$s · core %2$s</string>
+
+    <!-- no core -->
+    <string name="core_missing_title">This build has no core</string>
+    <string name="core_missing_body">liblumen_mobile.so is missing from this build. Run android/build-core.sh, then build the app again.</string>
+</resources>

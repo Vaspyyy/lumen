@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The prompt and the cursor for themed icons, at the same place as in the
+     full-color foreground layer. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M35.1,36.45 L53.2,54 L35.1,71.6"
+        android:strokeWidth="7.4"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M66.7,47.2 L74.3,47.2 A2.1,2.1 0 0 1 76.4,49.3 L76.4,65.7 A2.1,2.1 0 0 1 74.3,67.8 L66.7,67.8 A2.1,2.1 0 0 1 64.6,65.7 L64.6,49.3 A2.1,2.1 0 0 1 66.7,47.2 Z"
+        android:fillColor="#FFFFFFFF" />
+</vector>

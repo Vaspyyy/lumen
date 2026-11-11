@@ -228,8 +228,9 @@ async fn run(handle: &Handle<Checker>, command: &str) -> Option<(u32, Vec<u8>)> 
 }
 
 /// Introduces the phone's key to the PC with a pairing code. Waits for the
-/// PC's user to say yes.
-pub async fn enroll(link: &str, device: &str, public_key: &str) -> Result<Host, Failure> {
+/// PC's user to say yes: `asked` is called once the PC has the phone's key
+/// and its user is being asked.
+pub async fn enroll(link: &str, device: &str, public_key: &str, asked: impl Fn()) -> Result<Host, Failure> {
     let offer = Offer::from_link(link).map_err(Failure::failed)?;
     let (mut handle, _) = arrive(&offer.addresses, offer.port, &offer.host_keys).await?;
 
@@ -255,6 +256,7 @@ pub async fn enroll(link: &str, device: &str, public_key: &str) -> Result<Host, 
         // whatever is asked for, the short-lived key runs `lumen pair-enroll`
         channel.exec(true, "lumen pair-enroll").await?;
         channel.data_bytes(line).await?;
+        asked();
         let mut out = Vec::new();
         while let Some(msg) = channel.wait().await {
             match msg {

@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -15,6 +15,7 @@ use ::jni::objects::{GlobalRef, JByteArray, JByteBuffer, JObject, JString, JValu
 use ::jni::sys::{jboolean, jint, jlong, jstring};
 use ::jni::{JNIEnv, JavaVM};
 use serde_json::json;
+use tokio::sync::oneshot;
 
 use crate::link::{self, Failure, Host, Link, Sign, Tab, TabEvents};
 use crate::runtime;
@@ -23,6 +24,11 @@ use crate::screen::Size;
 static LINKS: Mutex<Option<HashMap<i64, Arc<Link>>>> = Mutex::new(None);
 static TABS: Mutex<Option<HashMap<i64, Arc<Tab>>>> = Mutex::new(None);
 static NEXT: AtomicI64 = AtomicI64::new(1);
+/// How far the pairing that is under way has come: 0 none, 1 reaching the
+/// PC, 2 the PC's user is being asked.
+static ENROLL_STAGE: AtomicI32 = AtomicI32::new(0);
+/// What ends the pairing that is under way, if the app gives up on it.
+static ENROLL_STOP: Mutex<Option<oneshot::Sender<()>>> = Mutex::new(None);
 
 fn held<T>(all: &'static Mutex<Option<HashMap<i64, T>>>) -> MutexGuard<'static, Option<HashMap<i64, T>>> {
     let mut all = all.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -193,11 +199,39 @@ pub extern "system" fn Java_io_github_vaspyyy_lumen_core_Core_enroll<'l>(
     public_key: JString<'l>,
 ) -> jstring {
     let (link, device, public_key) = (text(&mut env, &link), text(&mut env, &device), text(&mut env, &public_key));
-    let answer = guarded(String::new(), || match wait(link::enroll(&link, &device, &public_key)) {
-        Ok(host) => json!({ "ok": true, "host": host }).to_string(),
-        Err(e) => failure(e),
+    let answer = guarded(String::new(), || {
+        let (stop, stopped) = oneshot::channel();
+        *ENROLL_STOP.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(stop);
+        ENROLL_STAGE.store(1, Ordering::Relaxed);
+        let done = wait(async {
+            tokio::select! {
+                done = link::enroll(&link, &device, &public_key, || ENROLL_STAGE.store(2, Ordering::Relaxed)) => done,
+                // dropping the pairing drops its connection: the PC stops asking
+                Ok(()) = stopped => Err(Failure { code: "cancelled", message: "Pairing was stopped.".into() }),
+            }
+        });
+        ENROLL_STAGE.store(0, Ordering::Relaxed);
+        match done {
+            Ok(host) => json!({ "ok": true, "host": host }).to_string(),
+            Err(e) => failure(e),
+        }
     });
     give(&mut env, &answer)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_vaspyyy_lumen_core_Core_enrollStage<'l>(
+    _env: JNIEnv<'l>,
+    _core: JObject<'l>,
+) -> jint {
+    ENROLL_STAGE.load(Ordering::Relaxed)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_vaspyyy_lumen_core_Core_cancelEnroll<'l>(_env: JNIEnv<'l>, _core: JObject<'l>) {
+    if let Some(stop) = ENROLL_STOP.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take() {
+        let _ = stop.send(());
+    }
 }
 
 #[unsafe(no_mangle)]
