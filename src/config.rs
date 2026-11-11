@@ -7,6 +7,9 @@ use std::path::PathBuf;
 
 use gpui::{Global, Hsla, Rgba, WindowBackgroundAppearance};
 use serde::Deserialize;
+// What an Alacritty theme says that lumen has no use for: taken, so that the
+// theme can be pasted in as it is, and left aside.
+use serde::de::IgnoredAny as Unused;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rgb(pub u8, pub u8, pub u8);
@@ -32,6 +35,16 @@ impl<'de> Deserialize<'de> for Rgb {
         let s = String::deserialize(d)?;
         Rgb::parse(&s).ok_or_else(|| serde::de::Error::custom(format!("not a color: {s:?} (want \"#rrggbb\")")))
     }
+}
+
+/// A color, or one of Alacritty's two words for "the cell's own color",
+/// which is what lumen does where it is given no color.
+fn color_or_cell<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Rgb>, D::Error> {
+    let s = String::deserialize(d)?;
+    if s.eq_ignore_ascii_case("CellForeground") || s.eq_ignore_ascii_case("CellBackground") {
+        return Ok(None);
+    }
+    Rgb::parse(&s).map(Some).ok_or_else(|| serde::de::Error::custom(format!("not a color: {s:?} (want \"#rrggbb\")")))
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -99,19 +112,27 @@ impl Default for Cursor {
 pub struct Primary {
     pub background: Rgb,
     pub foreground: Rgb,
+    #[serde(rename = "dim_foreground")]
+    _dim_foreground: Unused,
+    #[serde(rename = "bright_foreground")]
+    _bright_foreground: Unused,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CursorColors {
+    #[serde(deserialize_with = "color_or_cell")]
     pub cursor: Option<Rgb>,
+    #[serde(deserialize_with = "color_or_cell")]
     pub text: Option<Rgb>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SelectionColors {
+    #[serde(deserialize_with = "color_or_cell")]
     pub background: Option<Rgb>,
+    #[serde(deserialize_with = "color_or_cell")]
     pub text: Option<Rgb>,
 }
 
@@ -145,12 +166,34 @@ pub struct Colors {
     /// The color of lumen's own light: the cursor's glow, the active tab.
     pub accent: Rgb,
     pub draw_bold_text_with_bright_colors: bool,
+    // the rest of what Alacritty's [colors] can hold
+    #[serde(rename = "dim")]
+    _dim: Unused,
+    #[serde(rename = "vi_mode_cursor")]
+    _vi_mode_cursor: Unused,
+    #[serde(rename = "search")]
+    _search: Unused,
+    #[serde(rename = "hints")]
+    _hints: Unused,
+    #[serde(rename = "line_indicator")]
+    _line_indicator: Unused,
+    #[serde(rename = "footer_bar")]
+    _footer_bar: Unused,
+    #[serde(rename = "indexed_colors")]
+    _indexed_colors: Unused,
+    #[serde(rename = "transparent_background_colors")]
+    _transparent_background_colors: Unused,
 }
 
 // lumen's own theme: a night sky with a warm lamp in it.
 impl Default for Primary {
     fn default() -> Self {
-        Primary { background: Rgb(0x12, 0x11, 0x1a), foreground: Rgb(0xe4, 0xe1, 0xee) }
+        Primary {
+            background: Rgb(0x12, 0x11, 0x1a),
+            foreground: Rgb(0xe4, 0xe1, 0xee),
+            _dim_foreground: Unused,
+            _bright_foreground: Unused,
+        }
     }
 }
 
@@ -189,6 +232,14 @@ impl Default for Colors {
             },
             accent: Rgb(0xff, 0xc9, 0x7a),
             draw_bold_text_with_bright_colors: false,
+            _dim: Unused,
+            _vi_mode_cursor: Unused,
+            _search: Unused,
+            _hints: Unused,
+            _line_indicator: Unused,
+            _footer_bar: Unused,
+            _indexed_colors: Unused,
+            _transparent_background_colors: Unused,
         }
     }
 }
@@ -353,8 +404,94 @@ mod tests {
     }
 
     #[test]
+    fn a_theme_with_everything_alacritty_has() {
+        // the shape of the themes people share: tables lumen has no use for, and
+        // "the cell's own color" where a color could be
+        let config: Config = toml::from_str(
+            r##"
+            [colors.primary]
+            background = "#1e1e2e"
+            foreground = "#cdd6f4"
+            dim_foreground = "#7f849c"
+            bright_foreground = "#cdd6f4"
+
+            [colors.cursor]
+            text = "CellBackground"
+            cursor = "#f5e0dc"
+
+            [colors.vi_mode_cursor]
+            text = "#1e1e2e"
+            cursor = "#b4befe"
+
+            [colors.search.matches]
+            foreground = "#1e1e2e"
+            background = "#a6adc8"
+
+            [colors.search.focused_match]
+            foreground = "#1e1e2e"
+            background = "#a6e3a1"
+
+            [colors.footer_bar]
+            foreground = "#1e1e2e"
+            background = "#a6adc8"
+
+            [colors.hints.start]
+            foreground = "#1e1e2e"
+            background = "#f9e2af"
+
+            [colors.hints.end]
+            foreground = "#1e1e2e"
+            background = "#a6adc8"
+
+            [colors.line_indicator]
+            foreground = "None"
+            background = "None"
+
+            [colors.selection]
+            text = "CellForeground"
+            background = "#f5e0dc"
+
+            [colors.normal]
+            black = "#45475a"
+            red = "#f38ba8"
+
+            [colors.bright]
+            black = "#585b70"
+
+            [colors.dim]
+            black = "#45475a"
+
+            [[colors.indexed_colors]]
+            index = 16
+            color = "#fab387"
+
+            [[colors.indexed_colors]]
+            index = 17
+            color = "#f5e0dc"
+            "##,
+        )
+        .unwrap();
+        assert_eq!(config.colors.primary.background, Rgb(0x1e, 0x1e, 0x2e));
+        assert_eq!(config.colors.cursor.cursor, Some(Rgb(0xf5, 0xe0, 0xdc)));
+        // the cell's own color is what lumen uses where it has none
+        assert_eq!(config.colors.cursor.text, None);
+        assert_eq!(config.colors.selection.text, None);
+        assert_eq!(config.colors.selection.background, Some(Rgb(0xf5, 0xe0, 0xdc)));
+        assert_eq!(config.colors.bright.black, Rgb(0x58, 0x5b, 0x70));
+
+        let flags: Config = toml::from_str(
+            "[colors]\ntransparent_background_colors = true\ndraw_bold_text_with_bright_colors = true\n",
+        )
+        .unwrap();
+        assert!(flags.colors.draw_bold_text_with_bright_colors);
+    }
+
+    #[test]
     fn a_typo_is_an_error_not_a_silent_default() {
         assert!(toml::from_str::<Config>("[font]\nfamliy = \"x\"\n").is_err());
         assert!(toml::from_str::<Config>("[colors.primary]\nbackground = \"red\"\n").is_err());
+        assert!(toml::from_str::<Config>("[colors.primary]\nbackgruond = \"#000000\"\n").is_err());
+        assert!(toml::from_str::<Config>("[colors.cursor]\ncursor = \"red\"\n").is_err());
+        assert!(toml::from_str::<Config>("[colors.serach]\nx = 1\n").is_err());
     }
 }

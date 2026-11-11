@@ -188,7 +188,13 @@ impl Terminal {
                 });
                 self.write(format(color).into_bytes());
             },
-            TermEvent::PtyWrite(text) => self.write(text.into_bytes()),
+            TermEvent::PtyWrite(text) => {
+                // Asked what it is, the engine answers as a VT102 ("?6c"). Programs that
+                // wait for that answer (kitty's icat does, to know its other questions
+                // are through) take only a longer one: a VT220 with color.
+                let text = if text == "\x1b[?6c" { "\x1b[?62;22c".to_string() } else { text };
+                self.write(text.into_bytes())
+            },
             TermEvent::TextAreaSizeRequest(format) => self.write(format(self.size.into()).into_bytes()),
             TermEvent::Bell => cx.emit(TerminalEvent::Bell),
             TermEvent::Exit | TermEvent::ChildExit(_) => {
