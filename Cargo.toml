@@ -1,12 +1,18 @@
 [package]
 name = "lumen"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 description = "A terminal emulator that understands what your tools print"
 repository = "https://github.com/Vaspyyy/lumen"
 
+[workspace]
+members = [".", "crates/lumen-link", "crates/lumen-mobile"]
+default-members = ["."]
+
 [dependencies]
+# What a PC and a phone say to each other: pairing, the terminals a PC keeps.
+lumen-link = { path = "crates/lumen-link" }
 # GPUI Fast (longbridge/gpui-fast): Zed's GPUI, rendering with wgpu on Linux.
 gpui = { package = "gpui-fast", version = "0.1.14" }
 gpui_platform = { package = "gpui-fast-platform", version = "0.1.14", features = ["wayland", "x11", "font-kit"] }
