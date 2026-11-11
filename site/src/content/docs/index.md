@@ -6,7 +6,7 @@ description: A terminal for Linux that knows what your tools print, and lets you
 
 lumen is a terminal emulator for Linux. It is drawn by the graphics card, has tabs and splits built in, and runs on Wayland and X11.
 
-![lumen with two tabs and three panes: a file listing, a git log, and the results of a test run and a code search](/shots/panes.png)
+![lumen with two tabs and three panes: a file listing, a git log, and the results of a format check and a code search](/shots/panes.png)
 
 What sets it apart is one idea: **the screen is not only text**. When a tool prints the name of a file, a picture or a link, most terminals draw the characters and stop there. lumen knows what they are.
 
