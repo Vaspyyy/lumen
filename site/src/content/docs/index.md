@@ -13,6 +13,7 @@ What sets it apart is one idea: **the screen is not only text**. When a tool pri
 - **A file name is the file.** In a listing, a click on a name copies the file to the clipboard, `Ctrl+Click` opens it, and on Wayland you can drag it out of the window into another program. See [Files and links](/docs/files-and-links/).
 - **Pictures sit between the lines.** What a program sends with the kitty graphics protocol is drawn in place and scrolls with the text. See [Pictures](/docs/images/).
 - **A new tab is there at once.** With `prewarm` on, the next shell is started ahead of time. See [Instant tabs](/docs/instant-tabs/).
+- **Your terminals come along.** The Android app opens terminals that run on your PC and keep running when you put the phone away. It logs in with a key that never leaves the phone. See [lumen on your phone](/docs/phone/).
 
 Around that is a terminal you can work in all day: [tabs and splits](/docs/tabs-and-splits/), [search](/docs/search/) through what scrolled past, a [config file](/docs/configuration/) that is taken on when you save it, and a cursor that glows.
 
@@ -23,6 +24,7 @@ Around that is a terminal you can work in all day: [tabs and splits](/docs/tabs-
 | Get lumen onto your machine | [Install](/docs/install/) |
 | Learn the handful of keys that matter | [First steps](/docs/first-steps/) |
 | Change the font, the colors, the window | [Configuration](/docs/configuration/) |
+| Use your PC's terminals from your phone | [lumen on your phone](/docs/phone/) |
 | Know what a program can rely on in lumen | [For programs](/docs/for-programs/) |
 | See what is planned | [Roadmap](/docs/roadmap/) |
 

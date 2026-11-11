@@ -353,6 +353,13 @@ kbd {
     0 30px 80px -30px rgba(0, 0, 0, 0.8);
 }
 
+/* a phone's screen: narrow, with the corners a phone has */
+.prose img[src*='/shots/phone-'] {
+  width: min(300px, 100%);
+  margin-inline: auto;
+  border-radius: 26px;
+}
+
 .prose .table-wrap,
 .prose table {
   width: 100%;

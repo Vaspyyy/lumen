@@ -10,6 +10,10 @@ export const docsNav = [
     pages: ['tabs-and-splits', 'files-and-links', 'images', 'search', 'keys', 'mouse'],
   },
   {
+    title: 'On your phone',
+    pages: ['phone', 'kept-terminals', 'phone-security'],
+  },
+  {
     title: 'Make it yours',
     pages: ['configuration', 'fonts', 'colors', 'instant-tabs'],
   },

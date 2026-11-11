@@ -14,7 +14,7 @@
 
 lumen is a GPU-rendered terminal for Linux with tabs and splits built in. It is made to be the home of [glint](https://github.com/Vaspyyy/glint), crux, recap, seek and pulse: those tools print standard terminal output that works anywhere, and lumen understands more of it than other terminals do.
 
-> **Early days.** lumen is a terminal you can work in: tabs and splits, search, a window frame of its own and a cursor that glows. The first parts that make it different are in: file names you can click and drag, and inline images. Command blocks are on the roadmap below, not in the build yet.
+> **Early days.** lumen is a terminal you can work in: tabs and splits, search, a window frame of its own and a cursor that glows. The first parts that make it different are in: file names you can click and drag, inline images, and an [app for your phone](#on-your-phone) that opens terminals on your PC. Command blocks are on the roadmap below, not in the build yet.
 
 ## Install
 
@@ -82,6 +82,27 @@ A click copies only what the text names: a link that says one thing and leads to
 
 **Keys** are reported in the [kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) to programs that ask for it, so an editor can tell `Tab` from `Ctrl+I` and `Enter` from `Shift+Enter`.
 
+## On your phone
+
+<img src="assets/phone.png" alt="lumen on a phone: two tabs, a file listing and a git log, and a row of keys above the keyboard" width="300">
+
+lumen for Android is a window to your PC. The terminals it opens run on the PC, with your shell, your tools and your files, and they keep running when you put the phone away. What you started at the desk, you pick up on the couch.
+
+Get [lumen-android.apk](https://github.com/Vaspyyy/lumen/releases/latest/download/lumen-android.apk) on the phone (Android 11 or newer), and on the PC run:
+
+```sh
+lumen pair
+```
+
+It shows a code. Scan it with the app, compare the key both sides show, say yes on the PC. From then on the app connects by itself.
+
+- **It logs in over SSH**, to the SSH server your PC already runs. No account, no relay, no port of lumen's own.
+- **The phone's key is made in its secure hardware** and can't be copied out. It signs only after you unlocked the phone with your fingerprint or screen lock.
+- **The terminals are kept by the PC.** `lumen attach --session s24-ultra-1` shows one of the phone's terminals in a window at the desk, and a terminal started with `lumen attach --session work` is in the app's list.
+- **One command takes a phone out again:** `lumen unpair "Galaxy S24 Ultra"`.
+
+[lumen on your phone](https://vaspyyy.github.io/lumen/docs/phone/) has the rest, and [How the phone logs in](https://vaspyyy.github.io/lumen/docs/phone-security/) says exactly what pairing does. `android/README.md` is about building the app.
+
 ## Configuration
 
 lumen reads `~/.config/lumen/lumen.toml` (`lumen --config-path` prints the place). Saving the file is enough: lumen takes the change on while it runs, and says so at the bottom of the window. Everything is optional:
@@ -126,6 +147,7 @@ The `[colors]` table has the same shape as Alacritty's (`primary`, `cursor`, `se
 
 1. **Daily driver** (done): a terminal you can live in. Tabs, splits, selection, scrollback and search, your fonts and colors.
 2. **Files and images** (done): names in a `glint` listing are objects. Click to copy, Ctrl+click to open, drag a file out into another app. Inline images through the kitty graphics protocol.
+   - On the side, **your phone** (done): an Android app that opens terminals on your PC, which keep running there.
 3. **Command blocks and refs** (next): jump between commands, copy one command's output, a pass or fail mark per command, and `path:line` refs from seek, recap and crux that open in your editor.
 
 ## How it works
@@ -150,9 +172,16 @@ src/
   palette.rs    from the colors a program asks for to the theme's
   workspace.rs  tabs and splits
   actions.rs    everything a key can be bound to
+  phone/        the PC's side of the phone app: pairing, and the terminals the PC keeps
+crates/
+  lumen-link/   what the PC and the phone say to each other: the pairing code, the messages
+  lumen-mobile/ the app's core: the SSH connection and the terminal, as a library for Android
+android/        the Android app
 site/           the website: the front page, the docs, the release notes
 packaging/      what a release offers: the install script and the packages
 ```
+
+The phone app has no terminal of its own design either: its core is the same `alacritty_terminal`, fed over SSH ([russh](https://crates.io/crates/russh)) by a terminal the PC keeps running (`lumen keeper`). The screen is drawn by the app, in Kotlin.
 
 ## License
 

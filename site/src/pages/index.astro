@@ -270,6 +270,43 @@ const roadmap = [
     </div>
   </section>
 
+  <!-- ======================= phone ======================= -->
+  <section class="section" id="phone">
+    <div class="wrap pocket">
+      <figure class="phone">
+        <img
+          src={url('/shots/phone-terminal.png')}
+          width="720"
+          height="1560"
+          loading="lazy"
+          alt="lumen on a phone: two tabs, a file listing and a git log, and a row of keys above the keyboard"
+        />
+      </figure>
+      <div class="copy">
+        <p class="eyebrow">On your phone</p>
+        <h2>Leave the desk. <span class="serif lamp-text">Keep</span> the terminal.</h2>
+        <p>
+          lumen for Android opens terminals on your PC, with your shell, your tools and your files. They run on the PC,
+          so they are still there when you unlock the phone again, and when you sit down at the desk.
+        </p>
+        <ul class="points">
+          <li><b>Paired with one scan.</b> <code>lumen pair</code> shows a code, the app scans it, you say yes on the PC.</li>
+          <li>
+            <b>A key that stays in the phone.</b> It is made in the phone's secure hardware and signs only after your
+            fingerprint or screen lock.
+          </li>
+          <li><b>Nothing in between.</b> SSH, from the phone to your PC. No account, no relay.</li>
+        </ul>
+        <a class="more" href={url('/docs/phone/')}>
+          Get the app and pair it
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
+            ><path d="M3 8h10M9 4l4 4-4 4"></path></svg
+          >
+        </a>
+      </div>
+    </div>
+  </section>
+
   <!-- ======================= install ======================= -->
   <section class="section" id="install">
     <div class="wrap install">
@@ -483,6 +520,7 @@ const roadmap = [
     text-align: center;
   }
   .head h2,
+  .pocket h2,
   .install h2 {
     margin-top: 14px;
     font-size: clamp(1.9rem, 4.4vw, 3.1rem);
@@ -490,11 +528,13 @@ const roadmap = [
     line-height: 1.06;
   }
   .head h2 .serif,
+  .pocket h2 .serif,
   .last h2 .serif {
     font-size: 1.1em;
     padding-right: 0.05em;
   }
   .head > p:last-child,
+  .pocket .copy > p:not(.eyebrow),
   .install .copy > p:not(.eyebrow) {
     margin-top: 18px;
     font-size: 1.06rem;
@@ -1036,6 +1076,78 @@ const roadmap = [
     transform: translate(2px, -2px);
   }
 
+  /* ---------- phone ---------- */
+  .pocket {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr);
+    gap: clamp(28px, 6vw, 88px);
+    align-items: center;
+  }
+  .pocket h2 {
+    font-size: clamp(1.8rem, 3.8vw, 2.7rem);
+  }
+  /* the screenshot, in the frame of a phone */
+  .phone {
+    position: relative;
+    justify-self: center;
+    width: min(300px, 76vw);
+    margin: 0;
+    padding: 9px;
+    border-radius: 46px;
+    background: #07060b;
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+      0 0 0 1px rgba(0, 0, 0, 0.6),
+      0 50px 120px -30px rgba(0, 0, 0, 0.9);
+  }
+  .phone::before {
+    content: '';
+    position: absolute;
+    inset: 6% -34% 2%;
+    z-index: -1;
+    background:
+      radial-gradient(50% 50% at 34% 38%, rgba(150, 110, 255, 0.22), transparent 70%),
+      radial-gradient(50% 50% at 70% 66%, rgba(255, 190, 110, 0.16), transparent 70%);
+    filter: blur(30px);
+  }
+  .phone img {
+    width: 100%;
+    height: auto;
+    border-radius: 37px;
+  }
+  .points {
+    display: grid;
+    gap: 12px;
+    margin: 24px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .points li {
+    position: relative;
+    padding-left: 22px;
+    font-size: 0.98rem;
+    color: var(--fg-3);
+  }
+  .points li::before {
+    content: '';
+    position: absolute;
+    left: 2px;
+    top: 0.62em;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 10px rgba(255, 201, 122, 0.7);
+  }
+  .points b {
+    font-weight: 550;
+    color: var(--fg);
+  }
+  .points code {
+    font-size: 0.9em;
+    color: var(--fg-2);
+  }
+
   /* ---------- install ---------- */
   .install {
     display: grid;
@@ -1190,6 +1302,12 @@ const roadmap = [
     }
   }
   @media (max-width: 760px) {
+    .pocket {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .pocket .copy {
+      order: -1;
+    }
     .install {
       grid-template-columns: minmax(0, 1fr);
     }

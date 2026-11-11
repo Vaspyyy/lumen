@@ -1,6 +1,6 @@
 ---
 title: Install
-description: Packages for Debian, Ubuntu, Fedora, openSUSE and Arch, one command for every other distribution, or build it yourself.
+description: Packages for Debian, Ubuntu, Fedora, openSUSE and Arch, one command for every other distribution, the app for Android, or build it yourself.
 ---
 
 lumen runs on Linux, on Wayland and X11. Every release comes as a package for the big distributions and as one command for the others. They are built for 64-bit Intel and AMD machines (`x86_64`); on any other machine, [build lumen from source](#build-it-from-source).
@@ -67,6 +67,30 @@ Older systems, and the ones with another C library than glibc, such as Alpine, c
 The script doesn't touch another program that is called `lumen` too: if one is in `~/.local/bin`, it stops, and `LUMEN_BIN_DIR` names another folder for this one.
 
 If `~/.local/bin` is not on your `PATH`, the script says so. lumen still starts from the application menu.
+
+## The Android app
+
+[lumen on your phone](/docs/phone/) is an app of its own, for Android 11 and newer. It is not in the Play Store: every release has it as a file, to open on the phone.
+
+[**lumen-android.apk**](https://github.com/Vaspyyy/lumen/releases/latest/download/lumen-android.apk)
+
+Android asks once whether your browser may install apps. Allow it, and install. A newer version is installed over the old one the same way, and your paired PCs stay.
+
+The file is signed with lumen's own key, and Android installs an update only if the same key signed it. To check a file before you install it, on a PC with the Android build tools:
+
+```sh
+apksigner verify --print-certs lumen-android.apk
+```
+
+The certificate's SHA-256 has to be:
+
+```
+e45200452aa3f2f6276debd70005230e01b7974e41931f66c232720903ff99ed
+```
+
+The file is also in `SHA256SUMS`, and GitHub attests where it was built, as for the packages: see [Check what you fetched](#check-what-you-fetched).
+
+The app needs lumen 0.3.0 or newer on the PC.
 
 ## Start it
 
