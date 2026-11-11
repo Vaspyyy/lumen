@@ -7,6 +7,8 @@ import { allReleases } from '../lib/releases';
 import { url } from '../lib/url';
 
 const [latest] = await allReleases();
+// the install script, at whatever address the site is published under
+const installScript = new URL(url('/install.sh'), Astro.site).href;
 const pictures = thumbnails('b').slice(0, 3);
 
 const protocols = [
@@ -273,23 +275,22 @@ const roadmap = [
     <div class="wrap install">
       <div class="copy">
         <p class="eyebrow">Install</p>
-        <h2>Three lines, and it is in your launcher.</h2>
+        <h2>One line, and it is in your launcher.</h2>
         <p>
-          lumen is built from source for now. It needs a recent Rust toolchain, and runs on Wayland and X11. The script
-          puts the program into Cargo’s bin folder and adds the launcher entry and the icons.
+          The program goes into your home folder, with the launcher entry and the icons. There are packages for
+          Debian, Ubuntu, Fedora, openSUSE and Arch as well. lumen runs on Wayland and X11, on any system as new as
+          Ubuntu 22.04.
         </p>
         <a class="more" href={url('/docs/install/')}>
-          What it needs, and how to try it without installing
+          The package for your distribution, and how to build it yourself
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
             ><path d="M3 8h10M9 4l4 4-4 4"></path></svg
           >
         </a>
       </div>
       <div class="code prose">
-        <pre><code><span class="c"># get it, build it, install it</span>
-<span class="f">git</span> clone {site.repo}
-<span class="f">cd</span> lumen
-<span class="f">scripts/install.sh</span>
+        <pre><code><span class="c"># no root needed</span>
+<span class="f">curl</span> -fsSL {installScript} | <span class="f">sh</span>
 
 <span class="c"># then</span>
 <span class="f">lumen</span></code></pre>
@@ -1066,7 +1067,7 @@ const roadmap = [
   .code pre {
     margin: 0;
     padding: 22px 24px;
-    font-size: 14.5px;
+    font-size: 14px;
     line-height: 1.75;
     border-radius: 16px;
     color: var(--fg);

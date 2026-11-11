@@ -18,7 +18,15 @@ lumen is a GPU-rendered terminal for Linux with tabs and splits built in. It is 
 
 ## Install
 
-lumen needs a recent Rust toolchain, and runs on Wayland and X11.
+On Linux, without root (x86_64, on a system as new as Ubuntu 22.04 or Debian 12):
+
+```sh
+curl -fsSL https://vaspyyy.github.io/lumen/install.sh | sh
+```
+
+Every [release](https://github.com/Vaspyyy/lumen/releases/latest) also has a package for Debian and Ubuntu (`.deb`), for Fedora and openSUSE (`.rpm`) and for Arch (`.pkg.tar.zst`). [Install](https://vaspyyy.github.io/lumen/docs/install/) has the commands for each, and says how to check what you fetched. lumen runs on Wayland and X11.
+
+To build it yourself, with a recent Rust toolchain:
 
 ```sh
 git clone https://github.com/Vaspyyy/lumen
@@ -134,6 +142,7 @@ src/
   pty.rs        the thread that reads what the program prints and writes what is typed
   graphics.rs   inline images: the kitty graphics protocol
   element.rs    draws the grid
+  fonts.rs      which fonts the system has, so that none is asked for that is not there
   view.rs       a terminal on screen: keyboard, mouse, selection, clipboard, links, search
   links.rs      what a link leads to, and copying files
   keys.rs       what a key press sends to the program
@@ -142,6 +151,7 @@ src/
   workspace.rs  tabs and splits
   actions.rs    everything a key can be bound to
 site/           the website: the front page, the docs, the release notes
+packaging/      what a release offers: the install script and the packages
 ```
 
 ## License

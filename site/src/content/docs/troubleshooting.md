@@ -12,7 +12,9 @@ lumen
 ```
 
 - **A message about Vulkan or a graphics adapter.** lumen is drawn by the graphics card and needs a working driver. `vulkaninfo --summary` (from the package `vulkan-tools`) shows whether Vulkan works on your system.
-- **`lumen: command not found`.** The program is in `~/.cargo/bin`. That folder has to be in your `PATH`; rustup normally adds it. Log out and in again after installing Rust.
+- **`lumen: command not found`.** The folder the program is in has to be on your `PATH`. Installed with the install script, that is `~/.local/bin`; built from source, it is `~/.cargo/bin`, which rustup normally adds (log out and in again after installing Rust). A package puts it into `/usr/bin`, which always is.
+- **A message about a library that can't be found, or about a graphics adapter.** lumen was installed without a package, and the system lacks one of the libraries it needs. [Install](/docs/install/#any-other-distribution) lists them.
+- **A message that there is no font.** lumen needs one installed font to draw text with, and found none. Install any, DejaVu for example.
 - **A message about the config file.** lumen starts anyway, with its defaults, and the message says what is wrong in the file.
 
 ## The font is not the one I set

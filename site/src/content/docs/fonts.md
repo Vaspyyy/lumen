@@ -24,7 +24,7 @@ Upper and lower case and spaces don't matter: `MapleMono` and `maple mono` both 
 
 ## When the font is not installed
 
-lumen then uses your desktop's fixed-width font, and prints a line that says so to the terminal it was started from.
+lumen then uses your desktop's fixed-width font, and prints a line that says so to the terminal it was started from. On a system without any fixed-width font it takes a font that is there, and the letters may not line up.
 
 It does not take the nearest font the system offers. That would often be a font whose letters have different widths, and a terminal's grid does not survive that.
 

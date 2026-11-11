@@ -3,6 +3,7 @@
 mod actions;
 mod config;
 mod element;
+mod fonts;
 mod graphics;
 mod keys;
 mod links;
@@ -175,6 +176,7 @@ fn main() {
 
     gpui_platform::application().with_assets(Assets).run(move |cx: &mut App| {
         cx.set_global(config);
+        fonts::init(cx);
         actions::bind(cx);
         cx.on_action(|_: &actions::Quit, cx| cx.quit());
         cx.on_action(|_: &actions::NewWindow, cx| open_window(Spawn::default(), cx));

@@ -17,7 +17,7 @@ If a program draws wrongly in lumen, say which program, and how to get it into t
 
 ## Build it
 
-You need what [Install](/docs/install/) lists. Then:
+You need the Rust toolchain and the libraries that [Install](/docs/install/#build-it-from-source) lists for a build from source. Then:
 
 ```sh
 git clone https://github.com/Vaspyyy/lumen
@@ -63,3 +63,9 @@ npm run dev
 ```
 
 Release notes are Markdown files too, one per version, in `site/src/content/releases`.
+
+## How a release is made
+
+A release is a tag. When a tag such as `v0.2.2` is pushed, a workflow builds lumen on an old system (so that it runs on every newer one), wraps it up as an archive, a Debian package, an RPM and an Arch package, and tries each of them on a clean system: it installs it, opens a lumen window on a display nobody sees, and removes it again. Only when all of that went well are the files published. The usual checks (format, lint, tests) are not part of it: they run when a change is pushed, so tag a commit that has passed them.
+
+The version in `Cargo.toml` has to be the one the tag names, and it needs its release note. The scripts are in `packaging`, and `packaging/README.md` says how to run them on your own machine.

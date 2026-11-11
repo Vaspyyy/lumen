@@ -17,8 +17,8 @@ use gpui::{
     App, BorderStyle, Bounds, BoxShadow, Corners, CursorStyle, DispatchPhase, Element, ElementId, ElementInputHandler,
     Entity, FocusHandle, Font, FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
     InspectorElementId, IntoElement, LayoutId, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    RenderImage, ScrollEvent, ShapedLine, SharedString, Size, StrikethroughStyle, Style, TextAlign, TextRun,
-    UnderlineStyle, Window, fill, font, point, px, quad, relative, size, transparent_black,
+    RenderImage, ScrollEvent, ShapedLine, Size, StrikethroughStyle, Style, TextAlign, TextRun, UnderlineStyle, Window,
+    fill, font, point, px, quad, relative, size, transparent_black,
 };
 
 use crate::config::Config;
@@ -64,7 +64,7 @@ impl Metrics {
     pub fn new(config: &Config, zoom: f32, window: &Window) -> Metrics {
         let text_system = window.text_system();
         let font_size = px(config.font.size * 4. / 3. * zoom);
-        let font = font(SharedString::from(config.font.family.clone()));
+        let font = font(crate::fonts::grid(&config.font.family, text_system));
         let font_id = text_system.resolve_font(&font);
         let width = text_system.advance(font_id, font_size, 'm').map(|s| s.width).unwrap_or(font_size * 0.6);
         let ascent = f32::from(text_system.ascent(font_id, font_size));

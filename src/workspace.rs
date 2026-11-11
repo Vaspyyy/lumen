@@ -170,7 +170,7 @@ fn pill(text: SharedString, config: &Config) -> gpui::Div {
             spread_radius: px(0.),
             inset: false,
         }])
-        .font_family(".SystemUIFont")
+        .font_family(crate::fonts::ui())
         .text_size(px(12.5))
         .text_color(gpui::white().opacity(0.92))
         .child(text)
@@ -984,7 +984,7 @@ impl Render for Workspace {
             .size_full()
             .overflow_hidden()
             .bg(background)
-            .font_family(".SystemUIFont")
+            .font_family(crate::fonts::ui())
             .rounded_tl(corners.top_left)
             .rounded_tr(corners.top_right)
             .rounded_bl(corners.bottom_left)

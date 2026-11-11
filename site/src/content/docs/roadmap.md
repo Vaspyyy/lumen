@@ -34,7 +34,8 @@ The second half is about places in code. Tools such as crux, seek and recap prin
 Things other terminals have and lumen doesn't, in no order. None of them has a date.
 
 - **Keys can't be changed.** The keys lumen takes are fixed.
-- **No packages.** lumen is built from source. There is nothing in a distribution's repositories yet.
+- **Not in any distribution's repositories.** lumen has [packages of its own](/docs/install/), which a system's updates don't know about: a new version is installed by hand.
+- **Packages for one kind of machine.** They are built for `x86_64`. On ARM, lumen is built from source.
 - **Linux only.**
 - **Web addresses in plain text are not clickable.** Only what a program marks as a link is.
 - **Dragging a file out of the window** works on Wayland, not on X11.

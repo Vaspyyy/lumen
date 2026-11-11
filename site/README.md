@@ -27,7 +27,7 @@ public/               pictures and icons, copied as they are
 ## Writing
 
 - **A new docs page** is a Markdown file in `src/content/docs` with a `title` and a `description`, and its name in `src/data/nav.ts`.
-- **A new release** is a Markdown file in `src/content/releases`, named after the version. It shows up in the list, in the feed, and on the front page.
+- **A new release** is a Markdown file in `src/content/releases`, named after the version. It shows up in the list, in the feed, and on the front page. The release workflow takes the text of the GitHub release from it, and refuses a version that has none.
 - **Links inside the site** are written from its root: `[Keys](/docs/keys/)`. The build puts the folder the site is served from in front of them.
 - **A key** in backticks, such as `` `Ctrl+Shift+T` ``, is drawn as a key.
 

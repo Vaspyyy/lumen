@@ -92,7 +92,7 @@ impl Render for FileGhost {
             .border_color(config.accent().opacity(0.6))
             .text_size(px(12.5))
             .text_color(gpui::white().opacity(0.92))
-            .font_family(".SystemUIFont")
+            .font_family(crate::fonts::ui())
             .child(self.0.clone())
     }
 }
@@ -799,7 +799,7 @@ impl TerminalView {
                 spread_radius: px(0.),
                 inset: false,
             }])
-            .font_family(".SystemUIFont")
+            .font_family(crate::fonts::ui())
             .text_size(px(12.5))
             .child(svg().path("icons/search.svg").flex_none().size(px(12.)).text_color(dim))
             .child(

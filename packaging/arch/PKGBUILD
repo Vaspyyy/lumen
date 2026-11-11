@@ -1,0 +1,34 @@
+# Maintainer: Vaspyyy <Vaspyyy at users dot noreply dot github dot com>
+#
+# lumen as its release ships it: this package unpacks the prebuilt archive.
+# packaging/arch/build.sh fills in the version and the checksum.
+
+pkgname=lumen-terminal
+pkgver=0.2.2
+pkgrel=1
+pkgdesc='A terminal emulator that understands what your tools print'
+arch=('x86_64')
+url='https://vaspyyy.github.io/lumen/'
+license=('GPL-3.0-or-later')
+# wayland, libglvnd and the Vulkan loader are loaded when lumen starts;
+# fontconfig's fc-match tells it which fonts the system has
+depends=('glibc' 'gcc-libs' 'libxcb' 'libxkbcommon' 'libxkbcommon-x11'
+         'wayland' 'libglvnd' 'vulkan-icd-loader' 'fontconfig')
+optdepends=('wl-clipboard: copy a file with a click, on Wayland'
+            'xclip: copy a file with a click, on X11')
+# another program is called lumen too, and installs /usr/bin/lumen
+conflicts=('lumen' 'lumen-bin' 'lumen-git')
+options=('!strip' '!debug')
+source=("lumen-$pkgver-x86_64-linux.tar.gz::https://github.com/Vaspyyy/lumen/releases/download/v$pkgver/lumen-x86_64-linux.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  cd "lumen-$pkgver-x86_64-linux"
+  install -Dm755 lumen "$pkgdir/usr/bin/lumen"
+  install -Dm644 lumen.desktop "$pkgdir/usr/share/applications/lumen.desktop"
+  local size
+  for size in 32 48 64 128 256 512; do
+    install -Dm644 "icons/lumen-$size.png" "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/lumen.png"
+  done
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

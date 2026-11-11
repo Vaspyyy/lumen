@@ -1,0 +1,135 @@
+name: Release
+
+# What a release offers: the archive with its install script, the Debian
+# package, the RPM and the Arch package. Each is tried on a clean system
+# before anything is published.
+#
+# A tag publishes:    git tag v0.2.2 && git push origin v0.2.2
+# Started by hand, it builds and tries everything and publishes nothing.
+on:
+  push:
+    # three numbers and nothing after them: a package can't carry a version like 1.0.0-rc1
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and package
+    runs-on: ubuntu-latest
+    # An old system on purpose: what is built here runs on every newer one.
+    container: ubuntu:22.04
+    steps:
+      - name: Tools, and the libraries GPUI links against
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config dpkg-dev rpm \
+            libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libfontconfig-dev libvulkan-dev libasound2-dev
+      - uses: actions/checkout@v7
+      - name: Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: The tag names the version in Cargo.toml
+        if: github.ref_type == 'tag'
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "the tag is $GITHUB_REF_NAME, Cargo.toml says $version"
+            exit 1
+          fi
+      - run: cargo build --release --locked
+      - run: packaging/package.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packages
+          path: dist/
+          if-no-files-found: error
+
+  arch:
+    name: Arch package
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: packages
+          path: dist
+      - run: docker run --rm -v "$PWD:/lumen" archlinux:base-devel sh /lumen/packaging/arch/build.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: arch-package
+          path: dist/lumen-terminal-x86_64.pkg.tar.zst
+          if-no-files-found: error
+
+  verify:
+    name: Try the ${{ matrix.kind }} on ${{ matrix.image }}
+    needs: [build, arch]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: 'debian:12', kind: deb }
+          - { image: 'debian:13', kind: deb }
+          - { image: 'ubuntu:22.04', kind: deb }
+          - { image: 'ubuntu:24.04', kind: deb }
+          - { image: 'fedora:latest', kind: rpm }
+          - { image: 'opensuse/tumbleweed', kind: zypper }
+          - { image: 'archlinux:latest', kind: arch }
+          - { image: 'debian:12', kind: script }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Install it, open a window, remove it
+        env:
+          IMAGE: ${{ matrix.image }}
+          KIND: ${{ matrix.kind }}
+        run: docker run --rm -v "$PWD:/lumen:ro" "$IMAGE" sh /lumen/packaging/verify.sh "$KIND"
+
+  publish:
+    name: Publish
+    # only the push of a tag publishes, not a run started by hand on one
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [build, arch, verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum -- * > ../SHA256SUMS
+          mv ../SHA256SUMS .
+          cat SHA256SUMS
+      # GitHub signs a statement that these files were built here, from this commit
+      - uses: actions/attest@v4
+        with:
+          subject-checksums: dist/SHA256SUMS
+      - name: The release, with its note from the website
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          packaging/release-notes.sh "$version" > notes.md
+          title=$(sed -n 's/^title: *//p' "site/src/content/releases/$version.md" | head -n 1 | sed 's/^"\(.*\)"$/\1/')
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "$version: $title" --notes-file notes.md

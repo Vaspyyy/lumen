@@ -28,7 +28,7 @@ Around that is a terminal you can work in all day: [tabs and splits](/docs/tabs-
 
 ## Early days
 
-lumen is new, and it says so. It is a terminal you can use every day, and the first parts that make it different are in. Some things other terminals have are not there yet: key bindings can't be changed, and lumen is not packaged for any distribution, so it is built from source. The [roadmap](/docs/roadmap/) says what comes next, and the [release notes](/releases/) say what each version brought.
+lumen is new, and it says so. It is a terminal you can use every day, and the first parts that make it different are in. Some things other terminals have are not there yet: key bindings can't be changed, and no distribution has lumen in its repositories, so you [install it](/docs/install/) from a package of its own or with one command. The [roadmap](/docs/roadmap/) says what comes next, and the [release notes](/releases/) say what each version brought.
 
 ## The tools it is made for
 
