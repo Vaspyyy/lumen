@@ -1,0 +1,761 @@
+//! The window: its tabs, and the panes each tab is split into.
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use gpui::prelude::*;
+use gpui::{
+    AnyElement, App, Axis, Bounds, Context, CursorStyle, Decorations, Entity, Focusable, Hsla, MouseButton,
+    MouseMoveEvent, MouseUpEvent, Pixels, ResizeEdge, SharedString, Subscription, Window, canvas, div, px, size, svg,
+};
+
+use crate::actions::{
+    ClosePane, CloseTab, FocusDown, FocusLeft, FocusRight, FocusUp, GoToTab, MoveTabLeft, MoveTabRight, NewTab,
+    NextTab, PreviousTab, SplitDown, SplitRight, ToggleZoomPane,
+};
+use crate::config::Config;
+use crate::element::Metrics;
+use crate::terminal::{Spawn, Terminal};
+use crate::view::{TerminalView, ViewEvent};
+
+type Pane = Entity<TerminalView>;
+
+/// A tab's layout: a pane, or panes side by side (or stacked), each of
+/// which can be split again.
+enum Node {
+    Leaf(Pane),
+    Split {
+        id: usize,
+        axis: Axis,
+        children: Vec<Node>,
+        /// Each child's share of the split, adding up to 1.
+        shares: Vec<f32>,
+    },
+}
+
+impl Node {
+    fn panes(&self, out: &mut Vec<Pane>) {
+        match self {
+            Node::Leaf(pane) => out.push(pane.clone()),
+            Node::Split { children, .. } => children.iter().for_each(|child| child.panes(out)),
+        }
+    }
+
+    fn contains(&self, pane: &Pane) -> bool {
+        match self {
+            Node::Leaf(p) => p == pane,
+            Node::Split { children, .. } => children.iter().any(|child| child.contains(pane)),
+        }
+    }
+
+    /// Puts `new` next to `target` along `axis`: into the split `target`
+    /// is already part of if that runs the same way, else into a new one
+    /// in `target`'s place. `target` gives up half its room.
+    fn split(&mut self, target: &Pane, new: Pane, axis: Axis, next_id: &mut usize) -> bool {
+        match self {
+            Node::Leaf(pane) if pane == target => {
+                let old = std::mem::replace(self, Node::Leaf(new.clone()));
+                *next_id += 1;
+                *self =
+                    Node::Split { id: *next_id, axis, children: vec![old, Node::Leaf(new)], shares: vec![0.5, 0.5] };
+                true
+            },
+            Node::Leaf(_) => false,
+            Node::Split { axis: own_axis, children, shares, .. } => {
+                let direct = children.iter().position(|child| matches!(child, Node::Leaf(p) if p == target));
+                if let (Some(i), true) = (direct, *own_axis == axis) {
+                    let half = shares[i] / 2.;
+                    shares[i] = half;
+                    shares.insert(i + 1, half);
+                    children.insert(i + 1, Node::Leaf(new));
+                    return true;
+                }
+                children.iter_mut().any(|child| child.split(target, new.clone(), axis, next_id))
+            },
+        }
+    }
+
+    /// Takes `target` out. Its room goes to its neighbours, and a split
+    /// left with one child becomes that child. Returns false when `target`
+    /// was the whole node, which the caller has to drop.
+    fn remove(&mut self, target: &Pane) -> bool {
+        let Node::Split { children, shares, .. } = self else {
+            return false;
+        };
+        if let Some(i) = children.iter().position(|child| matches!(child, Node::Leaf(p) if p == target)) {
+            children.remove(i);
+            let freed = shares.remove(i);
+            let rest: f32 = shares.iter().sum();
+            for share in shares.iter_mut() {
+                *share += freed * if rest > 0. { *share / rest } else { 0. };
+            }
+        } else if !children.iter_mut().any(|child| child.remove(target)) {
+            return false;
+        }
+        if children.len() == 1 {
+            *self = children.remove(0);
+        }
+        true
+    }
+
+    /// Every pane with the part of the tab it covers, as fractions of the
+    /// tab's width and height.
+    fn rects(&self, rect: (f32, f32, f32, f32), out: &mut Vec<(Pane, (f32, f32, f32, f32))>) {
+        match self {
+            Node::Leaf(pane) => out.push((pane.clone(), rect)),
+            Node::Split { axis, children, shares, .. } => {
+                let (x, y, w, h) = rect;
+                let mut at = 0.;
+                for (child, share) in children.iter().zip(shares) {
+                    let part = match axis {
+                        Axis::Horizontal => (x + w * at, y, w * share, h),
+                        Axis::Vertical => (x, y + h * at, w, h * share),
+                    };
+                    child.rects(part, out);
+                    at += share;
+                }
+            },
+        }
+    }
+
+    fn shares_mut(&mut self, split: usize) -> Option<&mut Vec<f32>> {
+        match self {
+            Node::Leaf(_) => None,
+            Node::Split { id, shares, children, .. } => {
+                if *id == split {
+                    return Some(shares);
+                }
+                children.iter_mut().find_map(|child| child.shares_mut(split))
+            },
+        }
+    }
+}
+
+struct Tab {
+    id: usize,
+    root: Node,
+    /// The pane that has, or last had, the keyboard.
+    active: Pane,
+    /// The active pane fills the tab, the others wait behind it.
+    zoomed: bool,
+}
+
+/// A divider being dragged.
+struct Drag {
+    split: usize,
+    /// The divider is between child `index` and the next.
+    index: usize,
+    axis: Axis,
+}
+
+pub struct Workspace {
+    tabs: Vec<Tab>,
+    active: usize,
+    next_id: usize,
+    drag: Option<Drag>,
+    /// Where each split is on screen, as of the last frame: what a dragged
+    /// divider's position is measured against.
+    split_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
+    subscriptions: HashMap<gpui::EntityId, Subscription>,
+}
+
+const TAB_BAR: f32 = 40.;
+
+impl Workspace {
+    pub fn new(spawn: Spawn, window: &mut Window, cx: &mut Context<Self>) -> std::io::Result<Self> {
+        let mut this = Workspace {
+            tabs: Vec::new(),
+            active: 0,
+            next_id: 0,
+            drag: None,
+            split_bounds: Rc::default(),
+            subscriptions: HashMap::new(),
+        };
+        let pane = this.open(spawn, (1., 1.), window, cx)?;
+        this.push_tab(pane, window, cx);
+        Ok(this)
+    }
+
+    /// Starts a terminal and wires it to this window.
+    /// `share` is the part of the window's width and height the pane is
+    /// about to get.
+    fn open(
+        &mut self,
+        spawn: Spawn,
+        share: (f32, f32),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> std::io::Result<Pane> {
+        let config = cx.global::<Config>();
+        let viewport = window.viewport_size();
+        let area = size(viewport.width * share.0, (viewport.height - px(TAB_BAR)) * share.1);
+        let grid = Metrics::new(config, 1., window).grid(area, config);
+        let started = Terminal::start(spawn, config, grid)?;
+        let pane = cx.new(|cx| TerminalView::new(started, window, cx));
+        let subscription = cx.subscribe_in(&pane, window, |this, pane, event: &ViewEvent, window, cx| match event {
+            ViewEvent::Closed => this.close_pane(&pane.clone(), window, cx),
+            ViewEvent::Title => cx.notify(),
+            ViewEvent::Focused => {
+                if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.root.contains(pane)) {
+                    if &tab.active != pane {
+                        tab.active = pane.clone();
+                        cx.notify();
+                    }
+                }
+            },
+        });
+        self.subscriptions.insert(pane.entity_id(), subscription);
+        Ok(pane)
+    }
+
+    fn push_tab(&mut self, pane: Pane, window: &mut Window, cx: &mut Context<Self>) {
+        self.next_id += 1;
+        let at = if self.tabs.is_empty() { 0 } else { self.active + 1 };
+        self.tabs.insert(at, Tab { id: self.next_id, root: Node::Leaf(pane.clone()), active: pane, zoomed: false });
+        self.activate(at, window, cx);
+    }
+
+    fn activate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if index >= self.tabs.len() {
+            return;
+        }
+        self.active = index;
+        let focus = self.tabs[index].active.focus_handle(cx);
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    /// Where a terminal opened from here starts: the folder of the active pane.
+    fn spawn_here(&self, cx: &App) -> Spawn {
+        let cwd = self.tabs.get(self.active).and_then(|tab| tab.active.read(cx).terminal.read(cx).cwd());
+        Spawn { cwd, command: None }
+    }
+
+    fn report(&self, what: &str, error: std::io::Error) {
+        eprintln!("lumen: {what}: {error}");
+    }
+
+    fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
+        match self.open(self.spawn_here(cx), (1., 1.), window, cx) {
+            Ok(pane) => self.push_tab(pane, window, cx),
+            Err(e) => self.report("can't open a tab", e),
+        }
+    }
+
+    fn split(&mut self, axis: Axis, window: &mut Window, cx: &mut Context<Self>) {
+        // the new pane gets half of the active one
+        let mut rects = Vec::new();
+        if let Some(tab) = self.tabs.get(self.active) {
+            tab.root.rects((0., 0., 1., 1.), &mut rects);
+        }
+        let (w, h) = self
+            .tabs
+            .get(self.active)
+            .and_then(|tab| rects.iter().find(|(pane, _)| pane == &tab.active))
+            .map_or((1., 1.), |(_, (_, _, w, h))| (*w, *h));
+        let share = match axis {
+            Axis::Horizontal => (w / 2., h),
+            Axis::Vertical => (w, h / 2.),
+        };
+        let pane = match self.open(self.spawn_here(cx), share, window, cx) {
+            Ok(pane) => pane,
+            Err(e) => return self.report("can't split", e),
+        };
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let target = tab.active.clone();
+        tab.root.split(&target, pane.clone(), axis, &mut self.next_id);
+        tab.active = pane.clone();
+        tab.zoomed = false;
+        window.focus(&pane.focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    fn close_pane(&mut self, pane: &Pane, window: &mut Window, cx: &mut Context<Self>) {
+        self.subscriptions.remove(&pane.entity_id());
+        let Some(index) = self.tabs.iter().position(|tab| tab.root.contains(pane)) else {
+            return;
+        };
+        let tab = &mut self.tabs[index];
+        if !tab.root.remove(pane) {
+            return self.close_tab_at(index, window, cx);
+        }
+        tab.zoomed = false;
+        if &tab.active == pane {
+            let mut panes = Vec::new();
+            tab.root.panes(&mut panes);
+            tab.active = panes.remove(0);
+        }
+        if index == self.active {
+            let focus = self.tabs[index].active.focus_handle(cx);
+            window.focus(&focus, cx);
+        }
+        cx.notify();
+    }
+
+    fn close_tab_at(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let tab = self.tabs.remove(index);
+        let mut panes = Vec::new();
+        tab.root.panes(&mut panes);
+        for pane in panes {
+            self.subscriptions.remove(&pane.entity_id());
+        }
+        if self.tabs.is_empty() {
+            window.remove_window();
+            return;
+        }
+        let next = if index < self.active || self.active >= self.tabs.len() {
+            self.active.saturating_sub(1)
+        } else {
+            self.active
+        };
+        self.activate(next, window, cx);
+    }
+
+    fn step_tab(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let count = self.tabs.len() as isize;
+        let next = (self.active as isize + by).rem_euclid(count) as usize;
+        self.activate(next, window, cx);
+    }
+
+    fn move_tab(&mut self, by: isize, cx: &mut Context<Self>) {
+        let to = self.active as isize + by;
+        if to < 0 || to >= self.tabs.len() as isize {
+            return;
+        }
+        self.tabs.swap(self.active, to as usize);
+        self.active = to as usize;
+        cx.notify();
+    }
+
+    /// Moves the keyboard to the nearest pane in a direction, (dx, dy)
+    /// being one of the four unit steps.
+    fn focus_toward(&mut self, dx: f32, dy: f32, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let mut rects = Vec::new();
+        tab.root.rects((0., 0., 1., 1.), &mut rects);
+        let Some(&(_, (x, y, w, h))) = rects.iter().find(|(pane, _)| pane == &tab.active) else {
+            return;
+        };
+        let (cx0, cy0) = (x + w / 2., y + h / 2.);
+        let best = rects
+            .iter()
+            .filter(|(pane, _)| pane != &tab.active)
+            .filter_map(|(pane, (px0, py0, pw, ph))| {
+                // how far the pane starts beyond this one's edge, in the direction asked for
+                let ahead = if dx > 0. {
+                    px0 - (x + w)
+                } else if dx < 0. {
+                    x - (px0 + pw)
+                } else if dy > 0. {
+                    py0 - (y + h)
+                } else {
+                    y - (py0 + ph)
+                };
+                if ahead < -0.001 {
+                    return None;
+                }
+                // and how far off to the side its middle is
+                let aside = if dx != 0. { (py0 + ph / 2. - cy0).abs() } else { (px0 + pw / 2. - cx0).abs() };
+                // a pane that overlaps this one sideways is a neighbour: prefer it
+                let overlaps = if dx != 0. { *py0 < y + h && py0 + ph > y } else { *px0 < x + w && px0 + pw > x };
+                Some((!overlaps, ahead + aside, pane.clone()))
+            })
+            .min_by(|a, b| (a.0, a.1).partial_cmp(&(b.0, b.1)).unwrap_or(std::cmp::Ordering::Equal));
+        if let Some((_, _, pane)) = best {
+            tab.active = pane.clone();
+            tab.zoomed = false;
+            window.focus(&pane.focus_handle(cx), cx);
+            cx.notify();
+        }
+    }
+
+    fn drag_divider(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(drag) = &self.drag else { return };
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.drag = None;
+            return;
+        }
+        let Some(bounds) = self.split_bounds.borrow().get(&drag.split).copied() else {
+            return;
+        };
+        let (at, extent) = match drag.axis {
+            Axis::Horizontal => (event.position.x - bounds.origin.x, bounds.size.width),
+            Axis::Vertical => (event.position.y - bounds.origin.y, bounds.size.height),
+        };
+        if extent <= px(0.) {
+            return;
+        }
+        let at = at / extent;
+        let (index, split) = (drag.index, drag.split);
+        let Some(shares) = self.tabs.get_mut(self.active).and_then(|tab| tab.root.shares_mut(split)) else {
+            return;
+        };
+        // the divider moves between its two neighbours; neither gets smaller than a sliver
+        let before: f32 = shares[..index].iter().sum();
+        let pair = shares[index] + shares[index + 1];
+        let min = 0.05f32.min(pair / 2.);
+        let first = (at - before).clamp(min, pair - min);
+        shares[index] = first;
+        shares[index + 1] = pair - first;
+        cx.notify();
+    }
+
+    fn render_node(&self, node: &Node, tab: &Tab, cx: &mut Context<Self>) -> AnyElement {
+        match node {
+            Node::Leaf(pane) => {
+                let dim = pane != &tab.active;
+                div()
+                    .relative()
+                    .size_full()
+                    .overflow_hidden()
+                    .child(pane.clone())
+                    .when(dim, |this| {
+                        // the panes that don't have the keyboard step back
+                        this.child(div().absolute().inset_0().bg(gpui::black().opacity(0.22)))
+                    })
+                    .into_any_element()
+            },
+            Node::Split { id, axis, children, shares } => {
+                let (id, axis) = (*id, *axis);
+                let bounds = self.split_bounds.clone();
+                let mut row = div().relative().flex().size_full().child(
+                    canvas(move |b, _, _| _ = bounds.borrow_mut().insert(id, b), |_, _, _, _| {})
+                        .absolute()
+                        .size_full(),
+                );
+                row = match axis {
+                    Axis::Horizontal => row.flex_row(),
+                    Axis::Vertical => row.flex_col(),
+                };
+                for (i, (child, share)) in children.iter().zip(shares).enumerate() {
+                    if i > 0 {
+                        row = row.child(self.render_divider(id, i - 1, axis, cx));
+                    }
+                    row = row.child(
+                        div()
+                            .flex_basis(px(0.))
+                            .flex_grow(*share)
+                            .flex_shrink(1.)
+                            .min_w_0()
+                            .min_h_0()
+                            .overflow_hidden()
+                            .child(self.render_node(child, tab, cx)),
+                    );
+                }
+                row.into_any_element()
+            },
+        }
+    }
+
+    /// A hairline between two panes, with a wider strip around it to grab.
+    fn render_divider(&self, split: usize, index: usize, axis: Axis, cx: &mut Context<Self>) -> AnyElement {
+        let line = gpui::white().opacity(0.08);
+        let grab = div().id(SharedString::from(format!("divider-{split}-{index}"))).absolute().occlude().on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| {
+                this.drag = Some(Drag { split, index, axis });
+                cx.stop_propagation();
+            }),
+        );
+        match axis {
+            Axis::Horizontal => div()
+                .relative()
+                .flex_none()
+                .w(px(1.))
+                .h_full()
+                .bg(line)
+                .child(grab.top_0().bottom_0().left(px(-3.)).w(px(7.)).cursor(CursorStyle::ResizeColumn)),
+            Axis::Vertical => div()
+                .relative()
+                .flex_none()
+                .h(px(1.))
+                .w_full()
+                .bg(line)
+                .child(grab.left_0().right_0().top(px(-3.)).h(px(7.)).cursor(CursorStyle::ResizeRow)),
+        }
+        .into_any_element()
+    }
+
+    fn render_tab(&self, index: usize, tab: &Tab, accent: Hsla, cx: &mut Context<Self>) -> AnyElement {
+        let active = index == self.active;
+        let title = tab.active.read(cx).terminal.read(cx).title();
+        let id = tab.id;
+        let text = gpui::white().opacity(if active { 0.92 } else { 0.5 });
+        div()
+            .id(SharedString::from(format!("tab-{id}")))
+            .group("tab")
+            .relative()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .h(px(28.))
+            .min_w(px(96.))
+            .max_w(px(220.))
+            .flex_basis(px(180.))
+            .flex_shrink(1.)
+            .pl(px(12.))
+            .pr(px(6.))
+            .rounded(px(8.))
+            .text_size(px(12.5))
+            .text_color(text)
+            .when(active, |this| this.bg(gpui::white().opacity(0.09)))
+            .when(!active, |this| this.hover(|style| style.bg(gpui::white().opacity(0.045))))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    if let Some(at) = this.tabs.iter().position(|tab| tab.id == id) {
+                        this.activate(at, window, cx);
+                    }
+                    cx.stop_propagation();
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(move |this, _, window, cx| {
+                    if let Some(at) = this.tabs.iter().position(|tab| tab.id == id) {
+                        this.close_tab_at(at, window, cx);
+                    }
+                    cx.stop_propagation();
+                }),
+            )
+            .child(div().flex_1().min_w_0().truncate().child(SharedString::from(title)))
+            .child(
+                div()
+                    .id(SharedString::from(format!("tab-close-{id}")))
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .size(px(18.))
+                    .rounded(px(5.))
+                    .when(!active, |this| this.invisible().group_hover("tab", |style| style.visible()))
+                    .hover(|style| style.bg(gpui::white().opacity(0.12)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            if let Some(at) = this.tabs.iter().position(|tab| tab.id == id) {
+                                this.close_tab_at(at, window, cx);
+                            }
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .child(svg().path("icons/close.svg").size(px(10.)).text_color(text)),
+            )
+            .when(active, |this| {
+                // the lit tab: a line of the accent's light under it
+                this.child(
+                    div().absolute().left(px(14.)).right(px(14.)).bottom(px(-6.)).h(px(2.)).rounded(px(1.)).bg(accent),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn render_tab_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let accent = cx.global::<Config>().accent();
+        let client = matches!(window.window_decorations(), Decorations::Client { .. });
+        let controls = window.window_controls();
+        let icon = gpui::white().opacity(0.6);
+        let button = |id: &'static str, path: &'static str| {
+            div()
+                .id(id)
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .size(px(28.))
+                .rounded(px(8.))
+                .hover(|style| style.bg(gpui::white().opacity(0.08)))
+                .child(svg().path(path).size(px(12.)).text_color(icon))
+        };
+        let mut bar = div().id("tab-bar").flex().flex_none().items_center().gap(px(4.)).h(px(TAB_BAR)).px(px(8.)).when(
+            client,
+            |this| {
+                this.on_mouse_down(MouseButton::Left, |event, window, _| {
+                    if event.click_count == 2 {
+                        window.zoom_window();
+                    } else {
+                        window.start_window_move();
+                    }
+                })
+            },
+        );
+        for (index, tab) in self.tabs.iter().enumerate() {
+            bar = bar.child(self.render_tab(index, tab, accent, cx));
+        }
+        bar = bar.child(button("new-tab", "icons/plus.svg").on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, window, cx| {
+                this.new_tab(&NewTab, window, cx);
+                cx.stop_propagation();
+            }),
+        ));
+        bar = bar.child(div().flex_1());
+        if client {
+            if controls.minimize {
+                bar = bar.child(button("minimize", "icons/minimize.svg").on_mouse_down(
+                    MouseButton::Left,
+                    |_, window, cx| {
+                        window.minimize_window();
+                        cx.stop_propagation();
+                    },
+                ));
+            }
+            if controls.maximize {
+                let path = if window.is_maximized() { "icons/restore.svg" } else { "icons/maximize.svg" };
+                bar = bar.child(button("maximize", path).on_mouse_down(MouseButton::Left, |_, window, cx| {
+                    window.zoom_window();
+                    cx.stop_propagation();
+                }));
+            }
+            bar = bar.child(
+                button("close", "icons/close.svg").hover(|style| style.bg(gpui::rgba(0xe5484dcc))).on_mouse_down(
+                    MouseButton::Left,
+                    |_, window, cx| {
+                        window.remove_window();
+                        cx.stop_propagation();
+                    },
+                ),
+            );
+        }
+        bar.into_any_element()
+    }
+}
+
+/// The strips at a window's edges that resize it, where the window draws
+/// its own frame.
+fn resize_handles(window: &Window) -> Option<AnyElement> {
+    if !matches!(window.window_decorations(), Decorations::Client { .. }) || window.is_maximized() {
+        return None;
+    }
+    let handle = |id: &'static str, edge: ResizeEdge, cursor: CursorStyle| {
+        div().id(id).absolute().occlude().cursor(cursor).on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            window.start_window_resize(edge);
+            cx.stop_propagation();
+        })
+    };
+    let (thin, corner) = (px(5.), px(12.));
+    Some(
+        div()
+            .absolute()
+            .size_full()
+            .child(
+                handle("resize-top", ResizeEdge::Top, CursorStyle::ResizeUp).top_0().left(corner).right(corner).h(thin),
+            )
+            .child(
+                handle("resize-bottom", ResizeEdge::Bottom, CursorStyle::ResizeDown)
+                    .bottom_0()
+                    .left(corner)
+                    .right(corner)
+                    .h(thin),
+            )
+            .child(
+                handle("resize-left", ResizeEdge::Left, CursorStyle::ResizeLeft)
+                    .left_0()
+                    .top(corner)
+                    .bottom(corner)
+                    .w(thin),
+            )
+            .child(
+                handle("resize-right", ResizeEdge::Right, CursorStyle::ResizeRight)
+                    .right_0()
+                    .top(corner)
+                    .bottom(corner)
+                    .w(thin),
+            )
+            .child(
+                handle("resize-top-left", ResizeEdge::TopLeft, CursorStyle::ResizeUpLeftDownRight)
+                    .top_0()
+                    .left_0()
+                    .size(corner),
+            )
+            .child(
+                handle("resize-top-right", ResizeEdge::TopRight, CursorStyle::ResizeUpRightDownLeft)
+                    .top_0()
+                    .right_0()
+                    .size(corner),
+            )
+            .child(
+                handle("resize-bottom-left", ResizeEdge::BottomLeft, CursorStyle::ResizeUpRightDownLeft)
+                    .bottom_0()
+                    .left_0()
+                    .size(corner),
+            )
+            .child(
+                handle("resize-bottom-right", ResizeEdge::BottomRight, CursorStyle::ResizeUpLeftDownRight)
+                    .bottom_0()
+                    .right_0()
+                    .size(corner),
+            )
+            .into_any_element(),
+    )
+}
+
+impl Render for Workspace {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let config = cx.global::<Config>();
+        let background = Hsla { a: config.window.opacity, ..config.colors.primary.background.hsla() };
+        let rounded = matches!(window.window_decorations(), Decorations::Client { .. }) && !window.is_maximized();
+
+        let content = match self.tabs.get(self.active) {
+            Some(tab) if tab.zoomed => tab.active.clone().into_any_element(),
+            Some(tab) => self.render_node(&tab.root, tab, cx),
+            None => div().into_any_element(),
+        };
+        let bar = self.render_tab_bar(window, cx);
+
+        div()
+            .id("workspace")
+            .key_context("Workspace")
+            .relative()
+            .flex()
+            .flex_col()
+            .size_full()
+            .overflow_hidden()
+            .bg(background)
+            .font_family(".SystemUIFont")
+            .when(rounded, |this| this.rounded(px(12.)).border_1().border_color(gpui::white().opacity(0.09)))
+            .on_action(cx.listener(Self::new_tab))
+            .on_action(cx.listener(|this, _: &CloseTab, window, cx| this.close_tab_at(this.active, window, cx)))
+            .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
+                if let Some(pane) = this.tabs.get(this.active).map(|tab| tab.active.clone()) {
+                    this.close_pane(&pane, window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &NextTab, window, cx| this.step_tab(1, window, cx)))
+            .on_action(cx.listener(|this, _: &PreviousTab, window, cx| this.step_tab(-1, window, cx)))
+            .on_action(cx.listener(|this, _: &MoveTabLeft, _, cx| this.move_tab(-1, cx)))
+            .on_action(cx.listener(|this, _: &MoveTabRight, _, cx| this.move_tab(1, cx)))
+            .on_action(cx.listener(|this, action: &GoToTab, window, cx| {
+                // 9 is the last tab, however many there are
+                let index = if action.0 >= 9 { this.tabs.len() - 1 } else { action.0 - 1 };
+                this.activate(index, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SplitRight, window, cx| this.split(Axis::Horizontal, window, cx)))
+            .on_action(cx.listener(|this, _: &SplitDown, window, cx| this.split(Axis::Vertical, window, cx)))
+            .on_action(cx.listener(|this, _: &FocusLeft, window, cx| this.focus_toward(-1., 0., window, cx)))
+            .on_action(cx.listener(|this, _: &FocusRight, window, cx| this.focus_toward(1., 0., window, cx)))
+            .on_action(cx.listener(|this, _: &FocusUp, window, cx| this.focus_toward(0., -1., window, cx)))
+            .on_action(cx.listener(|this, _: &FocusDown, window, cx| this.focus_toward(0., 1., window, cx)))
+            .on_action(cx.listener(|this, _: &ToggleZoomPane, _, cx| {
+                if let Some(tab) = this.tabs.get_mut(this.active) {
+                    tab.zoomed = !tab.zoomed && matches!(tab.root, Node::Split { .. });
+                    cx.notify();
+                }
+            }))
+            .on_mouse_move(cx.listener(Self::drag_divider))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, _| {
+                    this.drag = None;
+                }),
+            )
+            .child(bar)
+            .child(div().flex_1().min_h_0().child(content))
+            .children(resize_handles(window))
+    }
+}

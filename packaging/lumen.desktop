@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=lumen
+GenericName=Terminal
+Comment=A terminal emulator that understands what your tools print
+Exec=lumen
+Icon=lumen
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=shell;prompt;command;commandline;cmd;
+StartupNotify=true
+StartupWMClass=lumen
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=lumen
