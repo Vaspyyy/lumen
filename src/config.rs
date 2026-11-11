@@ -173,7 +173,8 @@ impl Default for Colors {
     fn default() -> Self {
         Colors {
             primary: Primary::default(),
-            cursor: CursorColors::default(),
+            // the cursor is the lamp
+            cursor: CursorColors { cursor: Some(Rgb(0xff, 0xd9, 0xa0)), text: Some(Primary::default().background) },
             selection: SelectionColors::default(),
             normal: Ansi::default(),
             bright: Ansi {

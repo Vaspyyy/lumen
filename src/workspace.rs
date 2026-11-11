@@ -6,8 +6,9 @@ use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Axis, Bounds, Context, CursorStyle, Decorations, Entity, Focusable, Hsla, MouseButton,
-    MouseMoveEvent, MouseUpEvent, Pixels, ResizeEdge, SharedString, Subscription, Window, canvas, div, px, size, svg,
+    AnyElement, App, Axis, Bounds, BoxShadow, Context, Corners, CursorStyle, Decorations, Entity, Focusable, Hsla,
+    MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, ResizeEdge, SharedString, Subscription, Tiling, Window, canvas,
+    div, point, px, size, svg,
 };
 
 use crate::actions::{
@@ -197,11 +198,11 @@ impl Workspace {
             ViewEvent::Closed => this.close_pane(&pane.clone(), window, cx),
             ViewEvent::Title => cx.notify(),
             ViewEvent::Focused => {
-                if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.root.contains(pane)) {
-                    if &tab.active != pane {
-                        tab.active = pane.clone();
-                        cx.notify();
-                    }
+                if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.root.contains(pane))
+                    && &tab.active != pane
+                {
+                    tab.active = pane.clone();
+                    cx.notify();
                 }
             },
         });
@@ -557,10 +558,11 @@ impl Workspace {
 
     fn render_tab_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let accent = cx.global::<Config>().accent();
-        let client = matches!(window.window_decorations(), Decorations::Client { .. });
+        let client = Frame::of(window).client;
         let controls = window.window_controls();
         let icon = gpui::white().opacity(0.6);
-        let button = |id: &'static str, path: &'static str| {
+        let soft = gpui::white().opacity(0.08);
+        let button = |id: &'static str, path: &'static str, lit: Hsla| {
             div()
                 .id(id)
                 .flex()
@@ -569,7 +571,7 @@ impl Workspace {
                 .justify_center()
                 .size(px(28.))
                 .rounded(px(8.))
-                .hover(|style| style.bg(gpui::white().opacity(0.08)))
+                .hover(move |style| style.bg(lit))
                 .child(svg().path(path).size(px(12.)).text_color(icon))
         };
         let mut bar = div().id("tab-bar").flex().flex_none().items_center().gap(px(4.)).h(px(TAB_BAR)).px(px(8.)).when(
@@ -587,7 +589,7 @@ impl Workspace {
         for (index, tab) in self.tabs.iter().enumerate() {
             bar = bar.child(self.render_tab(index, tab, accent, cx));
         }
-        bar = bar.child(button("new-tab", "icons/plus.svg").on_mouse_down(
+        bar = bar.child(button("new-tab", "icons/plus.svg", soft).on_mouse_down(
             MouseButton::Left,
             cx.listener(|this, _, window, cx| {
                 this.new_tab(&NewTab, window, cx);
@@ -597,7 +599,7 @@ impl Workspace {
         bar = bar.child(div().flex_1());
         if client {
             if controls.minimize {
-                bar = bar.child(button("minimize", "icons/minimize.svg").on_mouse_down(
+                bar = bar.child(button("minimize", "icons/minimize.svg", soft).on_mouse_down(
                     MouseButton::Left,
                     |_, window, cx| {
                         window.minimize_window();
@@ -607,29 +609,60 @@ impl Workspace {
             }
             if controls.maximize {
                 let path = if window.is_maximized() { "icons/restore.svg" } else { "icons/maximize.svg" };
-                bar = bar.child(button("maximize", path).on_mouse_down(MouseButton::Left, |_, window, cx| {
+                bar = bar.child(button("maximize", path, soft).on_mouse_down(MouseButton::Left, |_, window, cx| {
                     window.zoom_window();
                     cx.stop_propagation();
                 }));
             }
-            bar = bar.child(
-                button("close", "icons/close.svg").hover(|style| style.bg(gpui::rgba(0xe5484dcc))).on_mouse_down(
-                    MouseButton::Left,
-                    |_, window, cx| {
-                        window.remove_window();
-                        cx.stop_propagation();
-                    },
-                ),
-            );
+            bar = bar.child(button("close", "icons/close.svg", gpui::rgba(0xe5484dcc).into()).on_mouse_down(
+                MouseButton::Left,
+                |_, window, cx| {
+                    window.remove_window();
+                    cx.stop_propagation();
+                },
+            ));
         }
         bar.into_any_element()
     }
 }
 
-/// The strips at a window's edges that resize it, where the window draws
-/// its own frame.
-fn resize_handles(window: &Window) -> Option<AnyElement> {
-    if !matches!(window.window_decorations(), Decorations::Client { .. }) || window.is_maximized() {
+/// How the window is framed. Where lumen draws its own frame (Wayland, a
+/// composited X11) the window has rounded corners and casts a shadow, which
+/// takes a margin around it that the desktop is told about.
+#[derive(Clone, Copy)]
+struct Frame {
+    /// lumen draws the title bar's buttons and the window's edges.
+    client: bool,
+    /// The edges that are against a screen edge or another tiled window:
+    /// no margin, shadow or rounding there.
+    tiling: Tiling,
+}
+
+/// The margin the shadow is drawn in, which is also where the window is
+/// grabbed to resize it.
+const SHADOW: f32 = 12.;
+const RADIUS: f32 = 12.;
+
+impl Frame {
+    fn of(window: &Window) -> Frame {
+        match window.window_decorations() {
+            Decorations::Client { tiling } => {
+                let tiling = if window.is_maximized() || window.is_fullscreen() { Tiling::tiled() } else { tiling };
+                Frame { client: true, tiling }
+            },
+            Decorations::Server if crate::preview() => Frame { client: true, tiling: Tiling::default() },
+            Decorations::Server => Frame { client: false, tiling: Tiling::tiled() },
+        }
+    }
+
+    fn floating(&self) -> bool {
+        self.client && !self.tiling.is_tiled()
+    }
+}
+
+/// The strips around a framed window that resize it.
+fn resize_handles(frame: Frame) -> Option<AnyElement> {
+    if !frame.client {
         return None;
     }
     let handle = |id: &'static str, edge: ResizeEdge, cursor: CursorStyle| {
@@ -638,68 +671,93 @@ fn resize_handles(window: &Window) -> Option<AnyElement> {
             cx.stop_propagation();
         })
     };
-    let (thin, corner) = (px(5.), px(12.));
-    Some(
-        div()
-            .absolute()
-            .size_full()
-            .child(
-                handle("resize-top", ResizeEdge::Top, CursorStyle::ResizeUp).top_0().left(corner).right(corner).h(thin),
-            )
-            .child(
-                handle("resize-bottom", ResizeEdge::Bottom, CursorStyle::ResizeDown)
-                    .bottom_0()
-                    .left(corner)
-                    .right(corner)
-                    .h(thin),
-            )
-            .child(
-                handle("resize-left", ResizeEdge::Left, CursorStyle::ResizeLeft)
-                    .left_0()
-                    .top(corner)
-                    .bottom(corner)
-                    .w(thin),
-            )
-            .child(
-                handle("resize-right", ResizeEdge::Right, CursorStyle::ResizeRight)
-                    .right_0()
-                    .top(corner)
-                    .bottom(corner)
-                    .w(thin),
-            )
-            .child(
-                handle("resize-top-left", ResizeEdge::TopLeft, CursorStyle::ResizeUpLeftDownRight)
-                    .top_0()
-                    .left_0()
-                    .size(corner),
-            )
-            .child(
-                handle("resize-top-right", ResizeEdge::TopRight, CursorStyle::ResizeUpRightDownLeft)
-                    .top_0()
-                    .right_0()
-                    .size(corner),
-            )
-            .child(
-                handle("resize-bottom-left", ResizeEdge::BottomLeft, CursorStyle::ResizeUpRightDownLeft)
-                    .bottom_0()
-                    .left_0()
-                    .size(corner),
-            )
-            .child(
-                handle("resize-bottom-right", ResizeEdge::BottomRight, CursorStyle::ResizeUpLeftDownRight)
-                    .bottom_0()
-                    .right_0()
-                    .size(corner),
-            )
-            .into_any_element(),
-    )
+    let t = frame.tiling;
+    let (thin, corner) = (px(SHADOW), px(SHADOW * 2.));
+    let mut handles = div().absolute().size_full();
+    if !t.top {
+        handles = handles.child(
+            handle("resize-top", ResizeEdge::Top, CursorStyle::ResizeUp).top_0().left(corner).right(corner).h(thin),
+        );
+    }
+    if !t.bottom {
+        handles = handles.child(
+            handle("resize-bottom", ResizeEdge::Bottom, CursorStyle::ResizeDown)
+                .bottom_0()
+                .left(corner)
+                .right(corner)
+                .h(thin),
+        );
+    }
+    if !t.left {
+        handles = handles.child(
+            handle("resize-left", ResizeEdge::Left, CursorStyle::ResizeLeft)
+                .left_0()
+                .top(corner)
+                .bottom(corner)
+                .w(thin),
+        );
+    }
+    if !t.right {
+        handles = handles.child(
+            handle("resize-right", ResizeEdge::Right, CursorStyle::ResizeRight)
+                .right_0()
+                .top(corner)
+                .bottom(corner)
+                .w(thin),
+        );
+    }
+    if !t.top && !t.left {
+        handles = handles.child(
+            handle("resize-top-left", ResizeEdge::TopLeft, CursorStyle::ResizeUpLeftDownRight)
+                .top_0()
+                .left_0()
+                .size(corner),
+        );
+    }
+    if !t.top && !t.right {
+        handles = handles.child(
+            handle("resize-top-right", ResizeEdge::TopRight, CursorStyle::ResizeUpRightDownLeft)
+                .top_0()
+                .right_0()
+                .size(corner),
+        );
+    }
+    if !t.bottom && !t.left {
+        handles = handles.child(
+            handle("resize-bottom-left", ResizeEdge::BottomLeft, CursorStyle::ResizeUpRightDownLeft)
+                .bottom_0()
+                .left_0()
+                .size(corner),
+        );
+    }
+    if !t.bottom && !t.right {
+        handles = handles.child(
+            handle("resize-bottom-right", ResizeEdge::BottomRight, CursorStyle::ResizeUpLeftDownRight)
+                .bottom_0()
+                .right_0()
+                .size(corner),
+        );
+    }
+    Some(handles.into_any_element())
 }
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let config = cx.global::<Config>();
         let background = Hsla { a: config.window.opacity, ..config.colors.primary.background.hsla() };
-        let rounded = matches!(window.window_decorations(), Decorations::Client { .. }) && !window.is_maximized();
+        let frame = Frame::of(window);
+        let t = frame.tiling;
+        // the corners that are free are round; the desktop is told, so that what it
+        // draws behind the window (the blur) has the window's shape
+        let radius = |free: bool| if frame.client && free { px(RADIUS) } else { px(0.) };
+        let corners = Corners {
+            top_left: radius(!t.top && !t.left),
+            top_right: radius(!t.top && !t.right),
+            bottom_left: radius(!t.bottom && !t.left),
+            bottom_right: radius(!t.bottom && !t.right),
+        };
+        window.set_client_inset(px(if frame.floating() { SHADOW } else { 0. }));
+        window.set_client_corner_radii(corners);
 
         let content = match self.tabs.get(self.active) {
             Some(tab) if tab.zoomed => tab.active.clone().into_any_element(),
@@ -708,7 +766,7 @@ impl Render for Workspace {
         };
         let bar = self.render_tab_bar(window, cx);
 
-        div()
+        let surface = div()
             .id("workspace")
             .key_context("Workspace")
             .relative()
@@ -718,7 +776,29 @@ impl Render for Workspace {
             .overflow_hidden()
             .bg(background)
             .font_family(".SystemUIFont")
-            .when(rounded, |this| this.rounded(px(12.)).border_1().border_color(gpui::white().opacity(0.09)))
+            .rounded_tl(corners.top_left)
+            .rounded_tr(corners.top_right)
+            .rounded_bl(corners.bottom_left)
+            .rounded_br(corners.bottom_right)
+            .when(frame.client, |this| this.border_1().border_color(gpui::white().opacity(0.1)))
+            .when(frame.floating(), |this| {
+                this.shadow(vec![
+                    BoxShadow {
+                        color: gpui::black().opacity(0.35),
+                        offset: point(px(0.), px(3.)),
+                        blur_radius: px(SHADOW),
+                        spread_radius: px(0.),
+                        inset: false,
+                    },
+                    BoxShadow {
+                        color: gpui::black().opacity(0.25),
+                        offset: point(px(0.), px(1.)),
+                        blur_radius: px(3.),
+                        spread_radius: px(0.),
+                        inset: false,
+                    },
+                ])
+            })
             .on_action(cx.listener(Self::new_tab))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| this.close_tab_at(this.active, window, cx)))
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
@@ -755,7 +835,19 @@ impl Render for Workspace {
                 }),
             )
             .child(bar)
-            .child(div().flex_1().min_h_0().child(content))
-            .children(resize_handles(window))
+            .child(div().flex_1().min_h_0().child(content));
+
+        // the margin around a floating window holds its shadow and the strips that resize it
+        let margin = |free: bool| px(if frame.client && free { SHADOW } else { 0. });
+        div()
+            .id("window")
+            .relative()
+            .size_full()
+            .pt(margin(!t.top))
+            .pb(margin(!t.bottom))
+            .pl(margin(!t.left))
+            .pr(margin(!t.right))
+            .child(surface)
+            .children(resize_handles(frame))
     }
 }

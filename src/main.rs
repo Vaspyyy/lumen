@@ -22,6 +22,13 @@ use crate::config::Config;
 use crate::terminal::Spawn;
 use crate::workspace::Workspace;
 
+/// A debug build with LUMEN_PREVIEW set draws itself as the framed, active
+/// window it is on a desktop, where there is none to make it one: a bare X
+/// display, for screenshots.
+pub fn preview() -> bool {
+    cfg!(debug_assertions) && std::env::var_os("LUMEN_PREVIEW").is_some()
+}
+
 /// The icons, compiled into the program.
 struct Assets;
 

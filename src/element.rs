@@ -6,16 +6,17 @@
 
 use std::cell::Cell as StdCell;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
-use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 use gpui::{
-    App, Bounds, DispatchPhase, Element, ElementId, ElementInputHandler, Entity, FocusHandle, Font, FontStyle,
-    FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollEvent, ShapedLine, SharedString, Size,
-    StrikethroughStyle, Style, TextAlign, TextRun, UnderlineStyle, Window, fill, font, point, px, relative, size,
+    App, BorderStyle, Bounds, BoxShadow, Corners, DispatchPhase, Element, ElementId, ElementInputHandler, Entity,
+    FocusHandle, Font, FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId,
+    IntoElement, LayoutId, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollEvent, ShapedLine,
+    SharedString, Size, StrikethroughStyle, Style, TextAlign, TextRun, UnderlineStyle, Window, fill, font, point, px,
+    quad, relative, size, transparent_black,
 };
 
 use crate::config::Config;
@@ -76,6 +77,46 @@ impl Metrics {
     }
 }
 
+/// The cursor on its way from one cell to another.
+#[derive(Clone, Copy, Default)]
+pub struct Motion {
+    from: (f32, f32),
+    to: (f32, f32),
+    start: Option<Instant>,
+    /// Whether the cursor was on screen the frame before: it glides from
+    /// where it was, and appears where it is.
+    shown: bool,
+}
+
+const GLIDE: Duration = Duration::from_millis(70);
+const FADE: Duration = Duration::from_millis(140);
+
+impl Motion {
+    fn at(&self, now: Instant) -> ((f32, f32), bool) {
+        let Some(start) = self.start else { return (self.to, false) };
+        let t = now.duration_since(start).as_secs_f32() / GLIDE.as_secs_f32();
+        if t >= 1. {
+            return (self.to, false);
+        }
+        // fast out of the old cell, soft into the new one
+        let eased = 1. - (1. - t).powi(3);
+        let lerp = |a: f32, b: f32| a + (b - a) * eased;
+        ((lerp(self.from.0, self.to.0), lerp(self.from.1, self.to.1)), true)
+    }
+
+    /// Where the cursor is drawn now that it belongs at `target`, and
+    /// whether it is still moving.
+    fn toward(&mut self, target: (f32, f32), now: Instant) -> ((f32, f32), bool) {
+        if !self.shown {
+            *self = Motion { from: target, to: target, start: None, shown: true };
+        } else if self.to != target {
+            let (here, _) = self.at(now);
+            *self = Motion { from: here, to: target, start: Some(now), shown: true };
+        }
+        self.at(now)
+    }
+}
+
 pub struct TerminalElement {
     pub terminal: Entity<Terminal>,
     pub view: Entity<TerminalView>,
@@ -83,8 +124,10 @@ pub struct TerminalElement {
     pub geometry: Rc<StdCell<Option<Geometry>>>,
     /// Whether the window and this terminal have the keyboard.
     pub focused: bool,
-    /// The blink's current half.
+    /// The blink's current half, and when it began.
     pub cursor_on: bool,
+    pub blink_at: Instant,
+    pub motion: Rc<StdCell<Motion>>,
     pub zoom: f32,
 }
 
@@ -120,6 +163,8 @@ struct CursorLayout {
     bounds: Bounds<Pixels>,
     shape: CursorShape,
     color: Hsla,
+    /// The cursor gives off light.
+    glow: bool,
     /// The character under a block cursor, in the cursor's text color.
     text: Option<ShapedLine>,
 }
@@ -298,10 +343,12 @@ impl Element for TerminalElement {
                 };
 
                 // A run goes on while the next cell is the next column in the same style.
-                // Blank cells join it as spaces, and are cut off again if nothing follows.
-                let continues = run
-                    .as_ref()
-                    .is_some_and(|r| r.row == row && r.col + r.cells == col && (blank || r.style == style) && !wide);
+                // Blank cells join it as spaces, and are cut off again if nothing follows;
+                // not where the run is underlined or struck through, or the line would go on.
+                let continues = run.as_ref().is_some_and(|r| {
+                    let plain = r.style.underline == Line::None && !r.style.strike;
+                    r.row == row && r.col + r.cells == col && ((blank && plain) || r.style == style) && !wide
+                });
                 if !continues {
                     if let Some(done) = run.take() {
                         finish(&mut runs, done);
@@ -338,14 +385,12 @@ impl Element for TerminalElement {
             let visible = shape != CursorShape::Hidden
                 && row >= 0
                 && (row as usize) < rows
-                && (self.cursor_on || !self.focused)
                 && content.mode.contains(TermMode::SHOW_CURSOR);
             cursor = visible.then(|| {
                 let under = &term.grid()[point];
                 let wide = under.flags.contains(Flags::WIDE_CHAR);
                 (row as usize, point.column.0, if wide { 2 } else { 1 }, shape, under.c, under.flags)
             });
-            let _ = term.columns();
         }
 
         let mut rects = Vec::with_capacity(backgrounds.len());
@@ -362,12 +407,39 @@ impl Element for TerminalElement {
             lines.push((point(origin.x + cell_width * run.col as f32, origin.y + cell_height * run.row as f32), line));
         }
 
+        let now = Instant::now();
+        let mut motion = self.motion.get();
+        if cursor.is_none() {
+            motion.shown = false;
+        }
         let cursor = cursor.map(|(row, col, cells, shape, c, flags)| {
-            let color = config.cursor_color();
-            let bounds = cell_bounds(col, row, cells);
+            // the blink fades between its halves; a pane without the keyboard doesn't blink
+            let since = now.duration_since(self.blink_at).as_secs_f32() / FADE.as_secs_f32();
+            // it dims instead of going out, so it can always be found
+            const DIM: f32 = 0.22;
+            let lit = if !self.focused {
+                1.
+            } else if self.cursor_on {
+                DIM + (1. - DIM) * since.min(1.)
+            } else {
+                1. - (1. - DIM) * since.min(1.)
+            };
+            if self.focused && since < 1. {
+                window.request_animation_frame();
+            }
+            let color = config.cursor_color().opacity(lit);
+            let mut bounds = cell_bounds(col, row, cells);
+            if config.cursor.smooth {
+                let target = (f32::from(bounds.origin.x - origin.x), f32::from(bounds.origin.y - origin.y));
+                let ((x, y), moving) = motion.toward(target, now);
+                bounds.origin = point(origin.x + px(x), origin.y + px(y));
+                if moving {
+                    window.request_animation_frame();
+                }
+            }
             let text = (shape == CursorShape::Block && c != ' ' && c != '\0').then(|| {
                 let style = RunStyle {
-                    fg: colors.cursor.text.unwrap_or(colors.primary.background).hsla(),
+                    fg: colors.cursor.text.unwrap_or(colors.primary.background).hsla().opacity(lit),
                     bold: flags.contains(Flags::BOLD),
                     italic: flags.contains(Flags::ITALIC),
                     underline: Line::None,
@@ -378,8 +450,10 @@ impl Element for TerminalElement {
                 let run = self.text_run(&base, &style, text.len(), thickness);
                 text_system.shape_line(text.into(), font_size, &[run], Some(cell_width * cells as f32))
             });
-            CursorLayout { bounds, shape, color, text }
+            let glow = config.cursor.glow && self.focused && shape != CursorShape::HollowBlock;
+            CursorLayout { bounds, shape, color, glow, text }
         });
+        self.motion.set(motion);
 
         Layout { hitbox, cell, rects, lines, cursor }
     }
@@ -404,21 +478,39 @@ impl Element for TerminalElement {
         }
         if let Some(cursor) = &layout.cursor {
             let b = cursor.bounds;
-            let stroke = px((f32::from(layout.cell.height) / 9.).round().max(1.));
+            let height = f32::from(layout.cell.height);
+            let stroke = px((height / 9.).round().max(1.));
+            // the part of the cell the cursor's shape fills
+            let lit = match cursor.shape {
+                CursorShape::Beam => Bounds::new(b.origin, size(stroke, b.size.height)),
+                CursorShape::Underline => {
+                    Bounds::new(point(b.origin.x, b.origin.y + b.size.height - stroke), size(b.size.width, stroke))
+                },
+                _ => b,
+            };
+            if cursor.glow {
+                // lumen's cursor is a lamp: a bright rim close to it, a soft light further out
+                let light = |strength: f32, reach: f32| BoxShadow {
+                    color: cursor.color.opacity(strength),
+                    offset: point(px(0.), px(0.)),
+                    blur_radius: px(reach),
+                    spread_radius: px(0.),
+                    inset: false,
+                };
+                let lights = [light(0.5, height * 0.3), light(0.3, height * 1.2)];
+                window.paint_drop_shadows(lit, Corners::all(px(2.)), &lights);
+            }
+            let solid = |bounds: Bounds<Pixels>, radius: f32| {
+                quad(bounds, px(radius), cursor.color, px(0.), transparent_black(), BorderStyle::default())
+            };
             match cursor.shape {
                 CursorShape::Block => {
-                    window.paint_quad(fill(b, cursor.color));
+                    window.paint_quad(solid(lit, 2.));
                     if let Some(text) = &cursor.text {
                         let _ = text.paint(b.origin, layout.cell.height, TextAlign::Left, None, window, cx);
                     }
                 },
-                CursorShape::Beam => {
-                    window.paint_quad(fill(Bounds::new(b.origin, size(stroke, b.size.height)), cursor.color));
-                },
-                CursorShape::Underline => {
-                    let origin = point(b.origin.x, b.origin.y + b.size.height - stroke);
-                    window.paint_quad(fill(Bounds::new(origin, size(b.size.width, stroke)), cursor.color));
-                },
+                CursorShape::Beam | CursorShape::Underline => window.paint_quad(solid(lit, 1.)),
                 CursorShape::HollowBlock => {
                     let line = px(1.);
                     let (o, s) = (b.origin, b.size);
@@ -471,11 +563,13 @@ impl Element for TerminalElement {
 /// Adds a cell's background, growing the rectangle before it when that one
 /// ends where this cell starts and has the same color.
 fn push_background(list: &mut Vec<(usize, usize, usize, Hsla)>, row: usize, col: usize, cells: usize, color: Hsla) {
-    if let Some(last) = list.last_mut() {
-        if last.0 == row && last.1 + last.2 == col && last.3 == color {
-            last.2 += cells;
-            return;
-        }
+    if let Some(last) = list.last_mut()
+        && last.0 == row
+        && last.1 + last.2 == col
+        && last.3 == color
+    {
+        last.2 += cells;
+        return;
     }
     list.push((row, col, cells, color));
 }

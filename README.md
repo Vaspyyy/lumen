@@ -6,11 +6,13 @@
 
 **A terminal emulator that understands what your tools print.**
 
+<img src="assets/screenshot.png" alt="lumen with two tabs and three panes showing glint, git log, crux and seek" width="860">
+
 </div>
 
 lumen is a GPU-rendered terminal for Linux with tabs and splits built in. It is made to be the home of [glint](https://github.com/Vaspyyy/glint), crux, recap, seek and pulse: those tools print standard terminal output that works anywhere, and lumen understands more of it than other terminals do.
 
-> **Early days.** lumen runs a shell, draws it correctly and has tabs and splits. The parts that make it different (files you can click and drag, inline images, command blocks) are on the roadmap below, not in the build yet.
+> **Early days.** lumen runs a shell, draws it correctly and has tabs and splits, a window frame of its own and a cursor that glows. The parts that make it different (files you can click and drag, inline images, command blocks) are on the roadmap below, not in the build yet.
 
 ## Install
 
@@ -74,10 +76,12 @@ lines = 30
 
 [cursor]
 style = "block"             # block, beam, underline
-blink = true
+blink = true                # dims and comes back, never goes out
+glow = true                 # the cursor gives off light
+smooth = true               # the cursor glides between cells
 
 [colors]
-accent = "#ffc97a"          # lumen's own light: the active tab
+accent = "#ffc97a"          # lumen's own light: the line under the active tab
 
 [colors.primary]
 background = "#12111a"

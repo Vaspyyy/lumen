@@ -17,7 +17,7 @@ use gpui::{
 
 use crate::actions::{Copy, Paste, ScrollBottom, ScrollPageDown, ScrollPageUp, ScrollTop, ZoomIn, ZoomOut, ZoomReset};
 use crate::config::Config;
-use crate::element::{Geometry, TerminalElement};
+use crate::element::{Geometry, Motion, TerminalElement};
 use crate::terminal::{Started, Terminal, TerminalEvent};
 use crate::{keys, mouse};
 
@@ -43,6 +43,9 @@ pub struct TerminalView {
     scroll_rest: f32,
     last_input: Instant,
     blink_on: bool,
+    /// When the blink last changed halves: the cursor fades from there.
+    blink_at: Instant,
+    motion: Rc<Cell<Motion>>,
     /// Text an input method is still composing.
     composing: Option<String>,
     _blink: Task<()>,
@@ -90,6 +93,7 @@ impl TerminalView {
                     let on = !this.blink_on || this.last_input.elapsed() < Duration::from_millis(500);
                     if on != this.blink_on {
                         this.blink_on = on;
+                        this.blink_at = Instant::now();
                         cx.notify();
                     }
                 });
@@ -108,6 +112,8 @@ impl TerminalView {
             scroll_rest: 0.,
             last_input: Instant::now(),
             blink_on: true,
+            blink_at: Instant::now() - Duration::from_secs(1),
+            motion: Rc::default(),
             composing: None,
             _blink: blink,
             _subscriptions: subscriptions,
@@ -116,7 +122,10 @@ impl TerminalView {
 
     fn touch(&mut self) {
         self.last_input = Instant::now();
-        self.blink_on = true;
+        if !self.blink_on {
+            self.blink_on = true;
+            self.blink_at = Instant::now();
+        }
     }
 
     fn mode(&self, cx: &App) -> TermMode {
@@ -265,11 +274,13 @@ impl TerminalView {
             return;
         };
         let mode = self.mode(cx);
-        if hovered && mode.intersects(TermMode::MOUSE_MODE) && !event.modifiers.shift {
-            if let Some(button) = mouse::button_code(event.button) {
-                let (col, row, _) = geometry.cell_at(event.position);
-                self.terminal.read(cx).write(mouse::report(button, false, col, row, event.modifiers, mode));
-            }
+        if hovered
+            && mode.intersects(TermMode::MOUSE_MODE)
+            && !event.modifiers.shift
+            && let Some(button) = mouse::button_code(event.button)
+        {
+            let (col, row, _) = geometry.cell_at(event.position);
+            self.terminal.read(cx).write(mouse::report(button, false, col, row, event.modifiers, mode));
         }
     }
 
@@ -279,7 +290,8 @@ impl TerminalView {
         };
         let lines = match event.delta {
             ScrollDelta::Pixels(delta) => delta.y / geometry.cell.height,
-            ScrollDelta::Lines(delta) => delta.y * 3.,
+            // already counted in lines per wheel step by the platform
+            ScrollDelta::Lines(delta) => delta.y,
         };
         self.scroll_rest += lines;
         let whole = self.scroll_rest.trunc();
@@ -314,7 +326,7 @@ impl TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let focused = self.focus.is_focused(window) && window.is_window_active();
+        let focused = self.focus.is_focused(window) && (window.is_window_active() || crate::preview());
         div()
             .size_full()
             .track_focus(&self.focus)
@@ -336,6 +348,8 @@ impl Render for TerminalView {
                 geometry: self.geometry.clone(),
                 focused,
                 cursor_on: self.blink_on,
+                blink_at: self.blink_at,
+                motion: self.motion.clone(),
                 zoom: self.zoom,
             })
     }
