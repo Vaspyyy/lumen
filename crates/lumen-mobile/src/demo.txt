@@ -1,0 +1,10 @@
+[38;2;255;201;122m❯[0m glint
+[1mlumen[0m [38;5;245mRust · git main clean[0m
+  [38;2;140;180;255msrc/[0m          [38;5;245m14 files[0m
+  [38;2;140;180;255mcrates/[0m       [38;5;245m2 crates[0m
+  [38;2;201;164;255mCargo.toml[0m    [38;5;245m34L[0m
+  README.md     [38;5;245m96L[0m
+[38;2;255;201;122m❯[0m crux cargo test
+[38;2;143;223;168mOK[0m  cargo test  [38;5;245m(4.2s)[0m
+tests: [1m61 passed[0m
+[41m  [42m  [43m  [44m  [45m  [46m  [0m [3mitalic[0m [4munderline[0m [1mbold[0m 日本語 ✓
