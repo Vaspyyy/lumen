@@ -115,30 +115,57 @@ impl client::Handler for Checker {
     }
 }
 
-/// The first address that answers. All are tried at once, the earlier ones
-/// with a head start: at home the LAN address wins, on the road the VPN's.
-async fn reach(addresses: &[String], port: u16) -> Result<(TcpStream, String), Failure> {
+/// The PC, at the first of its addresses where it answers and proves to be
+/// itself. All are tried at once, the earlier ones with a head start: at
+/// home the LAN address wins, on the road the VPN's.
+///
+/// An address may belong to another machine where the phone is right now (a
+/// friend's network uses the same numbers as the one at home). Such a machine
+/// shows another key and is dropped before anything is said to it, and the
+/// other addresses still get their turn.
+async fn arrive(addresses: &[String], port: u16, host_keys: &[[u8; 32]]) -> Result<(Handle<Checker>, String), Failure> {
     let mut tries = tokio::task::JoinSet::new();
     for (i, address) in addresses.iter().enumerate() {
-        let address = address.clone();
+        let (address, host_keys) = (address.clone(), host_keys.to_vec());
         tries.spawn(async move {
             tokio::time::sleep(Duration::from_millis(200 * i as u64)).await;
             let stream = timeout(REACH, TcpStream::connect((address.as_str(), port))).await;
-            stream.ok().and_then(Result::ok).map(|stream| (stream, address))
+            let Some(stream) = stream.ok().and_then(Result::ok) else {
+                return Err((Failure::new("unreachable", ""), address));
+            };
+            let _ = stream.set_nodelay(true);
+            match handshake(stream, host_keys).await {
+                Ok(handle) => Ok((handle, address)),
+                Err(failure) => Err((failure, address)),
+            }
         });
     }
+    let (mut silent, mut strangers, mut odd) = (0, Vec::new(), None);
     while let Some(tried) = tries.join_next().await {
-        if let Ok(Some((stream, address))) = tried {
-            let _ = stream.set_nodelay(true);
-            return Ok((stream, address));
+        match tried {
+            Ok(Ok(arrived)) => return Ok(arrived),
+            Ok(Err((failure, address))) => match failure.code {
+                "wrong-host" => strangers.push(address),
+                "unreachable" => silent += 1,
+                _ => odd = Some(failure),
+            },
+            Err(_) => silent += 1,
         }
     }
-    let message = match addresses {
-        [one] => format!("The PC does not answer at {one}. Is it on, and is this phone in its network or VPN?"),
-        _ => "The PC does not answer at any of its addresses. Is it on, and is this phone in its network or VPN?"
-            .to_string(),
-    };
-    Err(Failure::new("unreachable", message))
+    let network = "Is the PC on, and is this phone in its network or VPN?";
+    Err(match (strangers.as_slice(), silent, odd) {
+        // every address is somebody else's: the PC changed its keys, or somebody stands in for it
+        ([_, ..], 0, None) => Failure::new(
+            "wrong-host",
+            "This is not the PC this phone was paired with: it shows another key. Nothing was sent to it.",
+        ),
+        ([stranger, ..], ..) => Failure::new(
+            "unreachable",
+            format!("The PC does not answer. Another machine answers at {stranger}; nothing was sent to it. {network}"),
+        ),
+        ([], _, Some(odd)) => odd,
+        ([], ..) => Failure::new("unreachable", format!("The PC does not answer. {network}")),
+    })
 }
 
 async fn handshake(stream: TcpStream, host_keys: Vec<[u8; 32]>) -> Result<Handle<Checker>, Failure> {
@@ -153,12 +180,9 @@ async fn handshake(stream: TcpStream, host_keys: Vec<[u8; 32]>) -> Result<Handle
     let checker = Checker { host_keys, wrong: wrong.clone() };
     match timeout(HANDSHAKE, client::connect_stream(config, stream, checker)).await {
         Ok(Ok(handle)) => Ok(handle),
-        _ if wrong.load(Ordering::Acquire) => Err(Failure::new(
-            "wrong-host",
-            "This is not the PC this phone was paired with: it shows another key. Nothing was sent to it.",
-        )),
+        _ if wrong.load(Ordering::Acquire) => Err(Failure::new("wrong-host", "")),
         Ok(Err(e)) => Err(Failure::failed(format!("The PC answered, but not as expected: {e}"))),
-        Err(_) => Err(Failure::new("unreachable", "The PC took too long to answer.")),
+        Err(_) => Err(Failure::new("unreachable", "")),
     }
 }
 
@@ -207,8 +231,7 @@ async fn run(handle: &Handle<Checker>, command: &str) -> Option<(u32, Vec<u8>)> 
 /// PC's user to say yes.
 pub async fn enroll(link: &str, device: &str, public_key: &str) -> Result<Host, Failure> {
     let offer = Offer::from_link(link).map_err(Failure::failed)?;
-    let (stream, _) = reach(&offer.addresses, offer.port).await?;
-    let mut handle = handshake(stream, offer.host_keys.clone()).await?;
+    let (mut handle, _) = arrive(&offer.addresses, offer.port, &offer.host_keys).await?;
 
     let stale = || Failure::new("refused", "The PC no longer takes this code. Run lumen pair there again.");
     let key = PrivateKey::from(Ed25519Keypair::from_seed(&offer.seed));
@@ -220,7 +243,11 @@ pub async fn enroll(link: &str, device: &str, public_key: &str) -> Result<Host, 
         Err(_) => return Err(Failure::new("unreachable", "The PC took too long to answer.")),
     }
 
-    let request = EnrollRequest { device: lumen_link::clean_name(device), public_key: public_key.trim().to_string() };
+    let request = EnrollRequest {
+        device: lumen_link::clean_name(device),
+        public_key: public_key.trim().to_string(),
+        ..Default::default()
+    };
     let mut line = serde_json::to_vec(&request).map_err(Failure::failed)?;
     line.push(b'\n');
     let answer = async {
@@ -233,7 +260,7 @@ pub async fn enroll(link: &str, device: &str, public_key: &str) -> Result<Host, 
             match msg {
                 ChannelMsg::Data { data } if out.len() < 1 << 16 => {
                     out.extend_from_slice(&data);
-                    if out.contains(&b'\n') {
+                    if answer_in(&out).is_some() {
                         break;
                     }
                 },
@@ -250,9 +277,9 @@ pub async fn enroll(link: &str, device: &str, public_key: &str) -> Result<Host, 
     };
     let _ = handle.disconnect(russh::Disconnect::ByApplication, "", "en").await;
 
-    let first = out.split(|&b| b == b'\n').next().unwrap_or_default();
-    let reply: EnrollReply = serde_json::from_slice(first)
-        .map_err(|_| Failure::failed("The PC did not answer the way lumen does. Is lumen pair still waiting there?"))?;
+    let reply = answer_in(&out).ok_or_else(|| {
+        Failure::failed("The PC did not answer the way lumen does. Is lumen pair still waiting there?")
+    })?;
     if !reply.ok {
         let said = reply.error.trim();
         return Err(Failure::new("denied", if said.is_empty() { "The PC said no." } else { said }));
@@ -400,8 +427,7 @@ pub struct Link {
 pub async fn connect(host: &Host, sign: Arc<dyn Sign>) -> Result<Arc<Link>, Failure> {
     let public = PublicKey::from_openssh(&host.public_key)
         .map_err(|_| Failure::failed("This phone's record of its own key is damaged. Pair the PC again."))?;
-    let (stream, address) = reach(&host.addresses, host.port).await?;
-    let mut handle = handshake(stream, prints(&host.host_keys)).await?;
+    let (mut handle, address) = arrive(&host.addresses, host.port, &prints(&host.host_keys)).await?;
 
     let mut remote = Remote(sign);
     match handle.authenticate_publickey_with(host.user.as_str(), public, None, &mut remote).await {
@@ -432,8 +458,18 @@ pub async fn connect(host: &Host, sign: Arc<dyn Sign>) -> Result<Arc<Link>, Fail
     Ok(Arc::new(Link { handle, lumen, address }))
 }
 
+/// The list in what `lumen sessions --json` printed. A login shell may say
+/// things of its own before a command runs (a greeting in its startup file):
+/// the list is the last line that is one.
 fn sessions_of(out: &[u8]) -> Option<Vec<SessionInfo>> {
-    serde_json::from_slice(out).ok()
+    out.split(|&b| b == b'\n').rev().find_map(|line| serde_json::from_slice(line).ok())
+}
+
+/// The answer in what `lumen pair-enroll` printed so far: the first whole
+/// line that is one, whatever a login shell said before it.
+fn answer_in(out: &[u8]) -> Option<EnrollReply> {
+    let whole = &out[..out.iter().rposition(|&b| b == b'\n')?];
+    whole.split(|&b| b == b'\n').find_map(|line| serde_json::from_slice(line).ok())
 }
 
 impl Link {
@@ -569,8 +605,7 @@ async fn serve(link: Arc<Link>, tab: Arc<Tab>, name: String, size: Size, mut rx:
         let (width, height) = (size.cols as u32 * size.cell_width as u32, size.rows as u32 * size.cell_height as u32);
         channel.request_pty(false, "xterm-256color", size.cols as u32, size.rows as u32, width, height, &[]).await?;
         match link.lumen.as_ref().filter(|_| lumen_link::session_name_ok(&name)) {
-            // whatever this phone left behind when it last lost the PC is let go of
-            Some(lumen) => channel.exec(true, format!("{lumen} attach --takeover --session {name}")).await?,
+            Some(lumen) => channel.exec(true, format!("{lumen} attach --session {name}")).await?,
             None => channel.request_shell(true).await?,
         }
         Ok::<_, russh::Error>(channel)
@@ -718,6 +753,22 @@ mod tests {
         assert_eq!(public_key_line(&spki[..spki.len() - 1]), None);
         spki[20] = 0x04;
         assert_eq!(public_key_line(&spki), None);
+    }
+
+    #[test]
+    fn answers_among_what_a_shell_says() {
+        let listed = br#"Welcome back!
+[{"name":"t1","attached":1}]
+"#;
+        assert_eq!(sessions_of(listed).unwrap()[0].name, "t1");
+        assert_eq!(sessions_of(b"[]\n"), Some(Vec::new()));
+        assert_eq!(sessions_of(b"lumen: unknown option sessions\n"), None);
+        // an answer counts once its line is whole
+        assert_eq!(answer_in(br#"{"ok":true,"lumen":"/usr/bin/lumen""#), None);
+        assert_eq!(answer_in(b"hello\n"), None);
+        let reply = answer_in(b"hello\n{\"ok\":true,\"lumen\":\"/usr/bin/lumen\"}\nmore").unwrap();
+        assert!(reply.ok);
+        assert_eq!(reply.lumen, "/usr/bin/lumen");
     }
 
     #[test]

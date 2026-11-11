@@ -34,8 +34,26 @@ const KITTY_SHIFT: u32 = 18;
 ///
 /// While a program is on the alternate screen, the primary screen is
 /// reached by swapping to it and back, which leaves `term` as it was.
+///
+/// A picture has to fit one frame of the keeper's socket. If the scrollback
+/// makes it too big (thousands of very wide lines, every cell its own
+/// color), less of the scrollback is sent, then none of it.
 pub fn replay<L: EventListener>(term: &mut Term<L>, title: Option<&str>) -> Vec<u8> {
-    let mut out = Writer::default();
+    let mut bytes = Vec::new();
+    for history in [usize::MAX, 500, 0] {
+        bytes = replay_with(term, title, history);
+        if bytes.len() <= MAX_REPLAY {
+            break;
+        }
+    }
+    bytes
+}
+
+/// The most bytes a picture may be: well below what a frame can hold.
+const MAX_REPLAY: usize = 16 << 20;
+
+fn replay_with<L: EventListener>(term: &mut Term<L>, title: Option<&str>, history: usize) -> Vec<u8> {
+    let mut out = Writer { history, ..Writer::default() };
     // a full reset, the scrollback cleared too, the cursor at the top
     out.raw(b"\x1bc\x1b[3J\x1b[H");
     let mode = *term.mode();
@@ -73,6 +91,8 @@ fn kitty_flags(mode: TermMode) -> u8 {
 struct Writer {
     bytes: Vec<u8>,
     pen: Pen,
+    /// The most lines of scrollback to write.
+    history: usize,
 }
 
 #[derive(Clone, PartialEq)]
@@ -120,7 +140,7 @@ impl Writer {
     /// Every line of a grid, the scrollback first. The receiving terminal's
     /// cursor is at the top left of a cleared screen.
     fn grid(&mut self, grid: &Grid<Cell>) {
-        let top = grid.topmost_line().0;
+        let top = grid.topmost_line().0.max(-(self.history.min(i32::MAX as usize) as i32));
         let bottom = grid.bottommost_line().0;
         let last = grid.columns() - 1;
         for line in top..=bottom {
@@ -505,5 +525,20 @@ mod tests {
         feed(&mut b, &bytes);
         assert_same(&a, &b);
         assert!(String::from_utf8_lossy(&bytes).contains("\x1b]2;my title\x1b\\"));
+    }
+
+    #[test]
+    fn less_scrollback_when_told() {
+        let mut session = term(20, 4);
+        for line in 0..50 {
+            feed(&mut session, format!("line {line}\r\n").as_bytes());
+        }
+        let all = String::from_utf8(replay_with(&mut session, None, usize::MAX)).unwrap();
+        assert!(all.contains("line 0\r\n") && all.contains("line 49"));
+        // the last three lines above the screen, and the screen
+        let some = String::from_utf8(replay_with(&mut session, None, 3)).unwrap();
+        assert!(!some.contains("line 43\r\n") && some.contains("line 44\r\n") && some.contains("line 49"));
+        let none = String::from_utf8(replay_with(&mut session, None, 0)).unwrap();
+        assert!(!none.contains("line 46\r\n") && none.contains("line 47\r\n") && none.contains("line 49"));
     }
 }

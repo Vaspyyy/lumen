@@ -41,9 +41,8 @@ PHONES
                                         pair a phone: shows a code for the lumen app to scan
     lumen phones                        list the paired phones
     lumen unpair <name>                 a paired phone can no longer log in
-    lumen attach --session NAME [--takeover]
-                                        show a terminal the PC keeps running (made if missing);
-                                        with --takeover it stops being shown anywhere else
+    lumen attach --session NAME         show a terminal the PC keeps running (made if missing):
+                                        here, and no longer where it was shown before
     lumen sessions [--json]             list the terminals the PC keeps running
     lumen sessions kill <name>|--all    end them
 ";

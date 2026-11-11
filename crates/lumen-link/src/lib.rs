@@ -208,13 +208,17 @@ pub fn key_blob(line: &str) -> Option<Vec<u8>> {
 
 /// The phone's first message, as one line of JSON on the standard input of
 /// `lumen pair-enroll`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnrollRequest {
     /// What the phone calls itself, for the PC's user to recognize.
     pub device: String,
     /// The phone's own public key, as a line of `authorized_keys` without
     /// options or comment.
     pub public_key: String,
+    /// The address the request came from. Not the phone's to say: `lumen
+    /// pair-enroll` puts in what sshd saw, over whatever came with the request.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub from: String,
 }
 
 /// The PC's answer, as one line of JSON on the standard output.
@@ -263,7 +267,8 @@ pub fn clean_name(name: &str) -> String {
         .filter(|&c| !steers(c))
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect::<String>()
-        .trim()
+        // a name is given to `lumen unpair`, where a dash in front would read as an option
+        .trim_matches(|c: char| c.is_whitespace() || c == '-')
         .chars()
         .take(48)
         .collect();
@@ -358,6 +363,8 @@ mod tests {
         // a name can't be written backwards to read as another
         assert_eq!(clean_name("phone\u{202e}enohp\u{200b}"), "phoneenohp");
         assert_eq!(clean_name("  \n "), "phone");
+        assert_eq!(clean_name("--yes"), "yes");
+        assert_eq!(clean_name(" - "), "phone");
         assert_eq!(clean_name(&"x".repeat(200)).len(), 48);
         assert!(session_name_ok("phone-1"));
         assert!(session_name_ok("galaxy_s24.2"));
@@ -369,11 +376,16 @@ mod tests {
 
     #[test]
     fn messages_are_one_line_each() {
-        let request =
-            EnrollRequest { device: "Galaxy S24 Ultra".into(), public_key: "ecdsa-sha2-nistp256 AAAA".into() };
+        let request = EnrollRequest {
+            device: "Galaxy S24 Ultra".into(),
+            public_key: "ecdsa-sha2-nistp256 AAAA".into(),
+            from: String::new(),
+        };
         let line = serde_json::to_string(&request).unwrap();
         assert!(!line.contains('\n'));
         assert_eq!(serde_json::from_str::<EnrollRequest>(&line).unwrap(), request);
+        // a phone doesn't say where it comes from
+        assert!(!line.contains("from"));
         // an answer from an older PC: what it doesn't say is empty
         let reply: EnrollReply = serde_json::from_str(r#"{"ok":false,"error":"no"}"#).unwrap();
         assert_eq!(reply, EnrollReply { ok: false, error: "no".into(), ..Default::default() });

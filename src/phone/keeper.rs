@@ -285,7 +285,7 @@ impl Keeper {
                     },
                 }
             };
-            if session.attach(&client, size, hello.takeover) {
+            if session.attach(&client, size) {
                 break session;
             }
             // it ended just now: a new one of the same name
@@ -524,15 +524,17 @@ impl Session {
 
     /// Gives the client the picture and adds it, or `false` if the session
     /// has ended.
-    fn attach(&self, client: &Arc<Client>, size: Winsize, takeover: bool) -> bool {
+    fn attach(&self, client: &Arc<Client>, size: Winsize) -> bool {
         let mut inner = self.inner();
         if inner.ended {
             return false;
         }
-        if takeover {
-            for other in inner.clients.drain(..) {
-                other.push(frame::MOVED, Vec::new());
-            }
+        // A session is shown in one place at a time. Whoever showed it is let go
+        // of: that may be what a phone's broken connection left behind, a client
+        // that will never read again. And two terminals would both answer what a
+        // program asks the terminal.
+        for other in inner.clients.drain(..) {
+            other.push(frame::MOVED, Vec::new());
         }
         self.resize_locked(&mut inner, size);
         let inner = &mut *inner;
@@ -840,7 +842,11 @@ pub fn env_name_ok(name: &str) -> bool {
 fn shell_env(hello: &Hello) -> Vec<(String, String)> {
     const DROPPED: [&str; 5] = ["SSH_TTY", "SSH_CONNECTION", "SSH_CLIENT", "TERM_PROGRAM", "TERM_PROGRAM_VERSION"];
     let mut env: Vec<(String, String)> =
-        std::env::vars().filter(|(name, _)| !DROPPED.contains(&name.as_str())).collect();
+        // what is not text can't be passed on by name, and is nothing a shell misses
+        std::env::vars_os()
+            .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
+            .filter(|(name, _)| !DROPPED.contains(&name.as_str()))
+            .collect();
     let mut set = |name: &str, value: &str| {
         env.retain(|(n, _)| n != name);
         env.push((name.to_string(), value.to_string()));
@@ -924,7 +930,6 @@ mod tests {
             height: 0,
             env: vec![("TERM_PROGRAM".into(), "lumen".into()), ("bad name".into(), "x".into())],
             cwd: None,
-            takeover: false,
         };
         let env = shell_env(&hello);
         let get = |name: &str| env.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str());

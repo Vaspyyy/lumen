@@ -84,7 +84,7 @@ done
 export XDG_RUNTIME_DIR="$run"
 
 pair() {
-    "$lumen" pair --yes --port "$port" --address 127.0.0.1 --host-key "$work/hostkey.pub" \
+    TZ=Pacific/Kiritimati "$lumen" pair --yes --port "$port" --address 127.0.0.1 --host-key "$work/hostkey.pub" \
         --authorized-keys "$work/authorized_keys" >"$work/link" 2>"$work/pair.log" &
     pairing=$!
     for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
@@ -100,6 +100,13 @@ pair
 # the code is the first line; what lumen pair says afterwards follows it
 code=$(head -n 1 "$work/link")
 grep -q 'lumen-pairing:' "$work/authorized_keys" || fail "the short-lived key is not in authorized_keys"
+# The key's time is up in ten minutes by the system's clock, whatever time
+# zone the shell that ran lumen pair is in: sshd reads it by the system's.
+expiry=$(sed -n 's/.*expiry-time="\([0-9]*\)".*/\1/p' "$work/authorized_keys")
+soon=$(env -u TZ date -d '+9 minutes' +%Y%m%d%H%M%S)
+late=$(env -u TZ date -d '+11 minutes' +%Y%m%d%H%M%S)
+[ "$(expr "$expiry" \> "$soon")" = 1 ] && [ "$(expr "$expiry" \< "$late")" = 1 ] ||
+    fail "the short-lived key expires at $expiry, not in ten minutes (between $soon and $late)"
 "$phone" enroll "$work/phone" "$code" "test phone" >"$work/host.json" || fail "the phone could not pair"
 wait "$pairing" || fail "lumen pair did not end well: $(cat "$work/pair.log")"
 pairing=""

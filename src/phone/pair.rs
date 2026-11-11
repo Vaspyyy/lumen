@@ -95,6 +95,8 @@ pub fn pair(args: &[String]) -> i32 {
         Ok(args) => args,
         Err(status) => return status,
     };
+    // the pairing key's time is written for sshd to read
+    sys::use_system_time_zone();
     match Pairing::prepare(args).and_then(Pairing::run) {
         Ok(status) => status,
         Err(message) => {
@@ -204,6 +206,13 @@ impl Pairing {
                     "{name} is paired.\n'lumen phones' lists the paired phones.\n\
                      'lumen unpair \"{name}\"' takes this one off again."
                 );
+                if sys::lingers(&self.user) == Some(false) {
+                    let _ = writeln!(
+                        io::stdout(),
+                        "\nTerminals opened from the phone end when you log out of this PC.\n\
+                         'loginctl enable-linger' keeps them running then."
+                    );
+                }
                 Ok(0)
             },
             None => {
@@ -274,7 +283,7 @@ impl Pairing {
             },
         };
         let device = lumen_link::clean_name(&request.device);
-        if !self.confirm(&device, &key) {
+        if !self.confirm(&device, &request.from, &key) {
             refuse(&mut stream, "The PC's user did not let this phone in.".into());
             return None;
         }
@@ -302,7 +311,7 @@ impl Pairing {
         }
     }
 
-    fn confirm(&self, device: &str, key: &PhoneKey) -> bool {
+    fn confirm(&self, device: &str, from: &str, key: &PhoneKey) -> bool {
         if self.yes {
             return true;
         }
@@ -313,8 +322,10 @@ impl Pairing {
         // What was typed while the code was on screen is not an answer to this
         // question, and neither is an Enter: yes has to be said.
         sys::forget_typed(0);
+        // where it comes from is what sshd saw; the name and the key are what it says of itself
+        let origin = if from.is_empty() { String::new() } else { format!(" (connecting from {from})") };
         let question = format!(
-            "{device} wants to log in to this PC as {}. Its key: {}. Add it? [y/N] ",
+            "{device}{origin} wants to log in to this PC as {}.\nIts key: {}\nThe app shows the same key. Add it? [y/N] ",
             self.user,
             key.fingerprint()
         );
@@ -334,6 +345,15 @@ impl Pairing {
         }
         matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
     }
+}
+
+/// The address a login came from, out of sshd's `SSH_CONNECTION` ("their
+/// address, their port, our address, our port"), or nothing.
+fn came_from(connection: Option<&str>) -> String {
+    let address = connection.and_then(|c| c.split_whitespace().next()).unwrap_or_default();
+    let plain =
+        address.len() <= 64 && address.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '%'));
+    if plain { address.to_string() } else { String::new() }
 }
 
 /// One line from a descriptor, if all of it comes in time. Whoever is on the
@@ -632,6 +652,10 @@ pub fn enroll(args: &[String]) -> i32 {
         return fail();
     }
     let Some(line) = line_within(0, Duration::from_secs(30)) else { return fail() };
+    // what sshd says about where the connection comes from, not what the request says
+    let Ok(mut request) = serde_json::from_str::<EnrollRequest>(&line) else { return fail() };
+    request.from = came_from(std::env::var("SSH_CONNECTION").ok().as_deref());
+    let Ok(line) = serde_json::to_string(&request) else { return fail() };
     let Ok(dir) = runtime_dir() else { return fail() };
     let Ok(mut stream) = UnixStream::connect(dir.join(format!("pair-{token}.sock"))) else { return fail() };
     if stream.write_all(format!("{line}\n").as_bytes()).is_err() {
@@ -757,6 +781,16 @@ mod tests {
 
     fn interface(name: &str, address: [u8; 4]) -> Interface {
         Interface { name: name.into(), up: true, loopback: false, address: Ipv4Addr::from(address) }
+    }
+
+    #[test]
+    fn where_a_login_came_from() {
+        assert_eq!(came_from(Some("192.168.1.60 51234 192.168.1.20 22")), "192.168.1.60");
+        assert_eq!(came_from(Some("fe80::1%eth0 51234 fe80::2%eth0 22")), "fe80::1%eth0");
+        // nothing sshd would write
+        assert_eq!(came_from(Some("\x1b[31mhere 1 2 3")), "");
+        assert_eq!(came_from(Some("")), "");
+        assert_eq!(came_from(None), "");
     }
 
     #[test]

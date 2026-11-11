@@ -214,7 +214,7 @@ fn a_phone_pairs_logs_in_and_is_unpaired() {
     assert!(made.unwrap().success());
     let phone_public = std::fs::read_to_string(dir.join("phone.pub")).unwrap();
     let public_key = phone_public.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
-    let request = EnrollRequest { device: "Test Phone".into(), public_key: public_key.clone() };
+    let request = EnrollRequest { device: "Test Phone".into(), public_key: public_key.clone(), ..Default::default() };
     let line = format!("{}\n", serde_json::to_string(&request).unwrap());
 
     let output = ssh(&tools, &dir, port, &pairing_key, "anything at all", &line);

@@ -25,14 +25,12 @@ struct AttachArgs {
     session: String,
     env: Vec<(String, String)>,
     cwd: Option<String>,
-    takeover: bool,
 }
 
 fn parse_attach_args(args: &[String]) -> Result<AttachArgs, i32> {
     let mut session = None;
     let mut env = Vec::new();
     let mut cwd = None;
-    let mut takeover = false;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let mut value = |what: &str| args.next().cloned().ok_or_else(|| usage_error(format!("{arg} wants {what}")));
@@ -51,7 +49,6 @@ fn parse_attach_args(args: &[String]) -> Result<AttachArgs, i32> {
                 let dir = std::env::current_dir().map(|here| here.join(&dir)).unwrap_or(dir);
                 cwd = Some(dir.to_string_lossy().into_owned());
             },
-            "--takeover" => takeover = true,
             other => return Err(usage_error(format!("unknown option {other}"))),
         }
     }
@@ -61,7 +58,7 @@ fn parse_attach_args(args: &[String]) -> Result<AttachArgs, i32> {
             "{session} can't be the name of a terminal: letters, digits, '-', '_' and '.' only"
         )));
     }
-    Ok(AttachArgs { session, env, cwd, takeover })
+    Ok(AttachArgs { session, env, cwd })
 }
 
 pub fn attach(args: &[String]) -> i32 {
@@ -92,7 +89,6 @@ pub fn attach(args: &[String]) -> i32 {
         height: size.height,
         env: args.env,
         cwd: args.cwd,
-        takeover: args.takeover,
     };
     let mut stream = match hello_keeper(&dir, &hello) {
         Ok(stream) => stream,

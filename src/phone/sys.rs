@@ -118,6 +118,37 @@ pub fn raw_mode() -> io::Result<()> {
     Ok(())
 }
 
+/// Makes this program tell the time the way the system does, whatever `TZ`
+/// the shell it was started from has: sshd reads a key's `expiry-time` in
+/// the system's time zone. Call it before any other thread is started.
+pub fn use_system_time_zone() {
+    unsafe extern "C" {
+        /// Takes the time zone from the environment again (POSIX).
+        fn tzset();
+    }
+    // SAFETY: nothing else reads or writes the environment yet (see above), and tzset
+    // only reads it
+    unsafe {
+        std::env::remove_var("TZ");
+        tzset();
+    }
+}
+
+/// Whether the user's services go on when the user has logged out
+/// everywhere: `None` where there is no telling.
+pub fn lingers(user: &str) -> Option<bool> {
+    let output = std::process::Command::new("loginctl")
+        .args(["show-user", user, "--property=Linger", "--value"])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    match String::from_utf8_lossy(&output.stdout).trim() {
+        "yes" => Some(true),
+        "no" => Some(false),
+        _ => None,
+    }
+}
+
 /// Throws away what was typed on a terminal and not read yet.
 pub fn forget_typed(fd: i32) {
     // SAFETY: tcflush drops pending input of a descriptor and touches nothing else
