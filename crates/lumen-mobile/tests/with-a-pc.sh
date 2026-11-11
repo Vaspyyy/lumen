@@ -154,7 +154,10 @@ step "pair again with a new key: it takes the place of the old one"
 mkdir -m 700 "$work/phone2"
 pair
 code=$(head -n 1 "$work/link")
-PHONE_HAD=$("$phone" key "$work/phone") "$phone" enroll "$work/phone2" "$code" "test phone" >/dev/null ||
+# the phone knows the PC by the host key it proved when it was paired first
+machine=$(sed -n 's/.*"proven": *"\([0-9a-f]*\)".*/\1/p' "$work/host.json")
+[ -n "$machine" ] || fail "the pairing does not say which host key the PC proved"
+PHONE_HAD="$machine $("$phone" key "$work/phone")" "$phone" enroll "$work/phone2" "$code" "test phone" >/dev/null ||
     fail "the phone could not pair again"
 wait "$pairing" || fail "lumen pair did not end well: $(cat "$work/pair.log")"
 pairing=""
@@ -165,6 +168,19 @@ if "$phone" sessions "$work/phone" >"$work/out" 2>&1; then
     fail "the key that was replaced still gets in"
 fi
 "$phone" sessions "$work/phone2" >"$work/out" || fail "the new key does not get in"
+
+step "a key of another machine is not named to this PC"
+# a pairing code can list any PC's host key, but only the one that answers proves its own
+pair
+code=$(head -n 1 "$work/link")
+mkdir -m 700 "$work/phone3"
+other=0000000000000000000000000000000000000000000000000000000000000000
+PHONE_HAD="$other $("$phone" key "$work/phone2")" "$phone" enroll "$work/phone3" "$code" "third phone" >/dev/null ||
+    fail "a second phone could not pair"
+wait "$pairing" || fail "lumen pair did not end well: $(cat "$work/pair.log")"
+pairing=""
+[ "$(wc -l <"$work/authorized_keys")" = 2 ] || fail "a key was replaced that belongs to a pairing with another machine"
+"$lumen" unpair "third phone" --authorized-keys "$work/authorized_keys" >/dev/null
 
 step "unpair"
 "$lumen" unpair "test phone" --authorized-keys "$work/authorized_keys"

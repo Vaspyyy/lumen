@@ -38,6 +38,9 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -89,7 +92,11 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -115,6 +122,7 @@ fun TerminalScreen(model: AppModel, onOpenSheet: () -> Unit) {
     var scrolledBack by remember { mutableStateOf(false) }
     var selection by remember { mutableStateOf<IntOffset?>(null) }
     var pinch by remember { mutableStateOf<Float?>(null) }
+    var link by remember { mutableStateOf<TappedLink?>(null) }
     val activeTab = model.tabs.getOrNull(model.active)
     val conn = model.conn
     val live = conn is Conn.Connected || conn == Conn.Demo
@@ -130,16 +138,18 @@ fun TerminalScreen(model: AppModel, onOpenSheet: () -> Unit) {
                 model.setFont(size, save = done)
                 pinch = if (done) null else size
             }
-            override fun onOpenLink(url: String) {
-                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            override fun onLink(target: String?, isFile: Boolean) {
+                link = target?.let { TappedLink(it, isFile) }
             }
-            override fun onCopyLink(text: String) = model.copy(text)
-            override fun copy(text: String) = model.copy(text)
+            override fun copy(text: String) { model.copy(text) }
             override fun clipboard(): String? = model.clipboardText()
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Lumen.bg)) {
+    // Held sideways, the phone has its camera and maybe its navigation bar at
+    // the sides: nothing to read or to touch goes under them.
+    val sides = WindowInsets.displayCutout.union(WindowInsets.navigationBars).only(WindowInsetsSides.Horizontal)
+    Column(Modifier.fillMaxSize().background(Lumen.bg).windowInsetsPadding(sides)) {
         TopBar(model, onOpenSheet)
         Box(
             Modifier
@@ -206,6 +216,34 @@ fun TerminalScreen(model: AppModel, onOpenSheet: () -> Unit) {
                 }
             }
 
+            // A link that was tapped says where it leads before anything is done with it.
+            LaunchedEffect(activeTab?.id) { link = null }
+            androidx.compose.animation.AnimatedVisibility(
+                link != null && live,
+                enter = fadeIn(tween(120)) + slideInVertically(spring(0.75f, Spring.StiffnessMedium)) { it / 2 },
+                exit = fadeOut(tween(120)) + slideOutVertically { it / 2 },
+                modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp),
+            ) {
+                var shown by remember { mutableStateOf(link) }
+                link?.let { shown = it }
+                val noApp = stringResource(R.string.link_no_app)
+                shown?.let { l ->
+                    LinkBar(
+                        l,
+                        onOpen = {
+                            link = null
+                            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, l.target.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                                .onFailure { model.notify(noApp) }
+                        },
+                        onCopy = {
+                            link = null
+                            model.copy(l.target)
+                        },
+                        onDismiss = { link = null },
+                    )
+                }
+            }
+
             androidx.compose.animation.AnimatedVisibility(
                 pinch != null,
                 enter = fadeIn(tween(100)) + scaleIn(initialScale = 0.9f),
@@ -238,6 +276,76 @@ fun TerminalScreen(model: AppModel, onOpenSheet: () -> Unit) {
             )
         }
     }
+}
+
+/** A link in the terminal that was tapped: where it leads, and whether that is a file on the PC. */
+data class TappedLink(val target: String, val isFile: Boolean) {
+    /** Web pages are opened; of anything else, the phone can only copy where it leads. */
+    val opens: Boolean get() = !isFile && (target.startsWith("http://", true) || target.startsWith("https://", true))
+}
+
+/** Where a tapped link leads, in full, and what can be done with it. */
+@Composable
+private fun LinkBar(link: TappedLink, onOpen: () -> Unit, onCopy: () -> Unit, onDismiss: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0xF21F1C2C))
+            .border(1.dp, Lumen.line2, RoundedCornerShape(18.dp))
+            .padding(start = 16.dp, end = 6.dp, top = 6.dp, bottom = 8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.Top) {
+            Text(
+                linkText(link),
+                style = Mono.copy(fontSize = 12.5.sp, lineHeight = 18.sp),
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).padding(top = 10.dp, bottom = 6.dp),
+            )
+            val close = stringResource(R.string.dismiss)
+            Box(
+                Modifier.size(40.dp).clip(CircleShape).pressable(onDismiss).semantics { contentDescription = close },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.close, null, tint = Lumen.fg3, modifier = Modifier.size(16.dp))
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(end = 6.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+            if (link.opens) {
+                BarButton(Icons.copy, stringResource(R.string.copy), onCopy)
+                Spacer(Modifier.width(6.dp))
+            }
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(13.dp))
+                    .pressable(if (link.opens) onOpen else onCopy)
+                    .background(Lumen.accent)
+                    .padding(horizontal = 16.dp, vertical = 9.dp),
+            ) {
+                val label = when {
+                    link.opens -> R.string.link_open
+                    link.isFile -> R.string.link_copy_path
+                    else -> R.string.copy
+                }
+                Text(stringResource(label), style = MaterialTheme.typography.labelMedium, color = Lumen.ink)
+            }
+        }
+    }
+}
+
+/** A web address with the machine it leads to standing out: that part says whose page it is. */
+private fun linkText(link: TappedLink): AnnotatedString = buildAnnotatedString {
+    val t = link.target
+    val from = t.indexOf("://").takeIf { link.opens && it >= 0 }?.plus(3)
+    if (from == null) {
+        withStyle(SpanStyle(color = Lumen.fg)) { append(t) }
+        return@buildAnnotatedString
+    }
+    val to = t.indexOfAny(charArrayOf('/', '?', '#'), from).takeIf { it >= 0 } ?: t.length
+    withStyle(SpanStyle(color = Lumen.fg3)) { append(t.substring(0, from)) }
+    withStyle(SpanStyle(color = Lumen.accent)) { append(t.substring(from, to)) }
+    withStyle(SpanStyle(color = Lumen.fg3)) { append(t.substring(to)) }
 }
 
 fun formatSize(s: Float): String = if (s % 1f == 0f) s.toInt().toString() else "%.1f".format(s)
@@ -414,8 +522,14 @@ private fun StatusDot(conn: Conn, onClick: () -> Unit) {
         else -> Lumen.pink
     }
     val busy = conn == Conn.Checking || conn == Conn.Auth || conn is Conn.Connecting || conn is Conn.Reconnecting
-    val t = rememberInfiniteTransition(label = "pulse")
-    val pulse by t.animateFloat(0.35f, 1f, infiniteRepeatable(tween(800, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "p")
+    // The pulse runs only while something is under way: an animation that never
+    // ends would redraw the screen on every frame, for nothing.
+    val pulse = if (busy) {
+        val t = rememberInfiniteTransition(label = "pulse")
+        t.animateFloat(0.35f, 1f, infiniteRepeatable(tween(800, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "p").value
+    } else {
+        1f
+    }
     val desc = stringResource(R.string.connection_and_pcs)
     Box(
         Modifier
@@ -430,10 +544,10 @@ private fun StatusDot(conn: Conn, onClick: () -> Unit) {
             Modifier
                 .size(22.dp)
                 .drawBehind {
-                    drawCircle(Brush.radialGradient(listOf(c.copy(alpha = 0.45f * (if (busy) pulse else 1f)), Color.Transparent)))
+                    drawCircle(Brush.radialGradient(listOf(c.copy(alpha = 0.45f * pulse), Color.Transparent)))
                 },
         )
-        Box(Modifier.size(9.dp).graphicsLayer { alpha = if (busy) pulse else 1f }.clip(CircleShape).background(c))
+        Box(Modifier.size(9.dp).graphicsLayer { alpha = pulse }.clip(CircleShape).background(c))
     }
 }
 

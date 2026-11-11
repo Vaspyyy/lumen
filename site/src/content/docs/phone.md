@@ -87,14 +87,14 @@ A keyboard plugged in or connected over Bluetooth works as on a PC. With one, `C
 | A drag | Scrolls through what was printed. In a program that has the whole screen, such as `less` or an editor, it scrolls there |
 | Two fingers, apart or together | Makes the text bigger or smaller |
 | Holding a word | Selects it. Drag to select more, then **Copy** |
-| A tap on a link to a web page | Opens it in the browser. A link is what a program marks as one, as on the PC |
-| A tap on a file's name in a `glint` listing | Copies where the file is on the PC |
+| A tap on a link | Shows where it leads, in full, with **Open** for a web page and **Copy**. A link is what a program marks as one, as on the PC |
+| A tap on a file's name in a `glint` listing | Shows where the file is on the PC, with **Copy path** |
 
 ## When the connection drops
 
-A train goes into a tunnel, the phone changes from Wi-Fi to mobile data: the app notices, keeps what was on the screen, and tries to connect again by itself, three times. After that it waits for you to say **Try again**. Nothing is lost either way, because the terminals never were on the phone.
+A train goes into a tunnel, the phone changes from Wi-Fi to mobile data: the app notices, keeps what was on the screen, and tries to connect again by itself, three times. After that it waits: for the phone to have a network again, for you to come back to the app, or for you to say **Try again**. Nothing is lost either way, because the terminals never were on the phone.
 
-Android may close the connection of an app that has been in the background for a while. When you come back, the app connects again, and asks for your fingerprint or screen lock if the phone was not unlocked just before.
+Android may close the connection of an app that has been in the background for a while. When you come back, the app connects again, and asks for your fingerprint or screen lock if the phone was not unlocked just before. It never asks while it is in the background.
 
 ## Away from home
 

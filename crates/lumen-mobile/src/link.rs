@@ -8,8 +8,8 @@
 //! The PC proves itself too: only a server holding one of the host keys
 //! whose fingerprints came with the pairing is talked to.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lumen_link::{EnrollReply, EnrollRequest, Offer, SessionInfo};
@@ -33,8 +33,10 @@ const HANDSHAKE: Duration = Duration::from_secs(12);
 const COMMAND: Duration = Duration::from_secs(10);
 /// How long the PC's user has to say yes to a new phone.
 const CONFIRM: Duration = Duration::from_secs(230);
-/// The most text a program may put on the phone's clipboard at once.
-const CLIPBOARD: usize = 1 << 20;
+/// The most text a program may put on the phone's clipboard at once. Android
+/// hands a clipboard over in one message of at most a megabyte, and counts
+/// two bytes for a character.
+const CLIPBOARD: usize = 200_000;
 /// A terminal whose program is gone this soon, and not with a zero, never
 /// started: what it said stays on screen.
 const STILLBORN: Duration = Duration::from_secs(3);
@@ -58,6 +60,11 @@ pub struct Host {
     pub version: String,
     /// The phone's public key for this PC.
     pub public_key: String,
+    /// SHA-256 over the host key the PC proved to have when it was paired,
+    /// in hex. `host_keys` is what its pairing code said, and whoever wrote
+    /// the code chose that: only this one says which machine it was.
+    #[serde(default)]
+    pub proven: String,
 }
 
 /// Why something did not work, for the app to act on (`code`) and for the
@@ -97,9 +104,14 @@ pub trait TabEvents: Send + Sync + 'static {
 
 /// Lets a server through only if it shows a host key that came with the
 /// pairing.
+type Arrived = (Handle<Checker>, String, [u8; 32]);
+
 struct Checker {
     host_keys: Vec<[u8; 32]>,
     wrong: Arc<AtomicBool>,
+    /// The key the machine showed, once it is one of `host_keys`. The key
+    /// exchange that follows proves that it has it.
+    shown: Arc<Mutex<Option<[u8; 32]>>>,
 }
 
 impl client::Handler for Checker {
@@ -107,11 +119,12 @@ impl client::Handler for Checker {
 
     async fn check_server_key(&mut self, key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
         let shown = key.public_key().fingerprint(HashAlg::Sha256);
-        let known = self.host_keys.iter().any(|known| known[..] == *shown.as_bytes());
-        if !known {
-            self.wrong.store(true, Ordering::Release);
+        let known = self.host_keys.iter().find(|known| known[..] == *shown.as_bytes());
+        match known {
+            Some(known) => *self.shown.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(*known),
+            None => self.wrong.store(true, Ordering::Release),
         }
-        Ok(known)
+        Ok(known.is_some())
     }
 }
 
@@ -123,7 +136,9 @@ impl client::Handler for Checker {
 /// friend's network uses the same numbers as the one at home). Such a machine
 /// shows another key and is dropped before anything is said to it, and the
 /// other addresses still get their turn.
-async fn arrive(addresses: &[String], port: u16, host_keys: &[[u8; 32]]) -> Result<(Handle<Checker>, String), Failure> {
+/// Returns the connection, the address that answered, and the host key
+/// the PC proved to have.
+async fn arrive(addresses: &[String], port: u16, host_keys: &[[u8; 32]]) -> Result<Arrived, Failure> {
     let mut tries = tokio::task::JoinSet::new();
     for (i, address) in addresses.iter().enumerate() {
         let (address, host_keys) = (address.clone(), host_keys.to_vec());
@@ -135,7 +150,7 @@ async fn arrive(addresses: &[String], port: u16, host_keys: &[[u8; 32]]) -> Resu
             };
             let _ = stream.set_nodelay(true);
             match handshake(stream, host_keys).await {
-                Ok(handle) => Ok((handle, address)),
+                Ok((handle, proven)) => Ok((handle, address, proven)),
                 Err(failure) => Err((failure, address)),
             }
         });
@@ -168,7 +183,7 @@ async fn arrive(addresses: &[String], port: u16, host_keys: &[[u8; 32]]) -> Resu
     })
 }
 
-async fn handshake(stream: TcpStream, host_keys: Vec<[u8; 32]>) -> Result<Handle<Checker>, Failure> {
+async fn handshake(stream: TcpStream, host_keys: Vec<[u8; 32]>) -> Result<(Handle<Checker>, [u8; 32]), Failure> {
     let config = Arc::new(client::Config {
         // a link that went away without a word is noticed within the minute
         keepalive_interval: Some(Duration::from_secs(15)),
@@ -177,9 +192,13 @@ async fn handshake(stream: TcpStream, host_keys: Vec<[u8; 32]>) -> Result<Handle
         ..Default::default()
     });
     let wrong = Arc::new(AtomicBool::new(false));
-    let checker = Checker { host_keys, wrong: wrong.clone() };
+    let shown = Arc::new(Mutex::new(None));
+    let checker = Checker { host_keys, wrong: wrong.clone(), shown: shown.clone() };
     match timeout(HANDSHAKE, client::connect_stream(config, stream, checker)).await {
-        Ok(Ok(handle)) => Ok(handle),
+        Ok(Ok(handle)) => match *shown.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) {
+            Some(proven) => Ok((handle, proven)),
+            None => Err(Failure::failed("The PC answered, but showed no key.")),
+        },
         _ if wrong.load(Ordering::Acquire) => Err(Failure::new("wrong-host", "")),
         Ok(Err(e)) => Err(Failure::failed(format!("The PC answered, but not as expected: {e}"))),
         Err(_) => Err(Failure::new("unreachable", "")),
@@ -229,17 +248,20 @@ async fn run(handle: &Handle<Checker>, command: &str) -> Option<(u32, Vec<u8>)> 
 
 /// Introduces the phone's key to the PC with a pairing code. Waits for the
 /// PC's user to say yes: `asked` is called once the PC has the phone's key
-/// and its user is being asked. `had` are the public keys this phone had for
-/// this PC before: with the yes, the new key takes their place there.
+/// and its user is being asked. `had` are the pairings this phone has, each
+/// as the host key that PC proved and the phone's public key for it: the
+/// keys it had for the machine that answers now are named to it, and with
+/// the yes the new key takes their place there.
 pub async fn enroll(
     link: &str,
     device: &str,
     public_key: &str,
-    had: &[String],
+    had: &[(String, String)],
     asked: impl Fn(),
 ) -> Result<Host, Failure> {
     let offer = Offer::from_link(link).map_err(Failure::failed)?;
-    let (mut handle, _) = arrive(&offer.addresses, offer.port, &offer.host_keys).await?;
+    let (mut handle, _, proven) = arrive(&offer.addresses, offer.port, &offer.host_keys).await?;
+    let proven = hex(&proven);
 
     let stale = || Failure::new("refused", "The PC no longer takes this code. Run lumen pair there again.");
     let key = PrivateKey::from(Ed25519Keypair::from_seed(&offer.seed));
@@ -254,9 +276,11 @@ pub async fn enroll(
     let request = EnrollRequest {
         device: lumen_link::clean_name(device),
         public_key: public_key.trim().to_string(),
+        // only what this very machine holds: a code can name any PC's key, but can't prove it
         replaces: had
             .iter()
-            .filter_map(|line| lumen_link::fingerprint(line))
+            .filter(|(machine, _)| *machine == proven)
+            .filter_map(|(_, line)| lumen_link::fingerprint(line))
             .map(|print| lumen_link::fingerprint_text(&print))
             .collect(),
         ..Default::default()
@@ -308,6 +332,7 @@ pub async fn enroll(
         lumen: reply.lumen,
         version: reply.version,
         public_key: request.public_key,
+        proven,
     })
 }
 
@@ -441,7 +466,7 @@ pub struct Link {
 pub async fn connect(host: &Host, sign: Arc<dyn Sign>) -> Result<Arc<Link>, Failure> {
     let public = PublicKey::from_openssh(&host.public_key)
         .map_err(|_| Failure::failed("This phone's record of its own key is damaged. Pair the PC again."))?;
-    let (mut handle, address) = arrive(&host.addresses, host.port, &prints(&host.host_keys)).await?;
+    let (mut handle, address, _) = arrive(&host.addresses, host.port, &prints(&host.host_keys)).await?;
 
     let mut remote = Remote(sign);
     match handle.authenticate_publickey_with(host.user.as_str(), public, None, &mut remote).await {

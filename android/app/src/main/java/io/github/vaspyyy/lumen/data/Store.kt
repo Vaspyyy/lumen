@@ -54,13 +54,31 @@ class Store(context: Context) {
     private val file = AtomicFile(File(context.filesDir, "pcs.json"))
     private val prefs = context.getSharedPreferences("lumen", Context.MODE_PRIVATE)
 
+    /** Whether everything in the file could be read (or there is no file yet). */
+    var intact = true
+        private set
+
+    /**
+     * The paired PCs. An entry that can't be read is left out, the others
+     * stay. A file with something unreadable in it is copied to
+     * `pcs.json.bad` before anything is saved over it.
+     */
     @Synchronized
-    fun load(): List<Pc> = runCatching {
+    fun load(): List<Pc> {
         if (!file.baseFile.exists()) return emptyList()
-        val root = JSONObject(String(file.readFully(), Charsets.UTF_8))
-        val arr = root.optJSONArray("pcs") ?: return emptyList()
-        List(arr.length()) { Pc.fromJson(arr.getJSONObject(it)) }
-    }.getOrElse { emptyList() }
+        val arr = runCatching {
+            JSONObject(String(file.readFully(), Charsets.UTF_8)).getJSONArray("pcs")
+        }.getOrElse {
+            intact = false
+            runCatching { file.baseFile.copyTo(File(file.baseFile.path + ".bad"), overwrite = true) }
+            return emptyList()
+        }
+        val pcs = List(arr.length()) { i ->
+            runCatching { Pc.fromJson(arr.getJSONObject(i)) }.onFailure { intact = false }.getOrNull()
+        }.filterNotNull()
+        if (!intact) runCatching { file.baseFile.copyTo(File(file.baseFile.path + ".bad"), overwrite = true) }
+        return pcs
+    }
 
     @Synchronized
     fun save(pcs: List<Pc>) {

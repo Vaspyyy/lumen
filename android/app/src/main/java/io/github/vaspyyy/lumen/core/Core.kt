@@ -34,15 +34,17 @@ object Core {
     external fun offer(link: String): String
 
     /** BLOCKING, up to about 4 minutes (the PC's user is asked to confirm there). Introduces this phone's key to the PC.
-     *  `had` are the public key lines this phone had for the same PC before, one to a line ("" for none): with the
-     *  yes on the PC, the new key takes their place there.
+     *  `had` are the pairings this phone has, one to a line: the "proven" of the PC's "host" object, a space, and its
+     *  "public_key" ("" for none). If the PC that answers is one of them, it is asked to put the new key in the place
+     *  of the old one.
+     *  `id` names this pairing for `enrollStage` and `cancelEnroll`: a number of the app's, higher with each pairing.
      *  {"ok":true,"host":{...}} : store the "host" object verbatim, it is what `connect` takes.
      *  {"ok":false,"code":"unreachable|wrong-host|refused|denied|cancelled|failed","error":"words for the user"} */
-    external fun enroll(link: String, device: String, publicKey: String, had: String): String
-    /** How far the `enroll` under way has come: 0 none, 1 reaching the PC, 2 the PC has the key and its user is being asked. */
-    external fun enrollStage(): Int
-    /** Ends the `enroll` under way: it returns at once with the code "cancelled", and the PC stops asking. */
-    external fun cancelEnroll()
+    external fun enroll(link: String, device: String, publicKey: String, had: String, id: Long): String
+    /** How far the pairing `id` has come: 0 not under way, 1 reaching the PC, 2 the PC has the key and its user is being asked. */
+    external fun enrollStage(id: Long): Int
+    /** Ends the pairing `id`: its `enroll` returns at once with the code "cancelled" (also when it has not begun yet), and the PC stops asking. */
+    external fun cancelEnroll(id: Long)
 
     /** BLOCKING. Connects and logs in. `host` is the stored host object as a JSON string. `signer.sign` is called once.
      *  {"ok":true,"link":7,"keeps":true,"address":"192.168.1.20"} : "keeps" says whether the PC keeps terminals running (it has lumen); if false, tabs are plain shells that end with the connection. "address" is the one that answered.

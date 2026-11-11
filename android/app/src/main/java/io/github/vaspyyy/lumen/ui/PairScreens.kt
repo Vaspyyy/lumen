@@ -71,6 +71,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -78,6 +79,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.vaspyyy.lumen.R
@@ -189,22 +191,37 @@ fun OfferSummary(offer: Offer, modifier: Modifier = Modifier, flat: Boolean = fa
             Icon(Icons.monitor, null, tint = Lumen.accent, modifier = Modifier.size(22.dp))
             Spacer(Modifier.width(12.dp))
             Column {
-                Text(offer.label, style = MaterialTheme.typography.titleMedium, color = Lumen.fg)
-                Text(stringResource(R.string.as_user, offer.user), style = MaterialTheme.typography.bodySmall, color = Lumen.fg3)
+                Text(offer.label, style = MaterialTheme.typography.titleMedium, color = Lumen.fg, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(
+                    stringResource(R.string.as_user, offer.user),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Lumen.fg3,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
         if (offer.addresses.isNotEmpty()) {
             Spacer(Modifier.height(14.dp))
+            // a code can name many addresses: the first few say where it leads, the buttons stay in reach
+            val shown = offer.addresses.take(4)
+            val more = offer.addresses.size - shown.size
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                offer.addresses.forEach { a ->
+                val chip = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Lumen.surface2)
+                    .padding(horizontal = 9.dp, vertical = 4.dp)
+                shown.forEach { a ->
                     Text(
                         if (offer.port != 22) "$a:${offer.port}" else a,
                         style = Mono.copy(fontSize = 12.5.sp, color = Lumen.fg2),
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Lumen.surface2)
-                            .padding(horizontal = 9.dp, vertical = 4.dp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = chip,
                     )
+                }
+                if (more > 0) {
+                    Text(pluralStringResource(R.plurals.more_addresses, more, more), style = Mono.copy(fontSize = 12.5.sp, color = Lumen.fg3), modifier = chip)
                 }
             }
         }
@@ -238,12 +255,15 @@ fun ConfirmLink(pending: PendingLink?, onPair: () -> Unit, onDismiss: () -> Unit
                     .background(Lumen.surface2)
                     .border(1.dp, Lumen.line, RoundedCornerShape(28.dp))
                     .clickable(remember { MutableInteractionSource() }, null) {}
+                    .verticalScroll(rememberScrollState())
                     .padding(24.dp),
             ) {
                 Text(
                     stringResource(R.string.confirm_link_title, p.offer.label, p.offer.user),
                     style = MaterialTheme.typography.displaySmall,
                     color = Lumen.fg,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.height(10.dp))
                 Text(stringResource(R.string.confirm_link_body), style = MaterialTheme.typography.bodyMedium, color = Lumen.fg3)

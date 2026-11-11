@@ -128,6 +128,11 @@ impl Offer {
         if user.is_empty() || port == 0 || addresses.is_empty() || host_keys.is_empty() || !rest.is_empty() {
             return Err(OfferError::Damaged);
         }
+        // The phone shows these next to the question whether to pair: they have
+        // to read as they are. `lumen pair` writes none that don't.
+        if !reads_plain(&user) || !reads_plain(&label) || !addresses.iter().all(|address| reads_plain(address)) {
+            return Err(OfferError::Damaged);
+        }
         Ok(Offer { user, port, label, seed, addresses, host_keys })
     }
 
@@ -259,15 +264,29 @@ pub struct SessionInfo {
     pub created: u64,
 }
 
+/// What can't be seen but turns text around or hides it: a name shown next
+/// to a question must read as it is.
+fn steers(c: char) -> bool {
+    matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{206f}' | '\u{feff}')
+}
+
+/// Whether a text reads as it is written: no control characters (a new line
+/// among them) and nothing that turns text around or hides it.
+pub fn reads_plain(text: &str) -> bool {
+    !text.chars().any(|c| c.is_control() || steers(c))
+}
+
 /// A name somebody else chose, made safe to print and to keep in a file of
 /// lines: what can be seen stays, at most 48 characters of it.
 pub fn clean_name(name: &str) -> String {
-    // what can't be seen but turns text around or hides it: a name shown next to
-    // a question must read as it is
-    let steers =
-        |c: char| matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{206f}' | '\u{feff}');
-    let cleaned: String = name
-        .chars()
+    let cleaned = clean_text(name);
+    if cleaned.is_empty() { "phone".into() } else { cleaned }
+}
+
+/// What can be seen of a text, at most 48 characters of it. Nothing may be
+/// left.
+pub fn clean_text(text: &str) -> String {
+    text.chars()
         .filter(|&c| !steers(c))
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect::<String>()
@@ -275,8 +294,7 @@ pub fn clean_name(name: &str) -> String {
         .trim_matches(|c: char| c.is_whitespace() || c == '-')
         .chars()
         .take(48)
-        .collect();
-    if cleaned.is_empty() { "phone".into() } else { cleaned }
+        .collect()
 }
 
 /// Whether a session can be called this: letters, digits, `-`, `_` and `.`,
@@ -328,6 +346,13 @@ mod tests {
         // a format this lumen doesn't know yet
         let newer = format!("{LINK_PREFIX}{}", URL_SAFE_NO_PAD.encode([9u8, 0, 22]));
         assert_eq!(Offer::from_link(&newer), Err(OfferError::Newer(9)));
+        // a name that reads other than it is written, or breaks the line
+        for label in ["desk\u{202e}ksed", "desk\nYes, this is your PC", "de\u{200b}sk"] {
+            let odd = Offer { label: label.into(), ..offer() };
+            assert_eq!(Offer::from_link(&odd.to_link()), Err(OfferError::Damaged), "{label:?}");
+        }
+        let odd = Offer { user: "ada\u{202e}".into(), ..offer() };
+        assert_eq!(Offer::from_link(&odd.to_link()), Err(OfferError::Damaged));
         // nowhere to go, nothing to check the PC by
         let mut nowhere = offer();
         nowhere.addresses.clear();

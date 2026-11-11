@@ -73,6 +73,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
@@ -101,6 +103,17 @@ fun ScanScreen(model: AppModel, onBack: () -> Unit, onType: () -> Unit) {
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         granted = it
         asked = true
+    }
+    // the camera may have been allowed in the system's settings meanwhile
+    val screen = LocalLifecycleOwner.current
+    DisposableEffect(screen) {
+        val back = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+            }
+        }
+        screen.lifecycle.addObserver(back)
+        onDispose { screen.lifecycle.removeObserver(back) }
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
@@ -201,7 +214,10 @@ private fun Scanner(model: AppModel) {
     DisposableEffect(owner) {
         val future = ProcessCameraProvider.getInstance(context)
         var provider: ProcessCameraProvider? = null
+        var gone = false
         future.addListener({
+            // the screen may have been left before the camera was ready: it stays off then
+            if (gone) return@addListener
             val p = runCatching { future.get() }.getOrNull() ?: return@addListener
             provider = p
             val pre = Preview.Builder().build().also { it.surfaceProvider = preview.surfaceProvider }
@@ -220,6 +236,7 @@ private fun Scanner(model: AppModel) {
             }.onFailure { L.w("scan: could not open the camera", it) }
         }, ContextCompat.getMainExecutor(context))
         onDispose {
+            gone = true
             provider?.unbindAll()
             cameraHolder.value = null
             executor.shutdown()

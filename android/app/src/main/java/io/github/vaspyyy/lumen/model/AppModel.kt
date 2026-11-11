@@ -3,8 +3,11 @@ package io.github.vaspyyy.lumen.model
 import android.app.Application
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -13,9 +16,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.DefaultLifecycleObserver
-import androidx.lifecycle.LifecycleOwner
-import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import io.github.vaspyyy.lumen.BuildConfig
 import io.github.vaspyyy.lumen.L
@@ -29,8 +29,12 @@ import io.github.vaspyyy.lumen.data.strings
 import io.github.vaspyyy.lumen.keys.Authenticator
 import io.github.vaspyyy.lumen.keys.KeySigner
 import io.github.vaspyyy.lumen.keys.KeyVault
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -79,7 +83,8 @@ sealed interface Conn {
     data class Connected(val link: Long, val keeps: Boolean, val address: String = "") : Conn
     /** Lost, and trying again in [seconds]. */
     data class Reconnecting(val attempt: Int, val seconds: Int, val reason: String) : Conn
-    data class Failed(val message: String) : Conn
+    /** [network]: the PC did not answer, which a network that is back can change. */
+    data class Failed(val message: String, val network: Boolean = false) : Conn
     data object AuthCancelled : Conn
     /** The PC no longer accepts this phone (it was unpaired there). */
     data object Refused : Conn
@@ -96,6 +101,9 @@ data class Kept(val name: String, val title: String, val cwd: String)
 data class Grid(val cols: Int, val rows: Int, val cellWidth: Int, val cellHeight: Int)
 
 data class Notice(val id: Int, val text: String)
+
+/** The most text Android's clipboard is given at once: it takes about a megabyte, at two bytes a character. */
+private const val CLIPBOARD_MAX = 400_000
 
 class AppModel(app: Application) : AndroidViewModel(app) {
     private val store = Store(app)
@@ -138,16 +146,34 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     var grid by mutableStateOf<Grid?>(null)
         private set
 
+    /**
+     * For what has to be finished whoever stops caring: giving a connection or
+     * a tab back to the core, deleting a key. Not tied to this model's life.
+     */
+    private val detached = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     private var connectJob: Job? = null
     private var connGen = 0
+    /** The owner was wanted while the app was away: logging in goes on when it is in front again. */
+    private var waitsForFront = false
     private var pairJob: Job? = null
     private var pairGen = 0
+    /** The number the core knows the pairing under way by, or 0. */
+    private var enrollId = 0L
+    /** Names of terminals that are being opened: a second tap must not open them twice. */
+    private val opening = mutableSetOf<String>()
+    private var addingTab = false
     /** The key of the pairing under way, until a PC is stored with it: a pairing that ends otherwise takes it along. */
     private var pairKey: String? = null
     private val slug = Device.slug(app)
 
-    private val foreground = object : DefaultLifecycleObserver {
-        override fun onStart(owner: LifecycleOwner) = checkAlive()
+    /** Keys no paired PC uses go, once, before a pairing makes a new one. */
+    private val sweep: Job
+
+    private val network = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            main.post { onNetwork() }
+        }
     }
 
     init {
@@ -159,7 +185,10 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             L.e("core: could not load liblumen_mobile", t)
         }
         if (coreError == null && current != null) route = Route.Terminal
-        ProcessLifecycleOwner.get().lifecycle.addObserver(foreground)
+        val used = pcs.map { it.keyAlias }.toSet()
+        // only when every pairing could be read: otherwise a key might still be wanted
+        sweep = detached.launch { if (store.intact) KeyVault.sweep(used) }
+        runCatching { app.getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(network) }
     }
 
     private var started = false
@@ -176,10 +205,49 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         if (link == null && coreError == null && current != null) connect()
     }
 
+    /** The app is in front again (and when it starts). */
+    fun onFront() {
+        if (!started) return
+        when (val c = conn) {
+            is Conn.Connected -> checkAlive()
+            Conn.AuthCancelled -> if (waitsForFront) connect()
+            // it may have been the network, which may be back
+            is Conn.Failed -> if (c.network) connect()
+            else -> Unit
+        }
+    }
+
+    /** The phone has a network (again, or another one). */
+    private fun onNetwork() {
+        if (!started) return
+        when (val c = conn) {
+            // what was connected over the old network is gone with it: find out now, not at the next keepalive
+            is Conn.Connected -> checkAlive()
+            is Conn.Failed -> if (c.network) connect(auto = true)
+            is Conn.Reconnecting -> connect(auto = true)
+            else -> Unit
+        }
+    }
+
     override fun onCleared() {
-        ProcessLifecycleOwner.get().lifecycle.removeObserver(foreground)
+        runCatching { getApplication<Application>().getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(network) }
         dropTabs(kill = false)
-        (conn as? Conn.Connected)?.let { c -> Thread { runCatching { Core.disconnect(c.link) } }.start() }
+        (conn as? Conn.Connected)?.let { c -> detached.launch { runCatching { Core.disconnect(c.link) } } }
+    }
+
+    /**
+     * A blocking call of the core, or of the key store, that makes something
+     * which has to be given back: a connection, a tab, a key. If whoever
+     * asked is gone before the answer is there, [unused] gets it instead.
+     */
+    private suspend fun <T> made(unused: (T) -> Unit, call: () -> T): T {
+        val answer = detached.async { call() }
+        try {
+            return answer.await()
+        } catch (e: CancellationException) {
+            detached.launch { runCatching { unused(answer.await()) } }
+            throw e
+        }
     }
 
     private fun str(id: Int, vararg args: Any) = getApplication<Application>().getString(id, *args)
@@ -192,11 +260,18 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         if (notice?.id == id) notice = null
     }
 
-    fun copy(text: String, notice: Boolean = true) {
+    /** Puts text on the clipboard. False if Android did not take it (it takes about 500 000 characters at most). */
+    fun copy(text: String, notice: Boolean = true): Boolean {
         val cm = getApplication<Application>().getSystemService(ClipboardManager::class.java)
-        cm.setPrimaryClip(ClipData.newPlainText("lumen", text))
+        val took = text.length <= CLIPBOARD_MAX && runCatching { cm.setPrimaryClip(ClipData.newPlainText("lumen", text)) }.isSuccess
+        if (!took) {
+            L.w("copy: ${text.length} characters are more than the clipboard takes")
+            notify(str(R.string.copy_too_long))
+            return false
+        }
         // Android 13 and later show their own preview of what was copied.
         if (notice && android.os.Build.VERSION.SDK_INT < 33) notify(str(R.string.copied))
+        return true
     }
 
     fun clipboardText(): String? {
@@ -242,14 +317,25 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         if (coreError != null) return
         L.i("link: a pairing link arrived from outside")
         viewModelScope.launch {
-            offer(link).onSuccess { pending = PendingLink(link.trim(), it) }
-                .onFailure { notify(it.message ?: str(R.string.not_a_code)) }
+            val read = offer(link)
+            // The question on screen stays the one that was asked: a link that
+            // comes while it stands can't take its place under the finger.
+            if (pending != null) return@launch
+            read.onSuccess { pending = PendingLink(link.trim(), it) }
+                .onFailure {
+                    notify(it.message ?: str(R.string.not_a_code))
+                    connectStored()
+                }
         }
     }
 
     fun dismissPending() {
         pending = null
-        // the link came first when it opened the app: now for the PC that is stored
+        connectStored()
+    }
+
+    /** A link came first when it opened the app: once it is dealt with, the PC that is stored gets its turn. */
+    private fun connectStored() {
         if (route == Route.Terminal && conn == Conn.Idle && current != null) connect()
     }
 
@@ -260,16 +346,22 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         startPairing(p.link, p.offer)
     }
 
-    /** The pairings this phone has with a PC already: the same user there, and a key the PC proves itself with in common. */
-    private fun pairedBefore(user: String, proofs: Collection<String>): List<Pc> = pcs.filter { old ->
-        old.user == user &&
-            runCatching { JSONObject(old.host).optJSONArray("host_keys").strings() }.getOrDefault(emptyList()).any { it in proofs }
-    }
+    /** The host key a PC proved to have when it was paired, or "". */
+    private fun proven(pc: Pc): String = runCatching { JSONObject(pc.host).optString("proven") }.getOrDefault("")
+
+    /**
+     * The pairings this phone has with the machine that proved the host key
+     * [machine], for the same user there. What a pairing code says about a
+     * PC's keys is not enough to be that PC: it has to prove one.
+     */
+    private fun pairedBefore(user: String, machine: String): List<Pc> =
+        if (machine.isBlank()) emptyList() else pcs.filter { it.user == user && proven(it) == machine }
 
     fun startPairing(link: String, offer: Offer) {
         stopEnroll()
         pairJob?.cancel()
         val gen = ++pairGen
+        enrollId = gen.toLong()
         val ctx = getApplication<Application>()
         if (route != Route.Pairing && route != Route.Scan && route != Route.TypeCode) pairFrom = route
         route = Route.Pairing
@@ -281,10 +373,12 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 pairing = pairing?.copy(step = PairStep.NoScreenLock)
                 return@launch
             }
+            sweep.join()
             val alias = KeyVault.newAlias()
             L.i("pair: making a key in the secure hardware")
             pairKey = alias
-            val made = withContext(io) { KeyVault.create(ctx, alias) }
+            // a pairing that is given up while the key is made must not leave the key behind
+            val made = made(unused = { KeyVault.delete(alias, quiet = true) }) { KeyVault.create(ctx, alias) }
             val pub = when (made) {
                 is KeyVault.Made.Ok -> {
                     L.i("pair: key made (StrongBox: ${made.strongBox})")
@@ -312,17 +406,21 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             val ask = launch {
                 while (pairing?.step == PairStep.Reach) {
                     delay(120)
-                    if (runCatching { Core.enrollStage() }.getOrDefault(0) == 2 && pairing?.step == PairStep.Reach) {
+                    if (runCatching { Core.enrollStage(gen.toLong()) }.getOrDefault(0) == 2 && pairing?.step == PairStep.Reach) {
                         pairing = pairing?.copy(step = PairStep.Confirm)
                     }
                 }
             }
-            // This PC paired before: the PC is told which keys the new one replaces,
-            // so that no line of a key that is gone stays behind there.
-            val had = pairedBefore(offer.user, offer.hostKeys)
-                .mapNotNull { old -> runCatching { JSONObject(old.host).optString("public_key") }.getOrNull()?.takeIf { it.isNotBlank() } }
+            // A PC that was paired before is told which key the new one replaces,
+            // so that no line of a key that is gone stays behind there. The core
+            // names only the keys of the machine that answers and proves to be it.
+            val had = pcs.filter { it.user == offer.user }.mapNotNull { old ->
+                val key = runCatching { JSONObject(old.host).optString("public_key") }.getOrDefault("")
+                val machine = proven(old)
+                if (key.isBlank() || machine.isBlank()) null else "$machine $key"
+            }
             val res = withContext(io) {
-                runCatching { JSONObject(Core.enroll(link, Device.name(ctx), pub, had.joinToString("\n"))) }
+                runCatching { JSONObject(Core.enroll(link, Device.name(ctx), pub, had.joinToString("\n"), gen.toLong())) }
                     .getOrElse { JSONObject().put("ok", false).put("code", "failed").put("error", it.message ?: "") }
             }
             ask.cancel()
@@ -342,10 +440,10 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             L.i("pair: done")
-            // The same PC paired again (it proves itself with a key this phone
-            // knows, for the same user) takes the place of its old entry: the
-            // old key goes, the terminals it had open are found again.
-            val before = pairedBefore(offer.user, host.optJSONArray("host_keys").strings())
+            // The same PC paired again (it proved the host key the old pairing
+            // was made with, for the same user) takes the place of its old
+            // entry: the old key goes, the terminals it had open are found again.
+            val before = pairedBefore(offer.user, host.optString("proven"))
             if (before.isNotEmpty()) {
                 L.i("pair: replaces ${before.size} earlier pairing(s) with this PC")
                 if (before.any { it.id == current?.id }) disconnectNow()
@@ -362,6 +460,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             )
             savePcs(pcs - before.toSet() + pc)
             pairKey = null
+            enrollId = 0L
             pairing = pairing?.copy(step = PairStep.Done)
             delay(1700)
             if (gen != pairGen) return@launch
@@ -377,15 +476,17 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     /** Ends the exchange with the PC that is under way, if one is: the PC stops asking, and the key made for it goes. */
     private fun stopEnroll() {
-        if (pairJob?.isActive == true) {
-            L.i("pair: stopped")
-            runCatching { Core.cancelEnroll() }
+        if (enrollId != 0L) {
+            if (pairJob?.isActive == true) L.i("pair: stopped")
+            // by its number: the exchange may not have begun yet, and it still must not
+            runCatching { Core.cancelEnroll(enrollId) }
+            enrollId = 0L
         }
         dropPairKey()
     }
 
     private fun dropPairKey() {
-        pairKey?.let { KeyVault.delete(it) }
+        pairKey?.let { alias -> detached.launch { KeyVault.delete(alias) } }
         pairKey = null
     }
 
@@ -442,11 +543,13 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     private val link: Long get() = (conn as? Conn.Connected)?.link ?: 0L
     private val keeps: Boolean get() = (conn as? Conn.Connected)?.keeps == true
 
-    fun connect(openFirst: Boolean = false) {
+    /** Logs in to the current PC. With [auto], an attempt that fails for the network's sake is repeated a few times. */
+    fun connect(openFirst: Boolean = false, auto: Boolean = false) {
         val pc = current ?: return
         connectJob?.cancel()
+        waitsForFront = false
         val gen = ++connGen
-        connectJob = viewModelScope.launch { run(pc, gen, auto = false, openFirst = openFirst) }
+        connectJob = viewModelScope.launch { run(pc, gen, auto, openFirst) }
     }
 
     private enum class Outcome { Ok, Stop, Retry }
@@ -458,7 +561,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         while (true) {
             if (auto) {
                 if (attempt >= waits.size) {
-                    conn = Conn.Failed(lastError.ifBlank { str(R.string.conn_lost_generic) })
+                    conn = Conn.Failed(lastError.ifBlank { str(R.string.conn_lost_generic) }, network = true)
                     return
                 }
                 for (s in waits[attempt] downTo 1) {
@@ -474,7 +577,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 Outcome.Retry -> {
                     lastError = error
                     if (!auto) {
-                        conn = Conn.Failed(error)
+                        conn = Conn.Failed(error, network = true)
                         return
                     }
                     attempt++
@@ -500,7 +603,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             val ok = Authenticator.authenticate(str(R.string.auth_title, pc.label), str(R.string.auth_subtitle))
             if (gen != connGen) return Outcome.Stop to ""
             if (!ok) {
-                conn = Conn.AuthCancelled
+                awaitOwner()
                 return Outcome.Stop to ""
             }
             probe = withContext(io) { KeyVault.probe(pc.keyAlias) }
@@ -524,15 +627,14 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         conn = Conn.Connecting(addresses)
         L.i("connect: logging in to ${pc.label} (${addresses.joinToString()})")
         val signer = KeySigner(pc.keyAlias, str(R.string.auth_title, pc.label), str(R.string.auth_subtitle))
-        val res = withContext(io) {
+        // a connection nobody waits for any more is closed again, not left open
+        val giveBack = { r: JSONObject -> if (r.optBoolean("ok")) Core.disconnect(r.optLong("link")) }
+        val res = made(giveBack) {
             runCatching { JSONObject(Core.connect(pc.host, signer)) }
                 .getOrElse { JSONObject().put("ok", false).put("code", "failed").put("error", it.message ?: "") }
         }
         if (gen != connGen) {
-            if (res.optBoolean("ok")) {
-                val stale = res.optLong("link")
-                withContext(io) { runCatching { Core.disconnect(stale) } }
-            }
+            detached.launch { runCatching { giveBack(res) } }
             return Outcome.Stop to ""
         }
         if (res.optBoolean("ok")) {
@@ -549,9 +651,15 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         return when (code) {
             "refused" -> { conn = Conn.Refused; Outcome.Stop to error }
             "wrong-host" -> { conn = Conn.WrongHost; Outcome.Stop to error }
-            "cancelled" -> { conn = Conn.AuthCancelled; Outcome.Stop to error }
+            "cancelled" -> { awaitOwner(); Outcome.Stop to error }
             else -> Outcome.Retry to error
         }
+    }
+
+    /** The owner did not unlock the key. If that is because the app was away, logging in goes on when it is back. */
+    private fun awaitOwner() {
+        conn = Conn.AuthCancelled
+        waitsForFront = Authenticator.takeMissed()
     }
 
     private fun hostAddresses(pc: Pc): List<String> {
@@ -587,7 +695,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         val c = conn
         conn = Conn.Idle
         kept = emptyList()
-        if (c is Conn.Connected) viewModelScope.launch(io) { runCatching { Core.disconnect(c.link) } }
+        if (c is Conn.Connected) detached.launch { runCatching { Core.disconnect(c.link) } }
     }
 
     private fun dropTabs(kill: Boolean) {
@@ -603,8 +711,9 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         val pc = current ?: return
         tabs.toList().forEach { closeHandle(it) }
         if (!c.keeps) tabs.clear()
-        viewModelScope.launch(io) { runCatching { Core.disconnect(c.link) } }
+        detached.launch { runCatching { Core.disconnect(c.link) } }
         connectJob?.cancel()
+        waitsForFront = false
         val gen = ++connGen
         connectJob = viewModelScope.launch { run(pc, gen, auto = true, openFirst = false, reason = reason) }
     }
@@ -641,10 +750,17 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             tab.onDirty?.invoke()
         }
         override fun title(title: String) = onMain { tab.title = title }
-        override fun bell() = onMain { tab.bells++ }
+        override fun bell() = onMain {
+            // a program that rings without end is felt a few times a second, not more
+            val now = SystemClock.uptimeMillis()
+            if (now - tab.lastBell >= 250) {
+                tab.lastBell = now
+                tab.bells++
+            }
+        }
         override fun clipboard(text: String) = onMain {
-            copy(text, notice = false)
-            notify(str(R.string.program_copied))
+            // only the terminal in front may put something on the clipboard
+            if (tabs.getOrNull(active) === tab && copy(text, notice = false)) notify(str(R.string.program_copied))
         }
         override fun ended(status: Int) = onMain { onEnded(tab, status) }
         override fun lost(reason: String) = onMain { onLost(link, reason) }
@@ -653,17 +769,27 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     private suspend fun openTab(name: String, persist: Boolean, select: Boolean = true) {
         val l = link
         if (l == 0L) return
+        // one tab to a terminal: a second tap while the first is still opening does nothing
+        if (tabs.any { it.name == name } || !opening.add(name)) return
+        try {
+            openNow(l, name, persist, select)
+        } finally {
+            opening -= name
+        }
+    }
+
+    private suspend fun openNow(l: Long, name: String, persist: Boolean, select: Boolean) {
         val g = awaitGrid()
         val tab = Tab(name)
         tab.gen = 1
         val ev = events(tab, tab.gen, l)
-        val h = withContext(io) { runCatching { Core.open(l, name, g.cols, g.rows, g.cellWidth, g.cellHeight, ev) }.getOrDefault(0L) }
+        val h = made(closeUnused) { runCatching { Core.open(l, name, g.cols, g.rows, g.cellWidth, g.cellHeight, ev) }.getOrDefault(0L) }
         if (h == 0L) {
             L.w("tab: could not open $name")
             return
         }
         if (link != l) {
-            withContext(io) { runCatching { Core.close(h) } }
+            detached.launch { runCatching { Core.close(h) } }
             return
         }
         tab.handle = h
@@ -676,6 +802,9 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         kept = kept.filterNot { it.name == name }
     }
 
+    /** A tab nobody waits for any more lets go of its terminal. */
+    private val closeUnused = { h: Long -> if (h != 0L) Core.close(h) }
+
     private suspend fun reopen(tab: Tab) {
         val l = link
         if (l == 0L) return
@@ -683,11 +812,12 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         tab.gen++
         val ev = events(tab, tab.gen, l)
         // Not marked dirty: the last screen stays until the PC sends the new one.
-        val h = withContext(io) { runCatching { Core.open(l, tab.name, g.cols, g.rows, g.cellWidth, g.cellHeight, ev) }.getOrDefault(0L) }
+        val h = made(closeUnused) { runCatching { Core.open(l, tab.name, g.cols, g.rows, g.cellWidth, g.cellHeight, ev) }.getOrDefault(0L) }
         if (link != l) {
-            if (h != 0L) withContext(io) { runCatching { Core.close(h) } }
+            detached.launch { runCatching { closeUnused(h) } }
             return
         }
+        if (h == 0L) L.w("tab: could not open ${tab.name} again")
         tab.handle = h
         tab.cols = g.cols
         tab.rows = g.rows
@@ -697,28 +827,35 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         val h = tab.handle
         tab.handle = 0L
         tab.gen++
-        if (h != 0L) viewModelScope.launch(io) { runCatching { Core.close(h) } }
+        if (h != 0L) detached.launch { runCatching { Core.close(h) } }
     }
 
     fun newTab() {
+        // one at a time: two taps would be given the same free name
+        if (addingTab) return
+        addingTab = true
         viewModelScope.launch {
-            if (conn == Conn.Demo) {
-                openDemoTab()
-                return@launch
+            try {
+                if (conn == Conn.Demo) {
+                    openDemoTab()
+                    return@launch
+                }
+                val l = link
+                if (l == 0L) return@launch
+                if (!keeps) {
+                    openTab(freeName(emptySet()), persist = false)
+                    return@launch
+                }
+                val onPc = withContext(io) { parseSessions(runCatching { Core.sessions(l) }.getOrDefault("[]")) }.map { it.name }
+                openTab(freeName(onPc.toSet()), persist = true)
+            } finally {
+                addingTab = false
             }
-            val l = link
-            if (l == 0L) return@launch
-            if (!keeps) {
-                openTab(freeName(emptySet()), persist = false)
-                return@launch
-            }
-            val onPc = withContext(io) { parseSessions(runCatching { Core.sessions(l) }.getOrDefault("[]")) }.map { it.name }
-            openTab(freeName(onPc.toSet()), persist = true)
         }
     }
 
     private fun freeName(onPc: Set<String>): String {
-        val taken = onPc + tabs.map { it.name }
+        val taken = onPc + tabs.map { it.name } + opening
         var n = 1
         while ("$slug-$n" in taken) n++
         return "$slug-$n"
@@ -759,7 +896,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         val l = link
         val kill = !keepRunning && !tab.demo && l != 0L && keeps
         L.i("tab: closing ${tab.name}${if (kill) " and ending it on the PC" else ""}")
-        viewModelScope.launch(io) {
+        detached.launch {
             if (kill) runCatching { Core.kill(l, tab.name) }
             if (h != 0L) runCatching { Core.close(h) }
         }

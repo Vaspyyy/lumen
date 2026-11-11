@@ -68,6 +68,10 @@ lumen changes nothing else: not the SSH server's settings, not its keys, not the
 
 The code carries the fingerprints of the PC's SSH keys. The phone logs in only to a machine that proves it has one of them. Another machine at the same address is refused, on the first connection as on every later one, and the app says so. The phone never trusts a machine because it was the first to answer.
 
+The phone also remembers which of those keys the PC proved when it was paired. Only a machine that proves that same key counts as the same PC when you pair again: a code that merely names your PC's key, made by somebody else, pairs as a PC of its own and leaves the real one alone.
+
+What a program on the PC prints can't act on the phone by itself. A link says where it leads before it is opened, and a program can put text on the phone's clipboard only from the terminal you are looking at.
+
 ## Away from home
 
 The phone reaches the PC at the addresses the code named: the ones the PC had in your network when you paired. From outside, those don't lead anywhere.
@@ -93,7 +97,7 @@ A lost phone is not a way in by itself: the key can't be copied off it, and it w
 
 | Permission | For |
 | --- | --- |
-| Network | The connection to your PC. The app talks to nothing else: no statistics, no update check |
+| Network | The connection to your PC, and noticing when the phone has a network again. The app talks to nothing else: no statistics, no update check |
 | Camera | Scanning the code. Asked for when you scan, and you can type the code instead |
 | Fingerprint | Unlocking the key |
 

@@ -98,6 +98,15 @@
     <string name="copy">Copy</string>
     <string name="copied">Copied to the clipboard</string>
     <string name="program_copied">The program copied text to the clipboard</string>
+    <string name="copy_too_long">That is more text than the clipboard takes</string>
+    <string name="link_open">Open</string>
+    <string name="link_copy_path">Copy path</string>
+    <string name="link_no_app">No app on this phone opens that</string>
+    <string name="dismiss">Dismiss</string>
+    <plurals name="more_addresses">
+        <item quantity="one">+%1$d more</item>
+        <item quantity="other">+%1$d more</item>
+    </plurals>
     <string name="empty_title">No terminal open</string>
     <string name="empty_body">Open a new terminal on %1$s. It keeps running there when you close the app.</string>
     <string name="running_on_pc">Running on %1$s</string>

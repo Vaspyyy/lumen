@@ -23,7 +23,6 @@ class MainActivity : FragmentActivity() {
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
-        Authenticator.attach(this)
         setContent { LumenTheme { LumenApp(model) } }
         model.start(if (savedInstanceState == null) pairingLink(intent) else null)
     }
@@ -34,14 +33,16 @@ class MainActivity : FragmentActivity() {
         pairingLink(intent)?.let(model::receiveLink)
     }
 
-    override fun onResume() {
-        super.onResume()
+    // The system's prompt can be shown only while the activity is started.
+    override fun onStart() {
+        super.onStart()
         Authenticator.attach(this)
+        model.onFront()
     }
 
-    override fun onDestroy() {
+    override fun onStop() {
         Authenticator.detach(this)
-        super.onDestroy()
+        super.onStop()
     }
 
     /** The pairing link an intent carries, if it carries one that was not used before. */

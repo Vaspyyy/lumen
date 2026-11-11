@@ -24,6 +24,7 @@ import java.util.UUID
  */
 object KeyVault {
     private const val STORE = "AndroidKeyStore"
+    private const val PREFIX = "lumen-pc-"
     private const val AUTH_SECONDS = 20
     private val PROBE = "lumen: can this key sign right now?".toByteArray()
 
@@ -46,26 +47,29 @@ object KeyVault {
     fun hasScreenLock(context: Context): Boolean =
         context.getSystemService(KeyguardManager::class.java)?.isDeviceSecure == true
 
-    fun newAlias(): String = "lumen-pc-" + UUID.randomUUID().toString()
+    fun newAlias(): String = PREFIX + UUID.randomUUID().toString()
 
     fun create(context: Context, alias: String): Made {
         if (!hasScreenLock(context)) return Made.NoScreenLock
+        try {
+            return Made.Ok(alias, generate(alias, strongBox = true), strongBox = true)
+        } catch (e: Exception) {
+            // A phone without the chip says so. One with it can still fail there
+            // (the chip is busy, or full, or dislikes a parameter): the
+            // processor's protected area holds the key as safely against copying.
+            if (e is StrongBoxUnavailableException) L.i("key: no StrongBox on this phone, using the TEE")
+            else L.w("key: StrongBox could not make the key (${e.javaClass.simpleName}), using the TEE")
+            delete(alias, quiet = true)
+        }
         return try {
-            Made.Ok(alias, generate(alias, strongBox = true), strongBox = true)
-        } catch (e: StrongBoxUnavailableException) {
-            L.i("key: no StrongBox on this phone, using the TEE")
-            try {
-                Made.Ok(alias, generate(alias, strongBox = false), strongBox = false)
-            } catch (e2: Exception) {
-                failed(context, alias, e2)
-            }
+            Made.Ok(alias, generate(alias, strongBox = false), strongBox = false)
         } catch (e: Exception) {
             failed(context, alias, e)
         }
     }
 
     private fun failed(context: Context, alias: String, e: Exception): Made {
-        delete(alias)
+        delete(alias, quiet = true)
         if (!hasScreenLock(context)) return Made.NoScreenLock
         L.e("key: could not make the key (${e.javaClass.simpleName})", e)
         return Made.Failed(e.message ?: e.javaClass.simpleName)
@@ -94,10 +98,22 @@ object KeyVault {
 
     fun exists(alias: String): Boolean = runCatching { keyStore().containsAlias(alias) }.getOrDefault(false)
 
-    fun delete(alias: String) {
+    fun delete(alias: String, quiet: Boolean = false) {
         runCatching { keyStore().deleteEntry(alias) }
-            .onSuccess { L.i("key: deleted") }
+            .onSuccess { if (!quiet) L.i("key: deleted") }
             .onFailure { L.w("key: could not delete it", it) }
+    }
+
+    /**
+     * Deletes the keys no paired PC uses: what a pairing left behind that
+     * ended with the app (it was killed, or the phone restarted). [used] are
+     * the aliases of the paired PCs.
+     */
+    fun sweep(used: Set<String>) {
+        val left = runCatching { keyStore().aliases().toList() }.getOrDefault(emptyList())
+            .filter { it.startsWith(PREFIX) && it !in used }
+        left.forEach { delete(it, quiet = true) }
+        if (left.isNotEmpty()) L.i("key: removed ${left.size} that no PC uses")
     }
 
     /** Can the key sign right now, without asking the owner? Signs a fixed throwaway text to find out. */

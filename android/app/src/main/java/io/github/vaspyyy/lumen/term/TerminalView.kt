@@ -2,6 +2,7 @@ package io.github.vaspyyy.lumen.term
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.DashPathEffect
 import android.graphics.Paint
@@ -57,8 +58,14 @@ class TerminalView(context: Context, private val mods: StickyMods) : View(contex
         fun onSelection(shown: Boolean, x: Float, y: Float)
         /** Pinching: the font size so far; [done] when the fingers lift. */
         fun onFontSize(size: Float, done: Boolean)
-        fun onOpenLink(url: String)
-        fun onCopyLink(text: String)
+        /**
+         * A link was tapped, or (null) a tap went elsewhere. [target] is where
+         * it leads: for a file on the PC (`file://`, or a name in a `glint`
+         * listing) its path there, which can be copied; for anything else the
+         * address, which can be opened. What a link shows and where it leads
+         * are two things, so nothing is opened or copied on the tap itself.
+         */
+        fun onLink(target: String?, isFile: Boolean)
         fun copy(text: String)
         fun clipboard(): String?
     }
@@ -126,8 +133,8 @@ class TerminalView(context: Context, private val mods: StickyMods) : View(contex
     private var strikeY = 0f
     private var glowRadius = 1f
     private var glowColor = 0
-    private val padX = (6 * dm.density).roundToInt()
-    private val padTop = (8 * dm.density).roundToInt()
+    private var padX = (6 * dm.density).roundToInt()
+    private var padTop = (8 * dm.density).roundToInt()
     private var originX = 0
     private var originY = 0
 
@@ -173,14 +180,27 @@ class TerminalView(context: Context, private val mods: StickyMods) : View(contex
     private val dirtyListener: () -> Unit = { postInvalidateOnAnimation() }
 
     fun bind(t: Tab?) {
-        if (t === tab) return
-        tab?.onDirty = null
+        if (t === tab) {
+            // another view may have shown this tab meanwhile and taken its place
+            if (t != null && isAttachedToWindow && t.onDirty !== dirtyListener) {
+                t.onDirty = dirtyListener
+                refresh()
+            }
+            return
+        }
+        unlisten()
         tab = t
         t?.onDirty = dirtyListener
         needSnapshot = true
         selecting = false
         host?.onSelection(false, 0f, 0f)
         invalidate()
+    }
+
+    /** Stops listening to the tab, unless another view listens to it by now. */
+    private fun unlisten() {
+        val t = tab ?: return
+        if (t.onDirty === dirtyListener) t.onDirty = null
     }
 
     private val handle: Long get() = tab?.handle ?: 0L
@@ -223,6 +243,14 @@ class TerminalView(context: Context, private val mods: StickyMods) : View(contex
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         layoutGrid()
+    }
+
+    /** The display's density or the system's font size changed: everything measured in pixels is measured again. */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        padX = (6 * dm.density).roundToInt()
+        padTop = (8 * dm.density).roundToInt()
+        setFont(fontSize)
     }
 
     private fun layoutGrid() {
@@ -526,7 +554,9 @@ class TerminalView(context: Context, private val mods: StickyMods) : View(contex
 
     /**
      * The cursor stays lit while things happen and blinks, with a short fade,
-     * only once it has been quiet for a moment. Redraws only during fades.
+     * once it has been quiet for a moment. Redraws only during fades. After
+     * a while of nothing it stays lit and draws no more: a terminal left
+     * open costs the battery nothing.
      */
     private fun blinkAlpha(): Float {
         if (!hasFocus()) return 1f
@@ -536,6 +566,7 @@ class TerminalView(context: Context, private val mods: StickyMods) : View(contex
             postInvalidateDelayed(BLINK_AFTER - quiet + 1)
             return 1f
         }
+        if (quiet > BLINK_UNTIL) return 1f
         val ph = ((quiet - BLINK_AFTER) % BLINK_PERIOD).toFloat() / BLINK_PERIOD
         // lit 0..0.5, fade out 0.5..0.6, dark 0.6..0.9, fade in 0.9..1
         return when {
@@ -696,16 +727,20 @@ class TerminalView(context: Context, private val mods: StickyMods) : View(contex
         }
         host?.onSelection(false, 0f, 0f)
         showKeyboard()
-        if (h == 0L) return
+        if (h == 0L) {
+            host?.onLink(null, false)
+            return
+        }
         val col = colAt(e.x)
         val row = rowAt(e.y)
         if (Core.mouse(h, 0, 0, col, row, 0)) {
             Core.mouse(h, 1, 0, col, row, 0)
+            host?.onLink(null, false)
             return
         }
-        val link = Core.linkAt(h, col, row) ?: return
-        if (link.startsWith("http://", true) || link.startsWith("https://", true)) host?.onOpenLink(link)
-        else host?.onCopyLink(pathOf(link) ?: link)
+        val link = Core.linkAt(h, col, row)
+        val path = link?.let { pathOf(it) }
+        host?.onLink(path ?: link, path != null)
     }
 
     /**
@@ -856,9 +891,10 @@ class TerminalView(context: Context, private val mods: StickyMods) : View(contex
 
         override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
             if (composing.isNotEmpty()) {
-                val keep = composing.dropLast(beforeLength)
-                replace(composing, keep)
-                composing = keep
+                var end = (composing.length - beforeLength).coerceAtLeast(0)
+                // never between the two halves of one character
+                if (end in 1 until composing.length && Character.isLowSurrogate(composing[end])) end--
+                keepComposing(end)
                 return true
             }
             repeat(beforeLength.coerceAtMost(256)) { sendKey(KEY_BACKSPACE, mods.consume()) }
@@ -866,8 +902,20 @@ class TerminalView(context: Context, private val mods: StickyMods) : View(contex
             return true
         }
 
-        override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int) =
-            deleteSurroundingText(beforeLength, afterLength)
+        override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
+            if (composing.isNotEmpty()) {
+                val had = composing.codePointCount(0, composing.length)
+                keepComposing(composing.offsetByCodePoints(0, (had - beforeLength).coerceAtLeast(0)))
+                return true
+            }
+            return deleteSurroundingText(beforeLength, afterLength)
+        }
+
+        private fun keepComposing(end: Int) {
+            val keep = composing.substring(0, end)
+            replace(composing, keep)
+            composing = keep
+        }
 
         override fun sendKeyEvent(event: KeyEvent): Boolean {
             if (event.action == KeyEvent.ACTION_DOWN) onKeyDown(event.keyCode, event)
@@ -958,10 +1006,18 @@ class TerminalView(context: Context, private val mods: StickyMods) : View(contex
             sendKey(special, hw or mods.consume())
             return true
         }
-        val uc = event.getUnicodeChar(meta and (KeyEvent.META_CTRL_MASK or KeyEvent.META_ALT_MASK or KeyEvent.META_META_MASK).inv())
+        val plain = event.getUnicodeChar(meta and (KeyEvent.META_CTRL_MASK or KeyEvent.META_ALT_MASK or KeyEvent.META_META_MASK).inv())
+        // The right Alt is AltGr on many keyboards: with it, a German one types
+        // @ { [ ] } \ | ~. When a key gives another character with it than
+        // without, that character was typed, and Alt was no modifier.
+        val altGr = meta and KeyEvent.META_ALT_RIGHT_ON != 0 && meta and KeyEvent.META_ALT_LEFT_ON == 0
+        val graph = if (altGr) event.getUnicodeChar(meta and (KeyEvent.META_CTRL_MASK or KeyEvent.META_META_MASK).inv()) else 0
+        val typed = graph != 0 && graph and KeyCharacterMap.COMBINING_ACCENT == 0 && graph != plain
+        val uc = if (typed) graph else plain
         if (uc == 0 || uc and KeyCharacterMap.COMBINING_ACCENT != 0) return super.onKeyDown(keyCode, event)
         touched()
-        Core.text(h, String(Character.toChars(uc)), (hw and 1.inv()) or mods.consume())
+        val held = if (typed) hw and 2.inv() else hw
+        Core.text(h, String(Character.toChars(uc)), (held and 1.inv()) or mods.consume())
         if (scrolledBack) refresh()
         return true
     }
@@ -971,9 +1027,15 @@ class TerminalView(context: Context, private val mods: StickyMods) : View(contex
         return super.onKeyUp(keyCode, event)
     }
 
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        tab?.onDirty = dirtyListener
+        refresh()
+    }
+
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
-        tab?.onDirty = null
+        unlisten()
         removeCallbacks(reportGrid)
     }
 
@@ -985,6 +1047,8 @@ class TerminalView(context: Context, private val mods: StickyMods) : View(contex
         const val KEY_DELETE = 14
         private const val BLINK_AFTER = 900L
         private const val BLINK_PERIOD = 1100L
+        /** Blinking ends when this long has passed without anything typed or printed. */
+        private const val BLINK_UNTIL = 20_000L
         private const val TWO_PI = (2 * Math.PI).toFloat()
         private const val SURFACE = 0xFF12111A.toInt()
         private val VOLUME_KEYS = intArrayOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE)

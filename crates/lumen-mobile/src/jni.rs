@@ -5,9 +5,9 @@
 //! off its main thread. What a terminal has to say goes back through the
 //! app's `TabEvents`, on threads of ours.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicI32, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -24,11 +24,27 @@ use crate::screen::Size;
 static LINKS: Mutex<Option<HashMap<i64, Arc<Link>>>> = Mutex::new(None);
 static TABS: Mutex<Option<HashMap<i64, Arc<Tab>>>> = Mutex::new(None);
 static NEXT: AtomicI64 = AtomicI64::new(1);
-/// How far the pairing that is under way has come: 0 none, 1 reaching the
-/// PC, 2 the PC's user is being asked.
-static ENROLL_STAGE: AtomicI32 = AtomicI32::new(0);
-/// What ends the pairing that is under way, if the app gives up on it.
-static ENROLL_STOP: Mutex<Option<oneshot::Sender<()>>> = Mutex::new(None);
+
+/// The pairings under way, by the number the app gave each. A pairing can be
+/// stopped before `enroll` has begun (the app makes the key first), and a
+/// late end of one must not touch the next: so everything goes by number.
+struct Enrolls {
+    /// How far each has come: 1 reaching the PC, 2 the PC's user is being asked.
+    stage: BTreeMap<i64, i32>,
+    stop: BTreeMap<i64, oneshot::Sender<()>>,
+    /// Stopped before they began: they end at once when they do.
+    stopped: BTreeSet<i64>,
+    /// The highest number that has ended. The app counts upwards, so what
+    /// is stopped at or below it has nothing left to stop.
+    ended: i64,
+}
+
+static ENROLLS: Mutex<Enrolls> =
+    Mutex::new(Enrolls { stage: BTreeMap::new(), stop: BTreeMap::new(), stopped: BTreeSet::new(), ended: 0 });
+
+fn enrolls() -> MutexGuard<'static, Enrolls> {
+    ENROLLS.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn held<T>(all: &'static Mutex<Option<HashMap<i64, T>>>) -> MutexGuard<'static, Option<HashMap<i64, T>>> {
     let mut all = all.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -200,23 +216,51 @@ pub extern "system" fn Java_io_github_vaspyyy_lumen_core_Core_enroll<'l>(
     device: JString<'l>,
     public_key: JString<'l>,
     had: JString<'l>,
+    id: jlong,
 ) -> jstring {
     let (link, device, public_key) = (text(&mut env, &link), text(&mut env, &device), text(&mut env, &public_key));
-    // the keys this phone had for the PC before, one to a line
-    let had: Vec<String> =
-        text(&mut env, &had).lines().map(str::to_string).filter(|line| !line.trim().is_empty()).collect();
+    // the pairings this phone has, one to a line: the host key that PC proved (in hex), then the phone's key for it
+    let had: Vec<(String, String)> = text(&mut env, &had)
+        .lines()
+        .filter_map(|line| line.trim().split_once(' '))
+        .map(|(machine, key)| (machine.to_string(), key.trim().to_string()))
+        .collect();
     let answer = guarded(String::new(), || {
-        let (stop, stopped) = oneshot::channel();
-        *ENROLL_STOP.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(stop);
-        ENROLL_STAGE.store(1, Ordering::Relaxed);
-        let done = wait(async {
-            tokio::select! {
-                done = link::enroll(&link, &device, &public_key, &had, || ENROLL_STAGE.store(2, Ordering::Relaxed)) => done,
-                // dropping the pairing drops its connection: the PC stops asking
-                Ok(()) = stopped => Err(Failure { code: "cancelled", message: "Pairing was stopped.".into() }),
+        let stopped = {
+            let mut enrolls = enrolls();
+            if enrolls.stopped.remove(&id) {
+                None
+            } else {
+                let (stop, stopped) = oneshot::channel();
+                enrolls.stop.insert(id, stop);
+                enrolls.stage.insert(id, 1);
+                Some(stopped)
             }
-        });
-        ENROLL_STAGE.store(0, Ordering::Relaxed);
+        };
+        let cancelled = || Failure { code: "cancelled", message: "Pairing was stopped.".into() };
+        let done = match stopped {
+            None => Err(cancelled()),
+            Some(stopped) => wait(async {
+                let asked = || {
+                    if let Some(stage) = enrolls().stage.get_mut(&id) {
+                        *stage = 2;
+                    }
+                };
+                tokio::select! {
+                    done = link::enroll(&link, &device, &public_key, &had, asked) => done,
+                    // dropping the pairing drops its connection: the PC stops asking
+                    _ = stopped => Err(cancelled()),
+                }
+            }),
+        };
+        {
+            let mut enrolls = enrolls();
+            enrolls.stage.remove(&id);
+            enrolls.stop.remove(&id);
+            enrolls.ended = enrolls.ended.max(id);
+            let ended = enrolls.ended;
+            enrolls.stopped.retain(|&stopped| stopped > ended);
+        }
         match done {
             Ok(host) => json!({ "ok": true, "host": host }).to_string(),
             Err(e) => failure(e),
@@ -229,15 +273,30 @@ pub extern "system" fn Java_io_github_vaspyyy_lumen_core_Core_enroll<'l>(
 pub extern "system" fn Java_io_github_vaspyyy_lumen_core_Core_enrollStage<'l>(
     _env: JNIEnv<'l>,
     _core: JObject<'l>,
+    id: jlong,
 ) -> jint {
-    ENROLL_STAGE.load(Ordering::Relaxed)
+    guarded(0, || enrolls().stage.get(&id).copied().unwrap_or(0))
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_vaspyyy_lumen_core_Core_cancelEnroll<'l>(_env: JNIEnv<'l>, _core: JObject<'l>) {
-    if let Some(stop) = ENROLL_STOP.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take() {
-        let _ = stop.send(());
-    }
+pub extern "system" fn Java_io_github_vaspyyy_lumen_core_Core_cancelEnroll<'l>(
+    _env: JNIEnv<'l>,
+    _core: JObject<'l>,
+    id: jlong,
+) {
+    guarded((), || {
+        let mut enrolls = enrolls();
+        match enrolls.stop.remove(&id) {
+            Some(stop) => {
+                let _ = stop.send(());
+            },
+            // not begun yet: it ends as soon as it does
+            None if id > enrolls.ended => {
+                enrolls.stopped.insert(id);
+            },
+            None => {},
+        }
+    });
 }
 
 #[unsafe(no_mangle)]

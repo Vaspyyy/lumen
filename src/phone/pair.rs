@@ -128,7 +128,9 @@ impl Pairing {
                  lumen: start one with 'sudo systemctl enable --now sshd' (on Debian and Ubuntu: 'ssh'), then run this again."
             ));
         }
-        let label = args.label.unwrap_or_else(host_name);
+        // the phone shows the name next to its question, and takes none that doesn't read as it is
+        let label = lumen_link::clean_text(&args.label.unwrap_or_else(host_name));
+        let label = if label.is_empty() { "PC".to_string() } else { label };
         let mut addresses = args.addresses;
         addresses.extend(order_addresses(&sys::interfaces()));
         addresses.extend(magic_dns_name());

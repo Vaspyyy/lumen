@@ -12,9 +12,11 @@
 //!                                            screen once it shows <wait>
 //!   phone kill <dir> <session>               end a kept terminal
 //!
-//! <dir> holds `key.pem` and, once paired, `host.json`. With PHONE_HAD set to
-//! the public lines of keys this phone had for the PC before (one to a
-//! line), `enroll` asks the PC to put the new key in their place.
+//! <dir> holds `key.pem` and, once paired, `host.json`. PHONE_HAD tells
+//! `enroll` which pairings this phone has, one to a line: the host key that
+//! PC proved (`proven` in host.json), then the phone's public key for it.
+//! If the PC that answers is one of them, it is asked to put the new key in
+//! the place of the old.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -123,8 +125,14 @@ fn main() {
             let dir = Path::new(dir);
             let key = FileKey::make(dir);
             let device = device.first().copied().unwrap_or("phone on the command line");
-            // PHONE_HAD: the public keys this phone had for the PC before, one to a line
-            let had: Vec<String> = std::env::var("PHONE_HAD").unwrap_or_default().lines().map(str::to_string).collect();
+            // PHONE_HAD: the pairings this phone has, one to a line: the host key
+            // that PC proved (in hex), then the phone's public key for it
+            let had: Vec<(String, String)> = std::env::var("PHONE_HAD")
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|line| line.trim().split_once(' '))
+                .map(|(machine, key)| (machine.to_string(), key.to_string()))
+                .collect();
             let asked = || eprintln!("phone: the PC is asking");
             match runtime().block_on(link::enroll(link, device, &key.public_line(), &had, asked)) {
                 Ok(host) => {

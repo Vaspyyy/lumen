@@ -25,6 +25,8 @@ class Tab(val name: String, val demo: Boolean = false) {
     var title by mutableStateOf("")
     /** Counts bells, for the pill to flash. */
     var bells by mutableIntStateOf(0)
+    /** When the last bell was counted (uptime, in ms). */
+    var lastBell = 0L
 
     val screen = Screen()
 

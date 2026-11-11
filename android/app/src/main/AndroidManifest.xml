@@ -4,6 +4,8 @@
 
     <!-- The SSH connection to the user's own PC, and nothing else. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Noticing that the phone has a network again, to connect again. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Scanning the pairing code that `lumen pair` shows on the PC. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Unlocking the key the phone logs in with. -->
