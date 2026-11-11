@@ -27,6 +27,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,6 +70,7 @@ fun PcSheet(model: AppModel, onDismiss: () -> Unit) {
                 .padding(horizontal = 20.dp)
                 .navigationBarsPadding(),
         ) {
+            LaunchedEffect(Unit) { model.refreshKept() }
             Spacer(Modifier.height(8.dp))
             Text(stringResource(R.string.sheet_title), style = MaterialTheme.typography.displaySmall, color = Lumen.fg)
             Spacer(Modifier.height(16.dp))
@@ -93,6 +95,20 @@ fun PcSheet(model: AppModel, onDismiss: () -> Unit) {
                         onRemove = { removing = pc },
                     )
                 }
+            }
+            // what else runs on the PC: started at the desk, or left running from here
+            if (model.conn is Conn.Connected && model.kept.isNotEmpty()) {
+                Spacer(Modifier.height(22.dp))
+                Text(
+                    stringResource(R.string.running_on_pc, model.current?.label.orEmpty()),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Lumen.fg3,
+                )
+                Spacer(Modifier.height(10.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    model.kept.forEach { k -> KeptRow(k) { model.openKept(k); onDismiss() } }
+                }
+                Spacer(Modifier.height(10.dp))
             }
             Spacer(Modifier.height(12.dp))
             QuietButton(stringResource(R.string.pair_another), { onDismiss(); model.pairAnother() }, Modifier.fillMaxWidth())

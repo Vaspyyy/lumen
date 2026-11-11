@@ -4,11 +4,10 @@
 
     <!-- The SSH connection to the user's own PC, and nothing else. -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Scanning the pairing code that `lumen pair` shows on the PC. -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Unlocking the key the phone logs in with. -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
-    <uses-permission android:name="android.permission.VIBRATE" />
 
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />

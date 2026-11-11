@@ -31,8 +31,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -332,7 +334,7 @@ private fun Steps(p: Pairing) {
         p.offer.addresses.joinToString("  ·  "),
         stringResource(R.string.step_confirm_detail),
     )
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column {
         order.forEachIndexed { i, _ ->
             val state = when {
                 i < ci -> StepState.Done
@@ -377,8 +379,9 @@ private enum class StepState { Waiting, Active, Done, Failed }
 
 @Composable
 private fun StepRow(title: String, detail: String, state: StepState, last: Boolean, key: String? = null) {
-    Row {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    // the row is as tall as its text, and the line to the next step fills what is left
+    Row(Modifier.height(IntrinsicSize.Min)) {
+        Column(Modifier.fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
             Box(Modifier.size(30.dp), contentAlignment = Alignment.Center) {
                 AnimatedContent(state, transitionSpec = {
                     (fadeIn() + scaleIn(spring(0.5f, Spring.StiffnessMedium), initialScale = 0.6f)) togetherWith fadeOut()
@@ -395,10 +398,10 @@ private fun StepRow(title: String, detail: String, state: StepState, last: Boole
                     }
                 }
             }
-            if (!last) Box(Modifier.padding(vertical = 4.dp).width(1.dp).height(34.dp).background(Lumen.line2))
+            if (!last) Box(Modifier.padding(vertical = 4.dp).width(1.dp).weight(1f).background(Lumen.line2))
         }
         Spacer(Modifier.width(16.dp))
-        Column(Modifier.padding(top = 4.dp)) {
+        Column(Modifier.padding(top = 4.dp, bottom = if (last) 0.dp else 22.dp)) {
             Text(
                 title,
                 style = MaterialTheme.typography.titleMedium,

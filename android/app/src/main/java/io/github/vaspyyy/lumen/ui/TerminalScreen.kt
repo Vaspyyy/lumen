@@ -534,8 +534,9 @@ private fun EmptyState(model: AppModel) {
     }
 }
 
+/** A terminal the PC keeps that is not open here, to open with a tap. */
 @Composable
-private fun KeptRow(k: Kept, onOpen: () -> Unit) {
+fun KeptRow(k: Kept, onOpen: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
