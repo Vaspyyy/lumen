@@ -29,6 +29,42 @@ step() {
     printf '\n== %s\n' "$*"
 }
 
+# apt's lists of packages, with a few tries: a mirror that can't be reached
+# for a moment would otherwise go on without the lists, and then say of
+# every package that it can't be installed. Error-Mode makes apt say when a
+# source failed, which by itself it doesn't.
+apt_try() {
+    for wait in 5 15 30 60 0; do
+        apt-get update -q -o APT::Update::Error-Mode=any && return 0
+        if [ "$wait" != 0 ]; then
+            echo "verify.sh: the package lists could not be fetched; again in ${wait}s" >&2
+            sleep "$wait"
+        fi
+    done
+    return 1
+}
+
+# The same archive under a name of its own, for when the one in the sources
+# won't resolve: GitHub's runners spent half an hour unable to resolve
+# archive.ubuntu.com while every other mirror answered (2026-11-11). Debian's
+# sources hold no ubuntu.com name, so there this changes nothing and the
+# attempt fails as it would have.
+apt_mirror() {
+    for file in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources; do
+        [ -e "$file" ] || continue
+        sed -i -e 's|//archive\.ubuntu\.com/ubuntu|//mirrors.edge.kernel.org/ubuntu|g' \
+            -e 's|//security\.ubuntu\.com/ubuntu|//mirrors.edge.kernel.org/ubuntu|g' "$file"
+    done
+}
+
+apt_lists() {
+    apt_try && return 0
+    echo "verify.sh: trying the same archive under another name" >&2
+    apt_mirror
+    apt_try && return 0
+    fail "the package lists could not be fetched"
+}
+
 # What a system's package has to leave on the system, and what it has to
 # bring along. Asked before anything else is installed, so that nothing but
 # the package's own dependencies can have brought it.
@@ -93,7 +129,7 @@ refused() {
 case $kind in
     deb)
         export DEBIAN_FRONTEND=noninteractive
-        apt-get update -q
+        apt_lists
         step "install"
         apt-get install -y -q --no-install-recommends "$dist/lumen-terminal_amd64.deb"
         arrived
@@ -141,7 +177,7 @@ case $kind in
 
     script)
         export DEBIAN_FRONTEND=noninteractive
-        apt-get update -q
+        apt_lists
         apt-get install -y -q --no-install-recommends curl ca-certificates
         useradd -m tester
         home=/home/tester
