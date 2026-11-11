@@ -20,7 +20,12 @@ lumen=${LUMEN_BIN:-$root/target/debug/lumen}
 phone=${PHONE_BIN:-$root/target/debug/examples/phone}
 
 sshd=$(command -v sshd || true)
-[ -n "$sshd" ] || sshd=$(ls /usr/sbin/sshd /usr/bin/sshd 2>/dev/null | head -n 1 || true)
+# sshd is often outside a user's PATH
+for place in /usr/sbin/sshd /usr/bin/sshd; do
+    if [ -z "$sshd" ] && [ -x "$place" ]; then
+        sshd=$place
+    fi
+done
 for tool in "$sshd" ssh-keygen openssl; do
     if [ -z "$tool" ] || ! command -v "$tool" >/dev/null; then
         echo "with-a-pc.sh: skipped, this system has no ${tool:-sshd}"

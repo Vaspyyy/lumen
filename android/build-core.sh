@@ -23,8 +23,9 @@ if [ -z "${ANDROID_NDK_HOME:-}" ]; then
     export ANDROID_NDK_HOME="$ndk"
 fi
 
+[ $# -gt 0 ] || set -- arm64-v8a x86_64
 targets=""
-for abi in ${*:-arm64-v8a x86_64}; do
+for abi in "$@"; do
     targets="$targets -t $abi"
 done
 
