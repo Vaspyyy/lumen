@@ -2,13 +2,15 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Axis, Bounds, BoxShadow, Context, Corners, CursorStyle, Decorations, Entity, Focusable, Hsla,
-    MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, ResizeEdge, SharedString, Subscription, Tiling, Window, canvas,
-    div, point, px, size, svg,
+    MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, ResizeEdge, SharedString, Size, Subscription, Task, Tiling,
+    Window, canvas, div, point, px, size, svg,
 };
 
 use crate::actions::{
@@ -21,6 +23,9 @@ use crate::terminal::{Spawn, Terminal};
 use crate::view::{TerminalView, ViewEvent};
 
 type Pane = Entity<TerminalView>;
+
+/// Left, top, width and height, as parts of the tab's area.
+type Rect = (f32, f32, f32, f32);
 
 /// A tab's layout: a pane, or panes side by side (or stacked), each of
 /// which can be split again.
@@ -102,7 +107,7 @@ impl Node {
 
     /// Every pane with the part of the tab it covers, as fractions of the
     /// tab's width and height.
-    fn rects(&self, rect: (f32, f32, f32, f32), out: &mut Vec<(Pane, (f32, f32, f32, f32))>) {
+    fn rects(&self, rect: Rect, out: &mut Vec<(Pane, Rect)>) {
         match self {
             Node::Leaf(pane) => out.push((pane.clone(), rect)),
             Node::Split { axis, children, shares, .. } => {
@@ -159,7 +164,27 @@ pub struct Workspace {
     /// divider's position is measured against.
     split_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     subscriptions: HashMap<gpui::EntityId, Subscription>,
+    /// A shell that is already running, for the next tab.
+    spare: Option<Spare>,
+    /// The wait before the spare is looked at again.
+    spare_refresh: Option<Task<()>>,
+    _bounds: Subscription,
 }
+
+/// A terminal that was started before it was asked for, so that the tab it
+/// becomes shows a prompt at once: a shell with a greeting and plugins can
+/// take a tenth of a second to get there, which is a visible pop.
+struct Spare {
+    pane: Pane,
+    /// The folder it was started in. It only fits a tab that would start there.
+    cwd: Option<PathBuf>,
+    born: Instant,
+    /// The window's size when it was started, which its output is laid out for.
+    viewport: Size<Pixels>,
+}
+
+/// A spare older than this shows a greeting that has gone stale.
+const SPARE_MAX_AGE: Duration = Duration::from_secs(300);
 
 const TAB_BAR: f32 = 40.;
 
@@ -172,9 +197,14 @@ impl Workspace {
             drag: None,
             split_bounds: Rc::default(),
             subscriptions: HashMap::new(),
+            spare: None,
+            spare_refresh: None,
+            // a spare is laid out for the window's size: a resized window wants a new one
+            _bounds: cx.observe_window_bounds(window, |this, window, cx| this.refresh_spare_soon(window, cx)),
         };
         let pane = this.open(spawn, (1., 1.), window, cx)?;
         this.push_tab(pane, window, cx);
+        this.refresh_spare_soon(window, cx);
         Ok(this)
     }
 
@@ -196,7 +226,17 @@ impl Workspace {
         let pane = cx.new(|cx| TerminalView::new(started, window, cx));
         let subscription = cx.subscribe_in(&pane, window, |this, pane, event: &ViewEvent, window, cx| match event {
             ViewEvent::Closed => this.close_pane(&pane.clone(), window, cx),
-            ViewEvent::Title => cx.notify(),
+            // a shell says its title at every prompt, which is when its folder may have changed
+            ViewEvent::Title => {
+                this.refresh_spare_soon(window, cx);
+                cx.notify();
+            },
+            // a shell that never sets a title still prints a prompt after `cd`
+            ViewEvent::Output => {
+                if this.spare.as_ref().is_some_and(|spare| spare.cwd != this.spawn_here(cx).cwd) {
+                    this.refresh_spare_soon(window, cx);
+                }
+            },
             ViewEvent::Focused => {
                 if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.root.contains(pane))
                     && &tab.active != pane
@@ -204,6 +244,7 @@ impl Workspace {
                     tab.active = pane.clone();
                     cx.notify();
                 }
+                this.refresh_spare_soon(window, cx);
             },
         });
         self.subscriptions.insert(pane.entity_id(), subscription);
@@ -238,9 +279,52 @@ impl Workspace {
     }
 
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
-        match self.open(self.spawn_here(cx), (1., 1.), window, cx) {
+        let spawn = self.spawn_here(cx);
+        // the spare is this tab, if it was started where the tab would start
+        let ready = self.spare.take().and_then(|spare| {
+            if spare.cwd == spawn.cwd {
+                return Some(spare.pane);
+            }
+            self.subscriptions.remove(&spare.pane.entity_id());
+            None
+        });
+        match ready.map(Ok).unwrap_or_else(|| self.open(spawn, (1., 1.), window, cx)) {
             Ok(pane) => self.push_tab(pane, window, cx),
             Err(e) => self.report("can't open a tab", e),
+        }
+        self.refresh_spare_soon(window, cx);
+    }
+
+    /// Looks at the spare again in a moment: after the things that can make
+    /// it unfit come in a burst (typing `cd`, dragging the window's edge).
+    fn refresh_spare_soon(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !cx.global::<Config>().prewarm {
+            return;
+        }
+        self.spare_refresh = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(400)).await;
+            let _ = this.update_in(cx, |this, window, cx| this.refresh_spare(window, cx));
+        }));
+    }
+
+    /// Makes sure a spare is running that fits the next tab: started in the
+    /// folder of the active pane, for the window's current size, not long ago.
+    fn refresh_spare(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let spawn = self.spawn_here(cx);
+        let viewport = window.viewport_size();
+        let fits = self.spare.as_ref().is_some_and(|spare| {
+            spare.cwd == spawn.cwd && spare.born.elapsed() < SPARE_MAX_AGE && spare.viewport == viewport
+        });
+        if fits {
+            return;
+        }
+        if let Some(old) = self.spare.take() {
+            self.subscriptions.remove(&old.pane.entity_id());
+        }
+        let cwd = spawn.cwd.clone();
+        match self.open(spawn, (1., 1.), window, cx) {
+            Ok(pane) => self.spare = Some(Spare { pane, cwd, born: Instant::now(), viewport }),
+            Err(e) => self.report("can't start a shell ahead of time", e),
         }
     }
 
@@ -276,6 +360,11 @@ impl Workspace {
 
     fn close_pane(&mut self, pane: &Pane, window: &mut Window, cx: &mut Context<Self>) {
         self.subscriptions.remove(&pane.entity_id());
+        if self.spare.as_ref().is_some_and(|spare| &spare.pane == pane) {
+            // the spare's shell ended on its own
+            self.spare = None;
+            return;
+        }
         let Some(index) = self.tabs.iter().position(|tab| tab.root.contains(pane)) else {
             return;
         };

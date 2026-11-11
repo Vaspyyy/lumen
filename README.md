@@ -61,6 +61,7 @@ lumen reads `~/.config/lumen/lumen.toml` (`lumen --config-path` prints the place
 scrollback = 10000
 copy_on_select = false
 # shell = "/usr/bin/fish"   # your login shell if unset
+prewarm = false             # keep one shell started, so a new tab is there at once
 
 [font]
 family = "Maple Mono"       # "monospace" is the system's fixed-width font
@@ -87,6 +88,8 @@ accent = "#ffc97a"          # lumen's own light: the line under the active tab
 background = "#12111a"
 foreground = "#e4e1ee"
 ```
+
+With `prewarm = true`, lumen starts the shell of the next tab ahead of time, in the folder of the current pane, so a new tab shows a finished prompt the moment it opens, however long your shell takes to start. It is off by default because your shell's startup files then run before you ask for the tab (a greeter is fine; a config that attaches to tmux is not). A tab opened right after a `cd`, and every split, still starts its shell on the spot.
 
 The `[colors]` table has the same shape as Alacritty's (`primary`, `cursor`, `selection`, `normal`, `bright`), so a theme written for Alacritty can be pasted in unchanged. A file with a typo in it is reported on stderr and lumen starts with its defaults.
 

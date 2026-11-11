@@ -26,6 +26,8 @@ pub enum ViewEvent {
     Closed,
     /// The title changed.
     Title,
+    /// The program printed something.
+    Output,
     /// The pane was clicked or otherwise took the keyboard.
     Focused,
 }
@@ -65,7 +67,10 @@ impl TerminalView {
         let terminal = cx.new(|cx| Terminal::new(started, cx));
         let focus = cx.focus_handle();
         let subscriptions = vec![
-            cx.observe(&terminal, |_, _, cx| cx.notify()),
+            cx.observe(&terminal, |_, _, cx| {
+                cx.emit(ViewEvent::Output);
+                cx.notify();
+            }),
             cx.subscribe(&terminal, |_, _, event: &TerminalEvent, cx| match event {
                 TerminalEvent::Title => cx.emit(ViewEvent::Title),
                 TerminalEvent::Exited => cx.emit(ViewEvent::Closed),

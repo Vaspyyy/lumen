@@ -206,6 +206,10 @@ pub struct Config {
     pub copy_on_select: bool,
     /// The program a new terminal runs: your login shell if unset.
     pub shell: Option<String>,
+    /// Keep one shell started in the background, so that a new tab is
+    /// there at once instead of after the shell's own startup. The shell's
+    /// startup files run for it before the tab is asked for.
+    pub prewarm: bool,
 }
 
 impl Default for Config {
@@ -218,6 +222,7 @@ impl Default for Config {
             scrollback: 10_000,
             copy_on_select: false,
             shell: None,
+            prewarm: false,
         }
     }
 }
