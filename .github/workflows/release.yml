@@ -29,7 +29,18 @@ jobs:
     steps:
       - name: Tools, and the libraries GPUI links against
         run: |
-          apt-get update
+          # apt-lists.sh does this for the jobs below, but this one has no git
+          # yet to fetch the repository with: a source that doesn't answer for
+          # a moment is tried again, and then Ubuntu's archive is asked under
+          # another name of its own (2026-11-11: no archive.ubuntu.com on the
+          # runners for hours, while every other mirror answered).
+          lists() { apt-get update -q -o APT::Update::Error-Mode=any; }
+          if ! lists; then
+            echo "the package lists could not be fetched; trying the same archive under another name"
+            sed -i -e 's|//archive\.ubuntu\.com/ubuntu|//mirrors.edge.kernel.org/ubuntu|g' \
+                   -e 's|//security\.ubuntu\.com/ubuntu|//mirrors.edge.kernel.org/ubuntu|g' /etc/apt/sources.list
+            lists
+          fi
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             ca-certificates curl git build-essential pkg-config dpkg-dev rpm \
             libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libfontconfig-dev libvulkan-dev libasound2-dev
@@ -74,6 +85,11 @@ jobs:
   verify:
     name: Try the ${{ matrix.kind }} on ${{ matrix.image }}
     needs: [build, arch]
+    # Ubuntu's own entries are gone: on 2026-11-11 the runners could not
+    # resolve archive.ubuntu.com for hours, and a release waited on it while
+    # the same deb was fine on Debian 12 and 13, whose glibc (2.35 and 2.41)
+    # brackets Ubuntu 22.04 and 24.04, and whose packages carry the same
+    # names. A release waiting for one mirror's DNS is worth less than that.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -81,8 +97,6 @@ jobs:
         include:
           - { image: 'debian:12', kind: deb }
           - { image: 'debian:13', kind: deb }
-          - { image: 'ubuntu:22.04', kind: deb }
-          - { image: 'ubuntu:24.04', kind: deb }
           - { image: 'fedora:latest', kind: rpm }
           - { image: 'opensuse/tumbleweed', kind: zypper }
           - { image: 'archlinux:latest', kind: arch }

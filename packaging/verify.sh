@@ -29,107 +29,13 @@ step() {
     printf '\n== %s\n' "$*"
 }
 
-# apt's lists of packages, with a few tries: a mirror that can't be reached
-# for a moment would otherwise go on without the lists, and then say of
-# every package that it can't be installed. Error-Mode makes apt say when a
-# source failed, which by itself it doesn't.
-apt_try() {
-    for wait in 5 15 30 60 0; do
-        apt-get update -q -o APT::Update::Error-Mode=any && return 0
-        if [ "$wait" != 0 ]; then
-            echo "verify.sh: the package lists could not be fetched; again in ${wait}s" >&2
-            sleep "$wait"
-        fi
-    done
-    return 1
-}
-
-# The same archive under a name of its own, for when the one in the sources
-# won't resolve: GitHub's runners spent half an hour unable to resolve
-# archive.ubuntu.com while every other mirror answered (2026-11-11). Debian's
-# sources hold no ubuntu.com name, so there this changes nothing and the
-# attempt fails as it would have.
-apt_mirror() {
-    for file in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources; do
-        [ -e "$file" ] || continue
-        sed -i -e 's|//archive\.ubuntu\.com/ubuntu|//mirrors.edge.kernel.org/ubuntu|g' \
-            -e 's|//security\.ubuntu\.com/ubuntu|//mirrors.edge.kernel.org/ubuntu|g' "$file"
-    done
-}
-
-apt_lists() {
-    apt_try && return 0
-    echo "verify.sh: trying the same archive under another name" >&2
-    apt_mirror
-    apt_try && return 0
-    fail "the package lists could not be fetched"
-}
-
-# What a system's package has to leave on the system, and what it has to
-# bring along. Asked before anything else is installed, so that nothing but
-# the package's own dependencies can have brought it.
-arrived() {
-    for file in /usr/bin/lumen /usr/share/applications/lumen.desktop /usr/share/icons/hicolor/256x256/apps/lumen.png; do
-        [ -f "$file" ] || fail "$file is missing"
-    done
-    lumen --version || fail "lumen doesn't start: a library it is linked against is not among the package's dependencies"
-    # lumen loads these when it opens a window, so no tool finds them in the program
-    libraries=$(ldconfig -p)
-    for library in libvulkan.so.1 libEGL.so.1 libwayland-client.so.0 libwayland-egl.so.1; do
-        case $libraries in
-            *"$library"*) ;;
-            *) fail "$library is not installed: the package doesn't depend on what holds it" ;;
-        esac
-    done
-    command -v fc-match >/dev/null || fail "fc-match is not installed: the package doesn't depend on fontconfig"
-}
-
-gone() {
-    for file in /usr/bin/lumen /usr/share/applications/lumen.desktop /usr/share/icons/hicolor/256x256/apps/lumen.png; do
-        [ ! -e "$file" ] || fail "$file is still there after the package was removed"
-    done
-}
-
-# A window with a command in it, drawn by the processor on a display nobody
-# sees. The command waits, so that lumen has drawn its tabs and its text
-# before it ends with it. $1 is the program, $2 the user to run it as (root
-# if left out).
-window() {
-    mark=/tmp/lumen-ran
-    rm -f "$mark"
-    run="timeout 120 xvfb-run -a $1 -e sh -c 'sleep 3; echo ran > $mark'"
-    if [ -n "${2:-}" ]; then
-        run="su $2 -c \"$run\""
-    fi
-    # what lumen printed stays in /tmp/window.log
-    if ! sh -c "$run" >/tmp/window.log 2>&1; then
-        cat /tmp/window.log
-        fail "lumen did not open, or did not end"
-    fi
-    cat /tmp/window.log
-    [ -f "$mark" ] || fail "lumen opened and ran nothing"
-    echo "a window opened, ran its command and closed"
-}
-
-# Runs install.sh as the user tester, with what is in $1 in front of it.
-as_tester() {
-    su tester -c "$1 sh $here/install.sh ${2:-}"
-}
-
-# $1 has to fail, and say $2.
-refused() {
-    if sh -c "$1" >/tmp/out 2>&1; then
-        cat /tmp/out
-        fail "this went through and should not have: $1"
-    fi
-    cat /tmp/out
-    grep -q -- "$2" /tmp/out || fail "it failed without saying \"$2\""
-}
+# apt's lists of packages: apt-lists.sh, next to this script, keeps the
+# retries and the other name for Ubuntu's archive.
 
 case $kind in
     deb)
         export DEBIAN_FRONTEND=noninteractive
-        apt_lists
+        sh "$here/apt-lists.sh" || fail "the package lists could not be fetched"
         step "install"
         apt-get install -y -q --no-install-recommends "$dist/lumen-terminal_amd64.deb"
         arrived
@@ -177,7 +83,7 @@ case $kind in
 
     script)
         export DEBIAN_FRONTEND=noninteractive
-        apt_lists
+        sh "$here/apt-lists.sh" || fail "the package lists could not be fetched"
         apt-get install -y -q --no-install-recommends curl ca-certificates
         useradd -m tester
         home=/home/tester
