@@ -53,4 +53,6 @@ lumen doesn't ask before it closes something. The window's close button closes e
 
 ## More than one window
 
-`Ctrl+Shift+N` opens a new window. It starts in the folder lumen was started in, not in the folder of the current pane.
+`Ctrl+Shift+N` opens a new window. It starts in the folder its window was opened in, not in the folder of the current pane, and with that window's environment.
+
+Starting `lumen` again while it runs opens a tab in the window you used last, not a window: `lumen --new-window` opens one, and `launch = "window"` in the config makes that the rule. See [Opening lumen again](/docs/launching/).

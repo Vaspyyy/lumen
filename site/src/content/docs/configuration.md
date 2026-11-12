@@ -36,6 +36,7 @@ copy_on_select = false     # selecting text also copies it
 notifications = true       # programs may post on the desktop
 # shell = "/usr/bin/fish"  # your own shell if unset
 prewarm = false            # a new tab is there at once
+launch = "tab"             # starting lumen again: tab, window, process
 
 [font]
 family = "monospace"       # the system's fixed-width font
@@ -83,6 +84,7 @@ The `[colors]` table has more in it: the cursor's colors, the selection's, and t
 | `notifications` | `true` | A program in a tab you are not looking at may post a notification on the desktop. With `false` the tab still gets its dot. See [Commands](/docs/commands/#when-a-program-has-something-to-tell) |
 | `shell` | unset | The program a new tab or pane runs: its path, without arguments. Unset, it is your shell, as `$SHELL` names it |
 | `prewarm` | `false` | Keeps one shell started ahead of time. See [Instant tabs](/docs/instant-tabs/) |
+| `launch` | `"tab"` | What `lumen` opens when a lumen runs already: `"tab"`, a tab in the window you used last; `"window"`, a window of the lumen that runs; `"process"`, a lumen of its own. See [Opening lumen again](/docs/launching/) |
 
 ## `[font]`
 

@@ -5,10 +5,10 @@ description: The things that go wrong most easily, and what to do about them.
 
 ## lumen doesn't start
 
-Start it from another terminal, and read what it prints:
+Start it from another terminal, and read what it prints. `--new-process` makes it a lumen of its own, so that what it prints is not about the one that runs already:
 
 ```sh
-lumen
+lumen --new-process
 ```
 
 - **A message about Vulkan or a graphics adapter.** lumen is drawn by the graphics card and needs a working driver. `vulkaninfo --summary` (from the package `vulkan-tools`) shows whether Vulkan works on your system.
@@ -103,6 +103,10 @@ lumen keeps a few keys for itself, listed in [Keys](/docs/keys/). They can't be 
 ## A new tab opens in the wrong folder
 
 A new tab starts where the shell of the current pane is. If that shell has started another program that changed folders on its own, or you are logged in to another machine in that pane, lumen sees only where the local shell is.
+
+## Starting lumen opens a tab, not a window
+
+That is what it does while a lumen runs: a new tab in the window you used last, brought to the front. If that window is on another workspace, the compositor may show you that workspace, or only mark the window. `launch = "window"` in the config opens windows instead, and `launch = "process"` a lumen of its own every time. See [Opening lumen again](/docs/launching/).
 
 ## Something else
 

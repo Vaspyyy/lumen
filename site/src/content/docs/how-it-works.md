@@ -44,11 +44,18 @@ Nothing is guessed from the text. A path that merely looks like a file name is t
 
 With [`prewarm`](/docs/instant-tabs/) on, a window keeps one terminal that is not shown: a shell that has already started. A new tab takes it and shows it, and the next one is started behind the scenes.
 
+## One lumen for every window
+
+Usually a user has one lumen at a time. The first one listens on a socket, `lumen.sock` in `$XDG_RUNTIME_DIR/lumen`, that only the same user may connect to. A `lumen` started while it runs connects before it does anything else, before the GPU, the fonts or the config: it sends the folder, the program, its environment, its display and the launcher's focus token, and the running lumen opens the tab or the window. The launch ends a few milliseconds after it started, or, with `-e`, when the tab's program ends. If nothing answers, or the answer is no (another version, another display), it starts as a lumen of its own.
+
+`lumen --daemon` is such a lumen without a window, started at login. It has no display until a launch names one, and when its last window closes it lets go of the display again and starts a GPU device for the next window. See [Opening lumen again](/docs/launching/).
+
 ## Where things are
 
 ```
 src/
   main.rs       command line, window
+  instance.rs   one lumen for all windows: launches and the daemon
   config.rs     the config file
   terminal.rs   a running terminal: the program, its PTY, its grid
   pty.rs        the thread that reads what the program prints

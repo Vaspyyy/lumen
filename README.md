@@ -34,13 +34,19 @@ cd lumen
 scripts/install.sh
 ```
 
-The script builds lumen into Cargo's bin folder (`~/.cargo/bin`) and adds the launcher entry and icons to `~/.local/share`. To only try it, `cargo run --release` is enough.
+The script builds lumen into Cargo's bin folder (`~/.cargo/bin`), adds the launcher entry and icons to `~/.local/share`, and turns on the systemd user service that keeps lumen waiting from login on (`LUMEN_DAEMON=0` leaves it out). To only try it, `cargo run --release` is enough.
 
 ```sh
 lumen                       # a window with your shell
 lumen -d ~/Projects/pulse   # start in a folder
 lumen -e htop               # run a program instead of the shell
 ```
+
+## Opening it again
+
+Started while a lumen runs, `lumen` doesn't start a second one: the running lumen opens a **new tab in the window you used last**, with the folder, program and environment the launch was started with, and brings it to the front. The program runs about 8 ms after the launch. `--new-window` asks for a window instead, `--new-process` for a lumen of its own, and `launch = "window"` or `"process"` in the config makes that the rule.
+
+`lumen --daemon` is a lumen without a window that waits from login on, so that even the first window of a session draws its first frame after about 45 ms instead of 220. The install scripts install it as a systemd user service and turn it on; with a package, `systemctl --user enable --now lumen` does. [Opening lumen again](https://vaspyyy.github.io/lumen/docs/launching/) has the details.
 
 ## Keys
 
@@ -60,7 +66,7 @@ lumen -e htop               # run a program instead of the shell
 | `Ctrl+Shift+F` | Search what the pane has printed. `Enter` goes to the match before, `Shift+Enter` to the one after, `Esc` closes |
 | `Shift+PageUp`, `Shift+PageDown`, `Shift+Home`, `Shift+End` | Scroll back and forth |
 | `Ctrl+Plus`, `Ctrl+Minus`, `Ctrl+0` | Text size of the current pane |
-| `Ctrl+Shift+N` | New window |
+| `Ctrl+Shift+N` | New window, in the folder the current window was opened in |
 
 With the mouse: drag to select (double click selects a word, triple click a line, `Ctrl`+drag a block), middle click pastes the selection, and the lines between panes can be dragged. A program that uses the mouse itself (vim, htop) gets it; hold `Shift` to select anyway. A tab closes with a middle click, and moves when you drag it onto another one.
 
@@ -112,6 +118,7 @@ scrollback = 10000
 copy_on_select = false
 # shell = "/usr/bin/fish"   # your login shell if unset
 prewarm = false             # keep one shell started, so a new tab is there at once
+launch = "tab"              # `lumen` while one runs opens: tab, window, process
 
 [font]
 family = "Maple Mono"       # "monospace" is the system's fixed-width font
@@ -159,6 +166,7 @@ An image occupies cells like text does. lumen marks each of those cells with a l
 ```
 src/
   main.rs       command line, window
+  instance.rs   one lumen for all windows: launches and the daemon
   config.rs     the config file
   terminal.rs   a running terminal: the program, its PTY, its grid
   pty.rs        the thread that reads what the program prints and writes what is typed
@@ -178,7 +186,7 @@ crates/
   lumen-mobile/ the app's core: the SSH connection and the terminal, as a library for Android
 android/        the Android app
 site/           the website: the front page, the docs, the release notes
-packaging/      what a release offers: the install script and the packages
+packaging/      what a release offers: the install script, the packages and the daemon's service
 ```
 
 The phone app has no terminal of its own design either: its core is the same `alacritty_terminal`, fed over SSH ([russh](https://crates.io/crates/russh)) by a terminal the PC keeps running (`lumen keeper`). The screen is drawn by the app, in Kotlin.

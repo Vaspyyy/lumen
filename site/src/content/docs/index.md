@@ -15,6 +15,7 @@ What sets it apart is one idea: **the screen is not only text**. When a tool pri
 - **A command is one thing.** lumen knows where each command starts and ends: jump between them, copy what one printed with a click, and see on a tab when a long one is done. See [Commands](/docs/commands/).
 - **A place in code is a click away.** `Ctrl+Click` on `src/main.rs:42` in an error opens that line in your editor. See [Files and links](/docs/files-and-links/#web-addresses-and-places-in-code).
 - **A new tab is there at once.** With `prewarm` on, the next shell is started ahead of time. See [Instant tabs](/docs/instant-tabs/).
+- **Starting it again opens a tab.** `lumen` while one runs opens a new tab in the window you used last, in a few milliseconds, and a daemon started at login makes the first window just as quick. See [Opening lumen again](/docs/launching/).
 - **Your terminals come along.** The Android app opens terminals that run on your PC and keep running when you put the phone away. It logs in with a key that never leaves the phone. See [lumen on your phone](/docs/phone/).
 
 Around that is a terminal you can work in all day: [tabs and splits](/docs/tabs-and-splits/), [search](/docs/search/) through what scrolled past, a [config file](/docs/configuration/) that is taken on when you save it, and a cursor that glows.

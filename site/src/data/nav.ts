@@ -7,7 +7,7 @@ export const docsNav = [
   },
   {
     title: 'Using lumen',
-    pages: ['tabs-and-splits', 'commands', 'machine', 'files-and-links', 'images', 'search', 'keys', 'mouse'],
+    pages: ['tabs-and-splits', 'launching', 'commands', 'machine', 'files-and-links', 'images', 'search', 'keys', 'mouse'],
   },
   {
     title: 'On your phone',

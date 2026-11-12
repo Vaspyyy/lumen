@@ -13,6 +13,9 @@ lumen [options] [-e program [args...]]
 | --- | --- |
 | `-e`, `--command` *program* *[args...]* | Runs this program instead of your shell. Everything after it belongs to the program |
 | `-d`, `--working-directory` *dir* | Starts in this folder |
+| `--new-window` | Where a lumen runs already: a window of its own, not a tab |
+| `--new-process` | A lumen of its own, that starts from nothing, as if none ran |
+| `--daemon` | Runs without a window and waits, so that windows open at once. See [Opening lumen again](/docs/launching/#the-daemon-a-quick-first-window) |
 | `--config-path` | Prints where the config file is read from, and ends |
 | `-V`, `--version` | Prints the version, and ends. `-v` does too, as it did before 0.5.2 |
 | `-h`, `--help` | Prints a short help, and ends |
@@ -28,7 +31,11 @@ lumen -d ~/notes -e nvim todo.md    # both
 
 `-e` takes the rest of the line, so it comes last. In `lumen -e ls -d`, the `-d` is for `ls`.
 
-A window started with `-e` closes when the program ends.
+A window or tab started with `-e` closes when its program ends.
+
+## While a lumen runs
+
+Started while a lumen runs already, `lumen` opens a **new tab in the window you used last**, with the folder, the program and the environment it was started with, and brings that window to the front. With `-e`, the command waits until the program in the tab ends. `--new-window` asks for a window instead, `--new-process` for a lumen of its own, and `launch` in the config changes what a plain `lumen` does. [Opening lumen again](/docs/launching/) has the details.
 
 ## Phones and kept terminals
 
@@ -70,7 +77,7 @@ They are printed, and written nowhere: you add one line to your shell's startup 
 
 ## As the default terminal
 
-The install script adds a launcher entry, `lumen.desktop`, so lumen can be chosen as the terminal in your desktop's settings. Desktops and launchers that start a terminal with a command usually pass it after `-e`, which lumen takes.
+The install script adds a launcher entry, `lumen.desktop`, so lumen can be chosen as the terminal in your desktop's settings. Desktops and launchers that start a terminal with a command usually pass it after `-e`, which lumen takes. Its *New Window* action runs `lumen --new-window`.
 
 ## What programs find
 

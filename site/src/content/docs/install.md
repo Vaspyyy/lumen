@@ -5,7 +5,7 @@ description: Packages for Debian, Ubuntu, Fedora, openSUSE and Arch, one command
 
 lumen runs on Linux, on Wayland and X11. Every release comes as a package for the big distributions and as one command for the others. They are built for 64-bit Intel and AMD machines (`x86_64`); on any other machine, [build lumen from source](#build-it-from-source).
 
-Each way installs the program, the launcher entry and the icons, so lumen shows up in your desktop's application menu.
+Each way installs the program, the launcher entry and the icons, so lumen shows up in your desktop's application menu, and a systemd service that keeps lumen waiting from login on, so that its first window opens at once. The packages leave that service off: see [The daemon](#the-daemon).
 
 lumen is drawn by the graphics card, so it needs a working graphics driver, with Vulkan or OpenGL. Any Mesa driver of the last few years will do.
 
@@ -55,7 +55,7 @@ One command for every system with a C library as new as the one in Ubuntu 22.04 
 curl -fsSL https://vaspyyy.github.io/lumen/install.sh | sh
 ```
 
-This needs no root. The script fetches the newest release, checks that it arrived whole against the checksum in the release, and puts the program into `~/.local/bin` and the launcher entry and the icons into `~/.local/share`. If you like to know what you run, [read it first](https://github.com/Vaspyyy/lumen/blob/main/packaging/install.sh): it is about 300 lines.
+This needs no root. The script fetches the newest release, checks that it arrived whole against the checksum in the release, and puts the program into `~/.local/bin` and the launcher entry and the icons into `~/.local/share`. It also installs the [daemon](#the-daemon)'s service into `~/.config/systemd/user` and turns it on; `LUMEN_DAEMON=0` in front of `sh` leaves it out. If you like to know what you run, [read it first](https://github.com/Vaspyyy/lumen/blob/main/packaging/install.sh): it is about 300 lines.
 
 lumen needs a few libraries that a desktop has anyway:
 
@@ -100,11 +100,23 @@ From your desktop's application menu, or from a terminal:
 lumen
 ```
 
+Started again while it runs, lumen opens a new tab in the window you used last. See [Opening lumen again](/docs/launching/).
+
+## The daemon
+
+`lumen --daemon` is a lumen without a window that waits from login on, so that the first window of a session opens in about 45 ms instead of 220. The install script and `scripts/install.sh` turn it on. With a package, turn it on yourself:
+
+```sh
+systemctl --user enable --now lumen
+```
+
+`systemctl --user disable --now lumen` turns it off again. [Opening lumen again](/docs/launching/#the-daemon-a-quick-first-window) says what it costs and how it behaves.
+
 ## Update
 
 lumen doesn't update itself, and no distribution has it in its repositories yet, so your system's updates don't bring new versions. To update, run the commands you installed it with again: they always fetch the newest release.
 
-A lumen that is running keeps running the old version until you close it. The [release notes](/releases/) say what changed, and have a [feed](/rss.xml) to follow.
+A lumen that is running keeps running the old version until you close its windows. The daemon then makes way for the new version by itself. The [release notes](/releases/) say what changed, and have a [feed](/rss.xml) to follow.
 
 ## Remove it
 
@@ -114,7 +126,7 @@ A lumen that is running keeps running the old version until you close it. The [r
 | `dnf` | `sudo dnf remove lumen-terminal` |
 | `zypper` | `sudo zypper remove lumen-terminal` |
 | `pacman` | `sudo pacman -R lumen-terminal` |
-| The script | `curl -fsSL https://vaspyyy.github.io/lumen/install.sh \| sh -s -- --uninstall` |
+| The script | `curl -fsSL https://vaspyyy.github.io/lumen/install.sh \| sh -s -- --uninstall`. This stops the daemon and removes its service too |
 | A build from source | see [Remove a build from source](#remove-a-build-from-source) |
 
 Your settings are in `~/.config/lumen`. Remove that folder too if you want nothing left.
@@ -171,6 +183,7 @@ The script does two things:
 
 1. It builds lumen and puts the program into Cargo's bin folder, `~/.cargo/bin`. rustup adds that folder to your `PATH`.
 2. It adds the launcher entry and the icons to `~/.local/share`, so lumen shows up in your desktop's application menu.
+3. It installs the [daemon](#the-daemon)'s service into `~/.config/systemd/user` and turns it on, unless `LUMEN_DAEMON=0` is in front of it.
 
 To update, get the newest source with `git pull` and run the script again.
 
@@ -187,6 +200,8 @@ Nothing is copied anywhere. The first build takes the longest.
 ### Remove a build from source
 
 ```sh
+systemctl --user disable --now lumen
+rm ~/.config/systemd/user/lumen.service
 cargo uninstall lumen
 rm ~/.local/share/applications/lumen.desktop
 rm ~/.local/share/icons/hicolor/*/apps/lumen.png

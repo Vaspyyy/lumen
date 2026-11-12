@@ -73,7 +73,7 @@ The size is per pane, lasts until the pane closes, and goes from less than half 
 
 | Key | Does |
 | --- | --- |
-| `Ctrl+Shift+N` | New window, in the folder lumen was started in |
+| `Ctrl+Shift+N` | New window, in the folder the current window was opened in |
 
 ## Keys for the program
 

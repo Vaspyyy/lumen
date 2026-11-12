@@ -109,7 +109,7 @@ command = "myeditor --line {line} --column {column} {file}"
 terminal = false
 ```
 
-`$VISUAL` and `$EDITOR` are read from the environment lumen was started in. Started from the application menu, that is your desktop's, which may not have what your shell's startup file sets. If lumen opens the wrong program, set `command`.
+`$VISUAL` and `$EDITOR` are read from the environment the window was opened with: the one lumen was started in, or, for a window that `lumen` opened in a lumen that ran already, that launch's. Started from the application menu, that is your desktop's, which may not have what your shell's startup file sets. If lumen opens the wrong program, set `command`.
 
 ## Selecting text that is a link
 

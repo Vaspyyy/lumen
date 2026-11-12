@@ -13,6 +13,8 @@ lumen -d ~/Projects/site    # start in a folder
 lumen -e htop               # run a program instead of the shell
 ```
 
+Started again while it runs, lumen opens a new tab in the window you used last instead of a second lumen. See [Opening lumen again](/docs/launching/).
+
 The window has a frame of its own: the tabs are in the title bar, next to the buttons that minimize, maximize and close. A tab is named after what its program calls itself, or after the folder the shell is in.
 
 ## Tabs and panes
