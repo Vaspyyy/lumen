@@ -283,7 +283,7 @@ impl Terminal {
         }
         self.size = size;
         self.io.send(Msg::Resize(size.into(), (size.cell_width, size.cell_height)));
-        self.term.lock().resize(size);
+        commands::resize(&self.commands, &mut self.term.lock(), size);
     }
 
     pub fn mode(&self) -> TermMode {
