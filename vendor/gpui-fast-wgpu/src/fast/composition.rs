@@ -1,4 +1,5 @@
 // Modified by Longbridge for gpui-fast.
+// Modified for lumen: surfaces are made with the display the context remembers.
 //! Renderers for the extra surfaces of a window that uses window composition
 //! (zed-industries/zed#62379).
 //!
@@ -34,7 +35,7 @@ impl WgpuRenderer {
         let context = context_ref
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("GPU context is not initialized"))?;
-        let surface = create_surface(&context.instance, window_handle.as_raw())?;
+        let surface = create_surface(&context.instance, context.display(), window_handle.as_raw())?;
         context.check_compatible_with_surface(&surface)?;
         let mut renderer = Self::new_internal(
             Some(Rc::clone(gpu_context)),

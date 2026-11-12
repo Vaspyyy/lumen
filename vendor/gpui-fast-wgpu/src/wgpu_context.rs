@@ -1,5 +1,8 @@
 // Modified by Longbridge for gpui-fast.
 // Modified for gpui-fast releases: adapted to wgpu =30.0.1.
+// Modified for lumen: a window's GPU is looked for with Vulkan alone first, and only
+// then with GL too; `prewarm` starts a Vulkan device on a thread of its own before the
+// first window exists; a context remembers the display its surfaces are made on.
 #[cfg(not(target_family = "wasm"))]
 use crate::{WgpuRenderer, WgpuSurfaceConfig};
 #[cfg(not(target_family = "wasm"))]
@@ -22,7 +25,19 @@ pub struct WgpuContext {
     dual_source_blending: bool,
     color_texture_format: wgpu::TextureFormat,
     errors: Arc<DeviceErrorState>,
+    /// The display the windows' surfaces are made on. An instance made before the first
+    /// window (see [`prewarm`]) doesn't know it, so every surface is given it.
+    display: Option<SurfaceDisplay>,
 }
+
+/// A window system's display connection, as a surface needs it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct SurfaceDisplay(pub(crate) raw_window_handle::RawDisplayHandle);
+
+// SAFETY: it is only a handle, handed to wgpu when a surface is made; surfaces are made
+// on the thread that owns the windows, which is the thread that owns the display.
+unsafe impl Send for SurfaceDisplay {}
+unsafe impl Sync for SurfaceDisplay {}
 
 /// Errors reported by wgpu's device-wide callbacks.
 ///
@@ -323,6 +338,7 @@ impl WgpuContext {
             color_texture_format,
             errors,
             fast_dynamic_textures: crate::fast::dynamic_textures::TextureStore::default(),
+            display: None,
         }
     }
 
@@ -423,6 +439,7 @@ impl WgpuContext {
             color_texture_format,
             errors,
             fast_dynamic_textures: crate::fast::dynamic_textures::TextureStore::default(),
+            display: None,
         };
         Ok(PreparedWebGraphics { context, surface })
     }
@@ -482,8 +499,16 @@ impl WgpuContext {
 
     #[cfg(not(target_family = "wasm"))]
     pub fn instance(display: Option<Box<dyn wgpu::wgt::WgpuHasDisplayHandle>>) -> wgpu::Instance {
+        Self::instance_with(display, wgpu::Backends::VULKAN | wgpu::Backends::GL)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn instance_with(
+        display: Option<Box<dyn wgpu::wgt::WgpuHasDisplayHandle>>,
+        backends: wgpu::Backends,
+    ) -> wgpu::Instance {
         wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
+            backends,
             flags: wgpu::InstanceFlags::default(),
             backend_options: wgpu::BackendOptions::default(),
             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
@@ -504,6 +529,84 @@ impl WgpuContext {
             );
         }
         Ok(())
+    }
+
+    /// The display this context's surfaces are made on, once a window has given it.
+    pub(crate) fn display(&self) -> Option<raw_window_handle::RawDisplayHandle> {
+        self.display.map(|display| display.0)
+    }
+
+    /// A context and a configured surface for a window, when there is no context yet.
+    ///
+    /// The device [`prewarm`] started is taken if it can show the window. Otherwise
+    /// Vulkan alone is tried, without software renderers: making a GL instance next to
+    /// it costs tens of milliseconds (EGL, and every EGL driver installed) that a
+    /// machine with a Vulkan GPU never gets back. Only when that finds nothing are GL
+    /// and software renderers looked at, as gpui-fast always did.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn new_for_window<W>(
+        window: &W,
+        config: &WgpuSurfaceConfig,
+        compositor_gpu: Option<CompositorGpuHint>,
+        reject_software: bool,
+    ) -> anyhow::Result<(Self, wgpu::Surface<'static>)>
+    where
+        W: raw_window_handle::HasWindowHandle
+            + raw_window_handle::HasDisplayHandle
+            + std::fmt::Debug
+            + Send
+            + Sync
+            + Clone
+            + 'static,
+    {
+        let display = window
+            .display_handle()
+            .map_err(|e| anyhow::anyhow!("Failed to get display handle: {e}"))?
+            .as_raw();
+        let window_handle = window
+            .window_handle()
+            .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?
+            .as_raw();
+
+        if let Some(prewarmed) = take_prewarmed() {
+            match prewarmed.adopt(display, window_handle, config, compositor_gpu) {
+                Ok(found) => return Ok(found),
+                Err(e) => log::info!("The GPU started early can't show the window: {e:#}"),
+            }
+        }
+
+        let tries = [
+            (wgpu::Backends::VULKAN, true),
+            (wgpu::Backends::VULKAN | wgpu::Backends::GL, reject_software),
+        ];
+        let mut failure = None;
+        for (backends, reject_software) in tries {
+            // with the display, as gpui-fast made its instance: GL needs it at creation
+            let instance = Self::instance_with(Some(Box::new(window.clone())), backends);
+            let attempt =
+                crate::wgpu_renderer::create_surface(&instance, Some(display), window_handle)
+                    .and_then(|surface| {
+                        let context = Self::new_with_options(
+                            instance,
+                            &surface,
+                            config,
+                            compositor_gpu,
+                            reject_software,
+                        )?;
+                        Ok((context, surface))
+                    });
+            match attempt {
+                Ok((mut context, surface)) => {
+                    context.display = Some(SurfaceDisplay(display));
+                    return Ok((context, surface));
+                }
+                Err(e) => {
+                    log::info!("No GPU with {backends:?}: {e:#}");
+                    failure = Some(e);
+                }
+            }
+        }
+        Err(failure.expect("at least one try was made"))
     }
 
     /// Select an adapter and create a device, testing that the surface can actually be configured.
@@ -667,18 +770,7 @@ impl WgpuContext {
 
         let (device, queue, dual_source_blending, color_atlas_texture_format) =
             Self::create_device(adapter).await?;
-        // Test with the configuration the renderer will use, so that it doesn't need to
-        // configure the surface a second time.
-        let (surface_config, _, _) =
-            WgpuRenderer::surface_configuration(surface, adapter, &device, config)?;
-        let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-
-        surface.configure(&device, &surface_config);
-
-        let error = error_scope.pop().await;
-        if let Some(e) = error {
-            anyhow::bail!("surface configuration failed: {e}");
-        }
+        Self::configure_surface(adapter, &device, surface, config).await?;
 
         Ok((
             device,
@@ -686,6 +778,28 @@ impl WgpuContext {
             dual_source_blending,
             color_atlas_texture_format,
         ))
+    }
+
+    /// Configures the surface the way the renderer will use it, so that it doesn't need
+    /// to configure it a second time, and says whether that worked.
+    #[cfg(not(target_family = "wasm"))]
+    async fn configure_surface(
+        adapter: &wgpu::Adapter,
+        device: &wgpu::Device,
+        surface: &wgpu::Surface<'_>,
+        config: &WgpuSurfaceConfig,
+    ) -> anyhow::Result<()> {
+        let (surface_config, _, _) =
+            WgpuRenderer::surface_configuration(surface, adapter, device, config)?;
+        let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+
+        surface.configure(device, &surface_config);
+
+        let error = error_scope.pop().await;
+        if let Some(e) = error {
+            anyhow::bail!("surface configuration failed: {e}");
+        }
+        Ok(())
     }
 
     fn select_color_texture_format(adapter: &wgpu::Adapter) -> anyhow::Result<wgpu::TextureFormat> {
@@ -755,6 +869,116 @@ impl WgpuContext {
 }
 
 #[cfg(not(target_family = "wasm"))]
+/// A Vulkan device made before the first window, for the first window to take.
+#[cfg(not(target_family = "wasm"))]
+struct Prewarmed {
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    dual_source_blending: bool,
+    color_texture_format: TextureFormat,
+}
+
+#[cfg(not(target_family = "wasm"))]
+static PREWARM: std::sync::Mutex<Option<std::thread::JoinHandle<Option<Prewarmed>>>> =
+    std::sync::Mutex::new(None);
+
+/// Starts the GPU on a thread of its own: a Vulkan instance and a device on the best
+/// adapter. Loading the driver and making a device take a good part of the time before
+/// the first frame (around 120 ms with NVIDIA's driver); started at the top of `main`,
+/// that happens while the application sets itself up, and the first window takes the
+/// device when it opens. A device that can't show the window is dropped, and the window
+/// looks for one as it would have without this. Calling it again does nothing.
+#[cfg(not(target_family = "wasm"))]
+pub fn prewarm() {
+    let mut slot = PREWARM
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if slot.is_none() {
+        *slot = std::thread::Builder::new()
+            .name("gpu prewarm".into())
+            .spawn(Prewarmed::start)
+            .ok();
+    }
+}
+
+/// The device [`prewarm`] made, once it is there; None without one.
+#[cfg(not(target_family = "wasm"))]
+fn take_prewarmed() -> Option<Prewarmed> {
+    let handle = PREWARM
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take()?;
+    handle.join().ok().flatten()
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl Prewarmed {
+    fn start() -> Option<Self> {
+        // No window yet, so no display: every surface is given it when it is made.
+        let instance = WgpuContext::instance_with(None, wgpu::Backends::VULKAN);
+        let mut adapters = gpui::block_on(instance.enumerate_adapters(wgpu::Backends::VULKAN));
+        // the compositor's GPU isn't known yet: `adopt` checks it once the window says
+        WgpuContext::sort_adapters(&mut adapters, WgpuContext::device_id_filter(), None);
+        // a software renderer is no head start: the window may find a GPU with GL
+        let adapter = adapters
+            .into_iter()
+            .find(|adapter| adapter.get_info().device_type != wgpu::DeviceType::Cpu)?;
+        let (device, queue, dual_source_blending, color_texture_format) =
+            gpui::block_on(WgpuContext::create_device(&adapter))
+                .map_err(|e| log::info!("The GPU couldn't be started early: {e:#}"))
+                .ok()?;
+        Some(Self {
+            instance,
+            adapter,
+            device,
+            queue,
+            dual_source_blending,
+            color_texture_format,
+        })
+    }
+
+    /// The context and the configured surface for the first window, if this device can
+    /// show it: on the GPU the compositor uses, when it says which.
+    fn adopt(
+        self,
+        display: raw_window_handle::RawDisplayHandle,
+        window_handle: raw_window_handle::RawWindowHandle,
+        config: &WgpuSurfaceConfig,
+        compositor_gpu: Option<CompositorGpuHint>,
+    ) -> anyhow::Result<(WgpuContext, wgpu::Surface<'static>)> {
+        let info = self.adapter.get_info();
+        if let Some(hint) = compositor_gpu
+            && (info.vendor, info.device) != (hint.vendor_id, hint.device_id)
+        {
+            anyhow::bail!("the compositor draws on another GPU than {}", info.name);
+        }
+        let surface =
+            crate::wgpu_renderer::create_surface(&self.instance, Some(display), window_handle)?;
+        let caps = surface.get_capabilities(&self.adapter);
+        if caps.formats.is_empty() || caps.alpha_modes.is_empty() {
+            anyhow::bail!("{} can't present to this window", info.name);
+        }
+        gpui::block_on(WgpuContext::configure_surface(
+            &self.adapter,
+            &self.device,
+            &surface,
+            config,
+        ))?;
+        let mut context = WgpuContext::from_native_adapter_and_device(
+            self.instance,
+            self.adapter,
+            self.device,
+            self.queue,
+            self.dual_source_blending,
+            self.color_texture_format,
+        );
+        context.display = Some(SurfaceDisplay(display));
+        Ok((context, surface))
+    }
+}
+
 fn parse_pci_id(id: &str) -> anyhow::Result<u32> {
     let mut id = id.trim();
 
