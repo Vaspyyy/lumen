@@ -178,6 +178,8 @@ pub struct Scanner {
     payload: Vec<u8>,
     /// It can't be one any more.
     other: bool,
+    /// How many bytes went to the terminal that the log has not been told of.
+    fed: usize,
 }
 
 impl Scanner {
@@ -384,6 +386,10 @@ pub struct Log {
     fresh: bool,
     /// A prompt beside what is typed is being written: the next `B` ends it.
     aside: bool,
+    /// How many bytes were written to the terminal since the prompt that is
+    /// open began, or was last written again. An earlier copy of it is no
+    /// more lines up than that: a line takes a byte at least.
+    written: usize,
     /// The command that ran when it did. How it ended may still be said.
     over: Option<u32>,
     /// The shell's process, whose folder a command starts in.
@@ -537,11 +543,12 @@ impl Log {
                 let id = match self.current {
                     Some(id) if again => {
                         // what is left of it further up is an earlier copy, and no command
-                        forget_above(term, line, id, None);
+                        forget_above(term, line, id, None, self.written);
                         id
                     },
                     _ => self.open(),
                 };
+                self.written = 0;
                 self.phase = Phase::Prompt;
                 remark(term, &before, Some(id));
                 tag(term, Some((id, Part::Prompt)));
@@ -573,7 +580,7 @@ impl Log {
                         // so there is left of an earlier copy, on lines the terminal has
                         // wrapped anew.
                         let line = term.grid().cursor.point.line;
-                        forget_above(term, line, id, Some(Part::Input));
+                        forget_above(term, line, id, Some(Part::Input), self.written);
                     }
                     tag(term, Some((id, Part::Input)));
                 }
@@ -635,6 +642,7 @@ pub fn advance<L: EventListener>(
     let mut done = 0;
     for (end, mark) in marks {
         parser.advance(term, &bytes[done..end]);
+        scanner.fed = scanner.fed.saturating_add(end - done);
         done = end;
         // Inside a synchronized update the parser holds the text back until the
         // update ends. The mark belongs between that text, so the update is ended
@@ -642,9 +650,12 @@ pub fn advance<L: EventListener>(
         if parser.sync_bytes_count() > 0 && !matches!(mark, Mark::Notify(_)) {
             parser.stop_sync(term);
         }
-        log.lock().unwrap().apply(mark, term);
+        let mut log = log.lock().unwrap();
+        log.written = log.written.saturating_add(std::mem::take(&mut scanner.fed));
+        log.apply(mark, term);
     }
     parser.advance(term, &bytes[done..]);
+    scanner.fed = scanner.fed.saturating_add(bytes.len() - done);
 }
 
 /// The link that marks a cell as this part of command `id`.
@@ -723,10 +734,14 @@ fn marks_on<L>(term: &Term<L>, line: Line) -> impl Iterator<Item = (u32, Part)> 
 ///
 /// Lines that are marked for no command lie between the copies where a
 /// program has printed with links of its own, or where the shell left lines
-/// empty. They don't end the search: a line of another command does, and
-/// it goes no further than [`own_lines`] looks for a command's lines.
-fn forget_above<L>(term: &mut Term<L>, line: Line, id: u32, part: Option<Part>) {
-    let top = term.topmost_line().max(line - term.screen_lines() as i32);
+/// empty. They don't end the search. A line of another command does: the
+/// command is older, and nothing of this one stands above it. Without one,
+/// the search goes as far up as `written` bytes can have moved a line, and
+/// two screens further for a screen that was cleared in between.
+fn forget_above<L>(term: &mut Term<L>, line: Line, id: u32, part: Option<Part>, written: usize) {
+    let reach = written.saturating_add(2 * term.screen_lines());
+    let reach = i32::try_from(reach).unwrap_or(i32::MAX);
+    let top = term.topmost_line().max(Line(line.0.saturating_sub(reach)));
     let columns = term.columns();
     let uri = link_of(id, Part::Left);
     let left = alacritty_terminal::term::cell::Hyperlink::new(Some(uri.clone()), uri);
@@ -1319,6 +1334,20 @@ mod tests {
         let mut screen = Screen::new();
         screen.print(prompt).print("\r\n\r\n\r\n\r\n").print(prompt);
         assert_eq!(screen.places(), [(0, 4, 4)]);
+        // A listing of more lines than a few screens are high, and empty lines sent
+        // off after it: the copy above the listing is found still, however far up.
+        let mut screen = Screen::new();
+        screen.print(prompt).print("cd fo\r\n\x1b]8;;file:///foo1\x07foo1\x1b]8;;\x07\r\n");
+        for _ in 0..40 {
+            screen.print("name\r\n");
+        }
+        screen.print(prompt).print("cd fo");
+        for _ in 0..12 {
+            screen.print("\x15\r\n").print(prompt);
+        }
+        screen.print("ls\r\n\x1b]133;C\x07");
+        assert_eq!(screen.places(), [(0, 6, 6)]);
+        assert_eq!(screen.command(0).text.as_deref(), Some("ls"));
         // a prompt of another command ends the search: it is that command's still
         let mut screen = Screen::new();
         screen

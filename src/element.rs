@@ -343,6 +343,8 @@ impl Element for TerminalElement {
         let ink;
         let cursor_color;
         let on_cursor;
+        // what the pane stands on: text drawn "in the background's color" has this one
+        let behind;
         {
             let terminal = self.terminal.read(cx);
             let term = terminal.term.lock();
@@ -350,6 +352,7 @@ impl Element for TerminalElement {
             let offset = content.display_offset as i32;
             let overrides = content.colors;
             ground = palette::ground(overrides, colors);
+            behind = ground.unwrap_or(colors.primary.background);
             ink = palette::ink(overrides, colors).hsla();
             let (of_cursor, under_cursor) = palette::cursor(overrides, colors);
             (cursor_color, on_cursor) = (of_cursor.hsla(), under_cursor.hsla());
@@ -432,10 +435,10 @@ impl Element for TerminalElement {
                     push_background(&mut backgrounds, row, col, width, wash);
                     if let Some(color) = selection_fg {
                         fg_color = color;
-                    } else if palette::bare(fg) {
+                    } else if !palette::apart(palette::rgb(fg, overrides, colors), behind, false) {
                         // Text in the color of the pane's background stood on a block of
-                        // its own (inverse text), which the selection has taken the place
-                        // of: it is drawn in the color of the text.
+                        // its own (inverse text, mostly), which the selection has taken
+                        // the place of: it is drawn in the color of the text.
                         fg_color = Hsla { a: fg_color.a, ..ink };
                     }
                 } else if !default_bg {
@@ -537,9 +540,6 @@ impl Element for TerminalElement {
                 commands.push((id, first, last, color));
             }
         }
-
-        // what the pane stands on: text drawn "in the background's color" has this one
-        let behind = ground.unwrap_or(colors.primary.background);
 
         let mut rects = Vec::with_capacity(backgrounds.len() + found.len());
         for (row, col, cells, color) in backgrounds.into_iter().chain(found) {
