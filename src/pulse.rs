@@ -257,6 +257,8 @@ const LOOK_AGAIN: Duration = Duration::from_secs(30);
 const TRIES: u32 = 3;
 /// The wait before pulse is started again after it ended.
 const AGAIN: Duration = Duration::from_secs(20);
+/// How long pulse waits for lumen's first frame: a window that isn't shown gets none.
+const FIRST_FRAME: Duration = Duration::from_secs(1);
 
 /// The one pulse of this lumen, and what it said last.
 pub struct Monitor {
@@ -274,6 +276,9 @@ pub struct Monitor {
     again: Option<Task<()>>,
     /// What the config said about pulse when this last looked.
     config: Option<crate::config::Pulse>,
+    /// Whether pulse may start: once lumen has shown its first frame. Started next to
+    /// it, pulse (and its first look at the GPU) made that frame late.
+    ready: bool,
     _config: Subscription,
 }
 
@@ -282,7 +287,8 @@ pub struct Pulse(pub Entity<Monitor>);
 
 impl Global for Pulse {}
 
-/// Starts pulse, if the config wants it and it is there.
+/// Gets pulse ready, if the config wants it and it is there. It starts with
+/// [`begin_after_first_frame`].
 pub fn init(cx: &mut App) {
     let monitor = cx.new(|cx| {
         let mut monitor = Monitor {
@@ -295,12 +301,42 @@ pub fn init(cx: &mut App) {
             failed: 0,
             again: None,
             config: None,
+            ready: false,
             _config: cx.observe_global::<Config>(Monitor::config_changed),
         };
         monitor.config_changed(cx);
         monitor
     });
     cx.set_global(Pulse(monitor));
+}
+
+/// Starts pulse once the first window has shown a frame, or a moment later for a
+/// window that isn't shown.
+pub fn begin_after_first_frame(cx: &mut App) {
+    if let Some(window) = cx.windows().first().copied() {
+        let _ = window.update(cx, |_, window, _| {
+            // a next-frame callback runs before that frame is drawn: the one it adds runs after
+            window.on_next_frame(|window, _| window.on_next_frame(|_, cx| begin(cx)));
+        });
+    }
+    cx.spawn(async |cx| {
+        cx.background_executor().timer(FIRST_FRAME).await;
+        cx.update(begin);
+    })
+    .detach();
+}
+
+/// Lets pulse start, the first time it is called.
+fn begin(cx: &mut App) {
+    let Some(Pulse(monitor)) = cx.try_global::<Pulse>() else { return };
+    monitor.clone().update(cx, |monitor, cx| {
+        if !monitor.ready {
+            monitor.ready = true;
+            if monitor.enabled() {
+                monitor.start(cx);
+            }
+        }
+    });
 }
 
 impl Monitor {
@@ -360,7 +396,7 @@ impl Monitor {
         self.watch = None;
         self.reading = None;
         self.uses.clear();
-        if self.enabled() {
+        if self.enabled() && self.ready {
             self.start(cx);
         }
         cx.notify();
