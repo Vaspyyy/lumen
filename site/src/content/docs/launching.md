@@ -82,7 +82,7 @@ While it waits, the daemon uses about 25 MB of memory of its own and 20 MB on th
 
 ### After an update
 
-A daemon from before an update makes way for the new version by itself: within a few seconds of the update, if it has no window open, it ends, and systemd starts the new program in its place. A daemon with windows open keeps them, and makes way a few seconds after you close the last one. Until then, a launch of the new version starts a lumen of its own.
+A daemon from before an update makes way for the new version by itself: within a few seconds of the update, if it has no window open, it ends, and systemd starts the new program in its place. A daemon with windows open keeps them, and makes way a few seconds after you close the last one. Until then, a launch of a new version starts a lumen of its own, and a launch of a new build of the same version still opens its tab in the old one.
 
 ## Focus
 

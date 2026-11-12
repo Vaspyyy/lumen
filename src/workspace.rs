@@ -438,7 +438,7 @@ impl Workspace {
     /// goes to whatever the desktop opens it with.
     fn edit(&mut self, path: &Path, line: u32, column: Option<u32>, window: &mut Window, cx: &mut Context<Self>) {
         let editor = cx.global::<Config>().editor.clone();
-        let launched = self.env.clone();
+        let launched = self.pane_env(cx);
         let env = |name: &str| match &launched {
             Some(env) => env.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone()),
             None => std::env::var(name).ok(),
@@ -450,13 +450,13 @@ impl Workspace {
         let program = launch.argv[0].clone();
         let started = if launch.terminal {
             let spawn =
-                Spawn { cwd: path.parent().map(Path::to_path_buf), command: Some(launch.argv), env: self.env.clone() };
+                Spawn { cwd: path.parent().map(Path::to_path_buf), command: Some(launch.argv), env: launched.clone() };
             self.open(spawn, (1., 1.), window, cx).map(|pane| self.push_tab(pane, window, cx))
         } else {
             let mut command = std::process::Command::new(&program);
             command.args(&launch.argv[1..]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
             // on the display this window is on: a lumen started without one (the daemon) has none of its own
-            if let Some(env) = &self.env {
+            if let Some(env) = &launched {
                 command.envs(env.iter().map(|(key, value)| (key, value)));
             }
             if let Some(graphical) = cx.graphical_environment() {
@@ -595,7 +595,7 @@ impl Workspace {
     fn open_monitor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let program = cx.try_global::<Pulse>().and_then(|pulse| pulse.0.read(cx).program().map(Path::to_path_buf));
         let program = program.map_or_else(|| "pulse".to_string(), |program| program.to_string_lossy().into_owned());
-        let spawn = Spawn { cwd: dirs::home_dir(), command: Some(vec![program]), env: self.env.clone() };
+        let spawn = Spawn { cwd: dirs::home_dir(), command: Some(vec![program]), env: self.pane_env(cx) };
         match self.open(spawn, (1., 1.), window, cx) {
             Ok(pane) => self.push_tab(pane, window, cx),
             Err(e) => self.say(format!("Can't start pulse: {e}"), cx),
@@ -627,20 +627,26 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The environment of the active pane: that of the launch it was opened for, which may
+    /// not be the window's.
+    fn pane_env(&self, cx: &App) -> Option<Env> {
+        match self.tabs.get(self.active) {
+            Some(tab) => tab.active.read(cx).terminal.read(cx).env.clone(),
+            None => self.env.clone(),
+        }
+    }
+
     /// Where a terminal opened from here starts: the folder of the active pane, with its
     /// environment.
     fn spawn_here(&self, cx: &App) -> Spawn {
-        let Some(tab) = self.tabs.get(self.active) else {
-            return Spawn { cwd: None, command: None, env: self.env.clone() };
-        };
-        let terminal = tab.active.read(cx).terminal.read(cx);
-        Spawn { cwd: terminal.cwd(), command: None, env: terminal.env.clone() }
+        let cwd = self.tabs.get(self.active).and_then(|tab| tab.active.read(cx).terminal.read(cx).cwd());
+        Spawn { cwd, command: None, env: self.pane_env(cx) }
     }
 
     /// What `Ctrl+Shift+N` opens from here: a window in the folder this one was opened in,
-    /// with its environment.
-    pub fn spawn_window(&self) -> Spawn {
-        Spawn { cwd: self.home.clone(), command: None, env: self.env.clone() }
+    /// with the active pane's environment.
+    pub fn spawn_window(&self, cx: &App) -> Spawn {
+        Spawn { cwd: self.home.clone(), command: None, env: self.pane_env(cx) }
     }
 
     /// The pane that is in front.

@@ -341,8 +341,12 @@ pub fn pause(cx: &mut App) {
     });
 }
 
-/// Lets pulse start, the first time it is called.
+/// Lets pulse start, the first time it is called, while a window is open: a window that
+/// closed again within [`FIRST_FRAME`] leaves a daemon with none.
 fn begin(cx: &mut App) {
+    if cx.windows().is_empty() {
+        return;
+    }
     let Some(Pulse(monitor)) = cx.try_global::<Pulse>() else { return };
     monitor.clone().update(cx, |monitor, cx| {
         if !monitor.ready {

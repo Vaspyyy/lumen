@@ -138,24 +138,55 @@ const SET_HERE: &[&str] =
 /// `$SHELL`, not lumen's (a daemon has the one systemd gave it), and what lumen's own
 /// environment has that the launch's doesn't is taken out with `env -u`: the PTY can only
 /// add to the environment it inherits from lumen.
-fn program(spawn: &Spawn, config: &Config, ours: impl Iterator<Item = String>) -> Option<Shell> {
+fn program(spawn: &Spawn, config: &Config, ours: impl Iterator<Item = String>) -> std::io::Result<Option<Shell>> {
     let (program, args) = match &spawn.command {
         Some(argv) if !argv.is_empty() => (Some(argv[0].clone()), argv[1..].to_vec()),
         _ => (config.shell.clone(), Vec::new()),
     };
-    let Some(env) = &spawn.env else { return program.map(|program| Shell::new(program, args)) };
+    let Some(env) = &spawn.env else { return Ok(program.map(|program| Shell::new(program, args))) };
     let theirs = |name: &str| env.iter().find(|(key, _)| key == name).map(|(_, value)| value);
     let program = program.or_else(|| theirs("SHELL").filter(|shell| !shell.is_empty()).cloned());
-    let unset: Vec<String> = ours.filter(|name| theirs(name).is_none() && !SET_HERE.contains(&name.as_str())).collect();
+    // a launch without SHELL runs lumen's, and keeps it named
+    let unset: Vec<String> =
+        ours.filter(|name| theirs(name).is_none() && name != "SHELL" && !SET_HERE.contains(&name.as_str())).collect();
     if unset.is_empty() {
-        return program.map(|program| Shell::new(program, args));
+        return Ok(program.map(|program| Shell::new(program, args)));
     }
     let program = program.or_else(|| std::env::var("SHELL").ok()).unwrap_or_else(|| "/bin/sh".into());
+    // env takes NAME=VALUE for a variable, also after --: such a program starts without it
+    if program.contains('=') {
+        return Ok(Some(Shell::new(program, args)));
+    }
+    // env would say in the tab that the program isn't there, and the tab would close at
+    // once: the launch is told instead, as for a terminal started without env
+    if !runnable(&program, theirs("PATH").map(String::as_str), spawn.cwd.as_deref()) {
+        return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("there is no program {program}")));
+    }
     let mut wrapped: Vec<String> = unset.into_iter().flat_map(|name| ["-u".to_string(), name]).collect();
     wrapped.push("--".into());
     wrapped.push(program);
     wrapped.extend(args);
-    Some(Shell::new("/usr/bin/env".into(), wrapped))
+    Ok(Some(Shell::new("/usr/bin/env".into(), wrapped)))
+}
+
+/// Whether a program can be started, as `env` looks for it: by its path where it has a
+/// slash, else in the folders of `path`.
+fn runnable(program: &str, path: Option<&str>, cwd: Option<&std::path::Path>) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let executable = |file: &std::path::Path| {
+        file.metadata().is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    };
+    if program.contains('/') {
+        let file = std::path::Path::new(program);
+        return match cwd {
+            Some(cwd) if file.is_relative() => executable(&cwd.join(file)),
+            _ => executable(file),
+        };
+    }
+    path.unwrap_or("/usr/local/bin:/usr/bin:/bin")
+        .split(':')
+        .filter(|dir| !dir.is_empty())
+        .any(|dir| executable(&std::path::Path::new(dir).join(program)))
 }
 
 /// A terminal whose program is running, before it is an entity.
@@ -177,7 +208,7 @@ impl Terminal {
     /// the pane is first drawn, but a program that prints before that has
     /// its output laid out for this size.
     pub fn start(spawn: Spawn, config: &Config, size: TermSize) -> std::io::Result<Started> {
-        let shell = program(&spawn, config, std::env::vars_os().filter_map(|(name, _)| name.into_string().ok()));
+        let shell = program(&spawn, config, std::env::vars_os().filter_map(|(name, _)| name.into_string().ok()))?;
         let launch_env = spawn.env.clone();
         let mut env: HashMap<String, String> = spawn.env.iter().flat_map(|env| env.iter().cloned()).collect();
         env.insert("TERM".into(), "xterm-256color".into());
@@ -429,25 +460,39 @@ mod tests {
     #[test]
     fn lumens_own_terminals_run_as_asked() {
         let config = Config::default();
-        assert_eq!(program(&Spawn::default(), &config, ours()), None);
+        assert_eq!(program(&Spawn::default(), &config, ours()).unwrap(), None);
         let spawn = Spawn { command: Some(vec!["htop".into(), "-d".into(), "5".into()]), ..Default::default() };
-        assert_eq!(program(&spawn, &config, ours()), Some(Shell::new("htop".into(), vec!["-d".into(), "5".into()])));
+        let htop = Shell::new("htop".into(), vec!["-d".into(), "5".into()]);
+        assert_eq!(program(&spawn, &config, ours()).unwrap(), Some(htop));
     }
 
     #[test]
     fn a_launch_gets_its_own_shell_and_nothing_of_lumens_environment() {
         let config = Config::default();
-        let spawn = Spawn { env: env(&[("PATH", "/bin"), ("SHELL", "/usr/bin/fish")]), ..Default::default() };
+        let spawn = Spawn { env: env(&[("PATH", "/usr/bin:/bin"), ("SHELL", "/bin/sh")]), ..Default::default() };
         let unset = |names: &[&str], program: &str| {
             let mut args: Vec<String> = names.iter().flat_map(|name| ["-u".to_string(), name.to_string()]).collect();
             args.extend(["--".to_string(), program.to_string()]);
             Some(Shell::new("/usr/bin/env".into(), args))
         };
         // HOME and TERM are set by the PTY itself; the rest of lumen's own is taken out
-        assert_eq!(program(&spawn, &config, ours()), unset(&["INVOCATION_ID", "VIRTUAL_ENV"], "/usr/bin/fish"));
+        assert_eq!(program(&spawn, &config, ours()).unwrap(), unset(&["INVOCATION_ID", "VIRTUAL_ENV"], "/bin/sh"));
         // nothing to take out: the launch's shell, as it is
-        let spawn = Spawn { env: env(&[("PATH", "/bin"), ("SHELL", "/usr/bin/fish")]), ..Default::default() };
         let only = ["PATH".to_string()].into_iter();
-        assert_eq!(program(&spawn, &config, only), Some(Shell::new("/usr/bin/fish".into(), Vec::new())));
+        assert_eq!(program(&spawn, &config, only).unwrap(), Some(Shell::new("/bin/sh".into(), Vec::new())));
+    }
+
+    #[test]
+    fn a_launch_is_told_of_a_program_that_is_not_there() {
+        let config = Config::default();
+        let missing = |program: &str| Spawn {
+            command: Some(vec![program.into()]),
+            env: env(&[("PATH", "/usr/bin:/bin")]),
+            ..Default::default()
+        };
+        let error = program(&missing("no-such-program-here"), &config, ours()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert!(program(&missing("/nowhere/sh"), &config, ours()).is_err());
+        assert!(program(&missing("sh"), &config, ours()).unwrap().is_some());
     }
 }

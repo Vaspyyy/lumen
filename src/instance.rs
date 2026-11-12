@@ -372,6 +372,11 @@ fn after_switch(switch: gpui::Task<gpui::Result<()>>, first: Option<(Request, Un
                     _ => answer(request, stream, cx),
                 }
             }
+            // on a display with no window after all (the launch gave up, or wasn't opened): no
+            // window will close to send the daemon back to waiting, so it goes now
+            if to_display && cx.windows().is_empty() && !switching(cx) && cx.graphical_environment().is_some() {
+                wait_without_window(cx);
+            }
         });
     })
     .detach();

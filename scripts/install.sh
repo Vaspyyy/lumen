@@ -18,7 +18,9 @@ if [ "${LUMEN_DAEMON:-1}" != 0 ] && command -v systemctl >/dev/null && systemctl
         off=1
     fi
     mkdir -p "$units"
-    LUMEN_EXEC=$program awk '
+    # quoted as systemd reads a path: \ and " escaped, % and $ doubled
+    quoted=$(printf '%s' "$program" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/%/%%/g' -e 's/\$/$$/g')
+    LUMEN_EXEC=$quoted awk '
         /^ExecStart=\/usr\/bin\/lumen / { sub(/^ExecStart=\/usr\/bin\/lumen/, ""); print "ExecStart=\"" ENVIRON["LUMEN_EXEC"] "\"" $0; next }
         { print }
     ' packaging/lumen.service >"$units/lumen.service"

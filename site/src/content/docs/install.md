@@ -5,7 +5,7 @@ description: Packages for Debian, Ubuntu, Fedora, openSUSE and Arch, one command
 
 lumen runs on Linux, on Wayland and X11. Every release comes as a package for the big distributions and as one command for the others. They are built for 64-bit Intel and AMD machines (`x86_64`); on any other machine, [build lumen from source](#build-it-from-source).
 
-Each way installs the program, the launcher entry and the icons, so lumen shows up in your desktop's application menu, and a systemd service that keeps lumen waiting from login on, so that its first window opens at once. The packages leave that service off: see [The daemon](#the-daemon).
+Each way installs the program, the launcher entry and the icons, so lumen shows up in your desktop's application menu, and a systemd service that keeps lumen waiting from login on, so that its first window opens at once. The install scripts turn that service on where systemd runs for your user, the packages leave it off: see [The daemon](#the-daemon).
 
 lumen is drawn by the graphics card, so it needs a working graphics driver, with Vulkan or OpenGL. Any Mesa driver of the last few years will do.
 
@@ -207,6 +207,7 @@ rm ~/.local/share/applications/lumen.desktop
 rm ~/.local/share/icons/hicolor/*/apps/lumen.png
 systemctl --user disable lumen
 rm ~/.config/systemd/user/lumen.service
+systemctl --user daemon-reload
 systemctl --user stop lumen
 ```
 

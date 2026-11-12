@@ -313,7 +313,7 @@ fn main() {
         cx.on_action(|_: &actions::NewWindow, cx| {
             // in the folder the window it is pressed in was opened in, with its environment
             let from = cx.active_window().and_then(|window| window.downcast::<Workspace>());
-            let spawn = from.and_then(|window| window.read_with(cx, |workspace, _| workspace.spawn_window()).ok());
+            let spawn = from.and_then(|window| window.read_with(cx, |workspace, cx| workspace.spawn_window(cx)).ok());
             if let Err(e) = open_window(spawn.unwrap_or_default(), cx) {
                 eprintln!("lumen: {e}");
             }
