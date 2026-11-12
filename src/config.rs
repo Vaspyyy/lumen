@@ -256,6 +256,22 @@ pub struct Editor {
     pub terminal: Option<bool>,
 }
 
+/// The machine's load, as pulse tells it where pulse is installed.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Pulse {
+    /// Run pulse and show what it says: the light in the title bar, what a tab uses.
+    pub enabled: bool,
+    /// Seconds between two readings.
+    pub every: u32,
+}
+
+impl Default for Pulse {
+    fn default() -> Self {
+        Pulse { enabled: true, every: 3 }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -264,6 +280,9 @@ pub struct Config {
     pub cursor: Cursor,
     pub colors: Colors,
     pub editor: Editor,
+    pub pulse: Pulse,
+    /// A program may post a notification on the desktop, for a tab that isn't looked at.
+    pub notifications: bool,
     /// Lines kept above the screen.
     pub scrollback: usize,
     /// Selecting text copies it, as well as putting it in the middle-click selection.
@@ -288,6 +307,8 @@ impl Default for Config {
             cursor: Cursor::default(),
             colors: Colors::default(),
             editor: Editor::default(),
+            pulse: Pulse::default(),
+            notifications: true,
             scrollback: 10_000,
             copy_on_select: false,
             shell: None,
@@ -327,6 +348,7 @@ impl Config {
         self.window.padding = self.window.padding.clamp(0., 200.);
         self.window.columns = self.window.columns.clamp(20, 1000);
         self.window.lines = self.window.lines.clamp(5, 500);
+        self.pulse.every = self.pulse.every.clamp(1, 60);
         self
     }
 

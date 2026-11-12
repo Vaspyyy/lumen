@@ -33,6 +33,7 @@ Every setting, with the value lumen uses when you don't set it:
 ```toml
 scrollback = 10000         # lines kept above the screen
 copy_on_select = false     # selecting text also copies it
+notifications = true       # programs may post on the desktop
 # shell = "/usr/bin/fish"  # your own shell if unset
 prewarm = false            # a new tab is there at once
 
@@ -65,6 +66,10 @@ foreground = "#e4e1ee"
 [editor]
 # command = "nvim"         # $VISUAL or $EDITOR if unset
 # terminal = true          # by the editor's name if unset
+
+[pulse]
+enabled = true             # show the machine's load, where pulse is installed
+every = 3                  # seconds between two looks
 ```
 
 The `[colors]` table has more in it: the cursor's colors, the selection's, and the sixteen colors programs use. [Colors](/docs/colors/) has all of them.
@@ -75,6 +80,7 @@ The `[colors]` table has more in it: the cursor's colors, the selection's, and t
 | --- | --- | --- |
 | `scrollback` | `10000` | How many lines are kept above the screen, per pane |
 | `copy_on_select` | `false` | Selecting text puts it on the clipboard, too. It can always be pasted with a middle click |
+| `notifications` | `true` | A program in a tab you are not looking at may post a notification on the desktop. With `false` the tab still gets its dot. See [Commands](/docs/commands/#when-a-program-has-something-to-tell) |
 | `shell` | unset | The program a new tab or pane runs: its path, without arguments. Unset, it is your shell, as `$SHELL` names it |
 | `prewarm` | `false` | Keeps one shell started ahead of time. See [Instant tabs](/docs/instant-tabs/) |
 
@@ -115,5 +121,14 @@ What a `Ctrl+Click` on a place in code, such as `src/main.rs:42`, opens. See [Fi
 | --- | --- | --- |
 | `command` | unset | The editor: its name, with any arguments it should always get. For an editor lumen doesn't know, the whole command with `{file}`, `{line}` and `{column}` in it. Unset, it is what `$VISUAL` names, or else `$EDITOR` |
 | `terminal` | unset | `true` if the editor runs in a terminal, and so gets a tab. `false` if it has a window of its own. Unset, lumen goes by the editor's name, and takes one it doesn't know for an editor of the terminal |
+
+## `[pulse]`
+
+What lumen shows of the machine's load, where pulse is installed. See [The machine](/docs/machine/).
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `enabled` | `true` | lumen starts pulse and shows what it says: the light in the title bar, and what each tab uses. With `false` it starts nothing |
+| `every` | `3` | Seconds between two looks at the machine, from 1 to 60 |
 
 A value outside its range is brought to the nearest one that is allowed.

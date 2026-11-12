@@ -45,6 +45,8 @@ Hold `Shift` and the mouse is lumen's again, to select text in such a program.
 
 Other links open with `Ctrl+Click`. So do web addresses, files and places in code such as `src/main.rs:42` that a program printed as plain text: hold `Ctrl`, and what lumen can follow is underlined under the mouse. See [Files and links](/docs/files-and-links/).
 
+A link that stands for a command puts it at the prompt with a plain click, and leaves `Enter` to you.
+
 ## Commands
 
 | On the mark beside a command | Does |
@@ -59,6 +61,8 @@ See [Commands](/docs/commands/).
 | With the mouse | Does |
 | --- | --- |
 | Click a tab | Goes to it |
+| Rest on a tab | Says what its programs use, where [pulse](/docs/machine/) is installed |
+| Click the light in the title bar | Opens pulse in a tab |
 | Middle click a tab | Closes it |
 | Drag a tab onto another | Moves it there |
 | Click a pane | Makes it the current one |

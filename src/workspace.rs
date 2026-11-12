@@ -9,18 +9,20 @@ use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Axis, Bounds, BoxShadow, Context, Corners, CursorStyle, Decorations, Entity, Focusable, Hsla,
-    MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, ResizeEdge, SharedString, Size, Subscription, Task, Tiling,
-    Window, canvas, div, point, px, size, svg,
+    AnyElement, App, Axis, Bounds, BoxShadow, Context, Corners, CursorStyle, Decorations, Entity, EntityId, Focusable,
+    Hsla, MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, ResizeEdge, SharedString, Size, Subscription,
+    SystemNotification, Task, Tiling, Window, canvas, div, point, px, size, svg,
 };
 
 use crate::actions::{
     ClosePane, CloseTab, FocusDown, FocusLeft, FocusRight, FocusUp, GoToTab, MoveTabLeft, MoveTabRight, NewTab,
     NextTab, PreviousTab, SplitDown, SplitRight, ToggleZoomPane,
 };
+use crate::commands::Note;
 use crate::config::Config;
 use crate::editor;
 use crate::element::Metrics;
+use crate::pulse::{Pulse, Use};
 use crate::terminal::{CommandEvent, Spawn, Terminal};
 use crate::view::{TerminalView, ViewEvent};
 
@@ -156,8 +158,29 @@ impl Render for TabGhost {
     }
 }
 
+/// What is said about the thing the mouse rests on: the first line, and
+/// more in a softer voice below it.
+struct Tip(Vec<SharedString>);
+
+impl Render for Tip {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let lines =
+            self.0.iter().enumerate().map(|(n, line)| {
+                div().when(n > 0, |this| this.text_color(gpui::white().opacity(0.5))).child(line.clone())
+            });
+        // below the mouse, clear of what it rests on
+        div()
+            .pt(px(6.))
+            .child(label(cx.global::<Config>()).flex().flex_col().gap(px(3.)).max_w(px(560.)).children(lines))
+    }
+}
+
 /// A small label that floats over the terminal: a notice, a dragged tab.
 fn pill(text: SharedString, config: &Config) -> gpui::Div {
+    label(config).child(text)
+}
+
+fn label(config: &Config) -> gpui::Div {
     div()
         .px(px(12.))
         .py(px(6.))
@@ -175,8 +198,16 @@ fn pill(text: SharedString, config: &Config) -> gpui::Div {
         .font_family(crate::fonts::ui())
         .text_size(px(12.5))
         .text_color(gpui::white().opacity(0.92))
-        .child(text)
 }
+
+/// The name a notification about a pane goes by: what leads back to the
+/// pane when the notification is clicked.
+fn tag_of(pane: EntityId) -> String {
+    format!("lumen-pane-{}", pane.as_u64())
+}
+
+/// A pane that is forever telling is heard this often on the desktop.
+const NOTE_GAP: Duration = Duration::from_secs(3);
 
 struct Tab {
     id: usize,
@@ -192,7 +223,7 @@ struct Tab {
 /// What a tab that isn't looked at has to tell, the least pressing first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum News {
-    /// A program rang the bell.
+    /// A program rang the bell, or has something to tell.
     Bell,
     /// A command ended.
     Done,
@@ -227,7 +258,11 @@ pub struct Workspace {
     notice_end: Option<Task<()>>,
     /// The window's title as the desktop was last told: the active tab's.
     title: String,
-    _observers: [Subscription; 3],
+    /// The shells of its panes, as pulse was last told.
+    shells: Vec<u32>,
+    /// When each pane last had a notification on the desktop.
+    noted: HashMap<EntityId, Instant>,
+    _observers: Vec<Subscription>,
 }
 
 /// A terminal that was started before it was asked for, so that the tab it
@@ -261,7 +296,9 @@ impl Workspace {
             notice: None,
             notice_end: None,
             title: String::new(),
-            _observers: [
+            shells: Vec::new(),
+            noted: HashMap::new(),
+            _observers: vec![
                 // a spare is laid out for the window's size: a resized window wants a new one
                 cx.observe_window_bounds(window, |this, window, cx| this.refresh_spare_soon(window, cx)),
                 cx.observe_global_in::<Config>(window, Self::config_changed),
@@ -276,6 +313,19 @@ impl Workspace {
                 }),
             ],
         };
+        if let Some(monitor) = cx.try_global::<Pulse>().map(|pulse| pulse.0.clone()) {
+            // what pulse says is shown on the tabs and in the title bar
+            this._observers.push(cx.observe(&monitor, |this, _, cx| {
+                this.sample(cx);
+                cx.notify();
+            }));
+            let id = cx.entity_id();
+            this._observers.push(cx.on_release(move |_, cx| {
+                if let Some(monitor) = cx.try_global::<Pulse>().map(|pulse| pulse.0.clone()) {
+                    monitor.update(cx, |monitor, _| monitor.forget(id));
+                }
+            }));
+        }
         let pane = this.open(spawn, (1., 1.), window, cx)?;
         this.push_tab(pane, window, cx);
         this.refresh_spare_soon(window, cx);
@@ -319,6 +369,7 @@ impl Workspace {
             ViewEvent::Notice(text) => this.say(text.clone(), cx),
             ViewEvent::Edit { path, line, column } => this.edit(path, *line, *column, window, cx),
             ViewEvent::Bell => this.tell(pane, News::Bell, window, cx),
+            ViewEvent::Notify(note) => this.note(pane, note, window, cx),
             ViewEvent::Command(CommandEvent::Started) => cx.notify(),
             ViewEvent::Command(CommandEvent::Ended { failed }) => {
                 this.tell(pane, if *failed { News::Failed } else { News::Done }, window, cx)
@@ -375,6 +426,105 @@ impl Workspace {
             tab.news = tab.news.max(Some(news));
         }
         cx.notify();
+    }
+
+    /// A program in a pane has something to tell the user. In the tab that
+    /// is looked at, the program's own output says it. Any other tab gets a
+    /// dot, and the desktop a notification that leads back to the pane.
+    fn note(&mut self, pane: &Pane, note: &Note, window: &mut Window, cx: &mut Context<Self>) {
+        let looked_at = window.is_window_active() || crate::preview();
+        let Some(index) = self.tabs.iter().position(|tab| tab.root.contains(pane)) else {
+            return;
+        };
+        if looked_at && index == self.active {
+            return;
+        }
+        let tab = &mut self.tabs[index];
+        tab.news = tab.news.max(Some(News::Bell));
+        cx.notify();
+        if !cx.global::<Config>().notifications {
+            return;
+        }
+        let (id, now) = (pane.entity_id(), Instant::now());
+        if self.noted.get(&id).is_some_and(|last| now.duration_since(*last) < NOTE_GAP) {
+            return;
+        }
+        self.noted.insert(id, now);
+        // a text without a title is about what the tab is called
+        let title = if note.title.is_empty() { pane.read(cx).terminal.read(cx).title() } else { note.title.clone() };
+        cx.show_system_notification(SystemNotification {
+            tag: tag_of(id).into(),
+            title: title.into(),
+            body: note.body.clone().into(),
+            actions: Vec::new(),
+        });
+    }
+
+    /// Brings the pane a notification was about to the front. False if it
+    /// is not one of this window's.
+    pub fn show_pane(&mut self, tag: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let found = self.tabs.iter().enumerate().find_map(|(index, tab)| {
+            let mut panes = Vec::new();
+            tab.root.panes(&mut panes);
+            panes.into_iter().find(|pane| tag_of(pane.entity_id()) == tag).map(|pane| (index, pane))
+        });
+        let Some((index, pane)) = found else {
+            return false;
+        };
+        self.tabs[index].active = pane;
+        self.activate(index, window, cx);
+        window.activate_window();
+        true
+    }
+
+    /// The shells of all panes in tabs: the processes pulse is asked about.
+    fn shell_pids(&self, cx: &App) -> Vec<u32> {
+        let mut panes = Vec::new();
+        for tab in &self.tabs {
+            tab.root.panes(&mut panes);
+        }
+        panes.iter().map(|pane| pane.read(cx).terminal.read(cx).shell_pid()).collect()
+    }
+
+    /// What pulse last said about a pane's shell and everything it started.
+    fn pane_use(pane: &Pane, cx: &App) -> Option<Use> {
+        let monitor = cx.try_global::<Pulse>()?.0.read(cx);
+        monitor.of(pane.read(cx).terminal.read(cx).shell_pid()).cloned()
+    }
+
+    /// What a tab's panes use together. None where pulse has said nothing about any of them.
+    fn tab_use(tab: &Tab, cx: &App) -> Option<Use> {
+        let mut panes = Vec::new();
+        tab.root.panes(&mut panes);
+        panes
+            .iter()
+            .filter_map(|pane| Self::pane_use(pane, cx))
+            .fold(None, |sum: Option<Use>, pane| Some(sum.unwrap_or_default().with(&pane)))
+    }
+
+    /// pulse has read the machine again: the commands that run keep the most
+    /// memory their pane was seen with.
+    fn sample(&mut self, cx: &mut Context<Self>) {
+        let mut panes = Vec::new();
+        for tab in &self.tabs {
+            tab.root.panes(&mut panes);
+        }
+        for pane in panes {
+            if let Some(found) = Self::pane_use(&pane, cx) {
+                pane.read(cx).terminal.read(cx).commands.lock().unwrap().sample(found.memory);
+            }
+        }
+    }
+
+    /// The monitor itself, in a tab: what a click on the title bar's light opens.
+    fn open_monitor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let program = cx.try_global::<Pulse>().and_then(|pulse| pulse.0.read(cx).program().map(Path::to_path_buf));
+        let program = program.map_or_else(|| "pulse".to_string(), |program| program.to_string_lossy().into_owned());
+        let spawn = Spawn { cwd: dirs::home_dir(), command: Some(vec![program]) };
+        match self.open(spawn, (1., 1.), window, cx) {
+            Ok(pane) => self.push_tab(pane, window, cx),
+            Err(e) => self.say(format!("Can't start pulse: {e}"), cx),
+        }
     }
 
     fn push_tab(&mut self, pane: Pane, window: &mut Window, cx: &mut Context<Self>) {
@@ -442,6 +592,7 @@ impl Workspace {
     /// Lets go of a pane that is closing: what the window holds for it.
     fn forget(&mut self, pane: &Pane, window: &mut Window, cx: &mut Context<Self>) {
         self.subscriptions.remove(&pane.entity_id());
+        self.noted.remove(&pane.entity_id());
         let images = pane.read(cx).terminal.read(cx).images.lock().unwrap().take_dropped(true);
         for image in images {
             let _ = window.drop_image(image);
@@ -781,6 +932,34 @@ impl Workspace {
                 (!active && panes.iter().any(running)).then(|| gpui::white().opacity(0.32))
             },
         };
+        // what the tab's panes use, where pulse tells: shown when it is worth a look
+        let usage = Self::tab_use(tab, cx);
+        let meter = usage.as_ref().filter(|usage| usage.notable()).map(|usage| {
+            let soft = gpui::white().opacity(if active { 0.5 } else { 0.38 });
+            // from two cores on, the tab is at work: its number is lit
+            let work = if usage.cores >= 2. { accent.opacity(0.95) } else { soft };
+            let memory = usage.memory as f64 / (1u64 << 30) as f64;
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(5.))
+                .text_size(px(11.))
+                .text_color(soft)
+                .child(svg().path("icons/pulse.svg").size(px(11.)).text_color(work))
+                .when(usage.cores >= 0.2, |this| {
+                    this.child(div().text_color(work).child(SharedString::from(format!("{:.1}", usage.cores))))
+                })
+                .when(memory >= 1., |this| this.child(SharedString::from(format!("{memory:.1}G"))))
+        });
+        // a shell that runs nothing has nothing to say
+        let tip = usage.filter(|usage| usage.notable() || usage.processes > 1).map(|usage| {
+            let mut lines = vec![SharedString::from(usage.describe())];
+            if usage.processes > 1 {
+                lines.push(format!("{} processes", usage.processes).into());
+            }
+            lines
+        });
         div()
             .id(SharedString::from(format!("tab-{id}")))
             .group("tab")
@@ -826,6 +1005,8 @@ impl Workspace {
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| this.reorder(dragged.id, id, cx)))
             .children(dot.map(|color| div().flex_none().size(px(6.)).rounded(px(3.)).bg(color)))
             .child(div().flex_1().min_w_0().truncate().child(SharedString::from(title)))
+            .children(meter)
+            .when_some(tip, |this, lines| this.tooltip(move |_, cx| cx.new(|_| Tip(lines.clone())).into()))
             .child(
                 div()
                     .id(SharedString::from(format!("tab-close-{id}")))
@@ -898,6 +1079,50 @@ impl Workspace {
             }),
         ));
         bar = bar.child(div().flex_1());
+        // The machine's light: lit when pulse calls the machine busy.
+        let machine = cx.try_global::<Pulse>().and_then(|pulse| {
+            let reading = pulse.0.read(cx).reading()?;
+            Some((
+                reading.busy,
+                vec![reading.line.clone().into(), reading.machine().into(), "click opens pulse".into()],
+            ))
+        });
+        if let Some((busy, lines)) = machine {
+            let lines: Vec<SharedString> = lines;
+            let light = div().size(px(7.)).rounded(px(3.5)).map(|this| {
+                if busy {
+                    this.bg(accent).shadow(vec![BoxShadow {
+                        color: accent.opacity(0.55),
+                        offset: point(px(0.), px(0.)),
+                        blur_radius: px(7.),
+                        spread_radius: px(1.),
+                        inset: false,
+                    }])
+                } else {
+                    this.bg(gpui::white().opacity(0.22))
+                }
+            });
+            bar = bar.child(
+                div()
+                    .id("machine")
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .size(px(28.))
+                    .rounded(px(8.))
+                    .hover(move |style| style.bg(soft))
+                    .tooltip(move |_, cx| cx.new(|_| Tip(lines.clone())).into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            this.open_monitor(window, cx);
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .child(light),
+            );
+        }
         if client {
             if controls.minimize {
                 bar = bar.child(button("minimize", "icons/minimize.svg", soft).on_mouse_down(
@@ -1062,6 +1287,15 @@ impl Render for Workspace {
         if let Some(title) = title.filter(|title| *title != self.title) {
             window.set_window_title(&title);
             self.title = title;
+        }
+        // pulse is told which shells there are, whenever panes have come or gone
+        let shells = self.shell_pids(cx);
+        if shells != self.shells {
+            self.shells = shells.clone();
+            if let Some(monitor) = cx.try_global::<Pulse>().map(|pulse| pulse.0.clone()) {
+                let id = cx.entity_id();
+                monitor.update(cx, |monitor, _| monitor.want(id, shells));
+            }
         }
         window.set_client_inset(px(if frame.floating() { SHADOW } else { 0. }));
         window.set_client_corner_radii(corners);

@@ -78,6 +78,8 @@ pub enum TerminalEvent {
     Bell,
     /// A command was sent off, or one ended.
     Command(CommandEvent),
+    /// A program has something to tell the user.
+    Notify(commands::Note),
     /// The program ended.
     Exited,
 }
@@ -198,10 +200,14 @@ impl Terminal {
 
     /// Tells of the commands that were sent off or ended since this last looked.
     fn notice_commands(&mut self, cx: &mut Context<Self>) {
-        let (running, ended) = {
-            let log = self.commands.lock().unwrap();
-            (log.running().map(|(id, _)| id), log.ended())
+        let (running, ended, notes) = {
+            let mut log = self.commands.lock().unwrap();
+            let notes = log.take_notes();
+            (log.running().map(|(id, _)| id), log.ended(), notes)
         };
+        for note in notes {
+            cx.emit(TerminalEvent::Notify(note));
+        }
         let (was_running, had_ended) = std::mem::replace(&mut self.commands_seen, (running, ended));
         if ended.0 != had_ended.0 {
             // of several that ended since the last look, one that failed is the news
@@ -304,6 +310,11 @@ impl Terminal {
             },
             None => "lumen".into(),
         }
+    }
+
+    /// The process the pane started: the shell, or the program run in its place.
+    pub fn shell_pid(&self) -> u32 {
+        self.shell_pid
     }
 
     /// The folder the shell is in: where a new tab or split next to this

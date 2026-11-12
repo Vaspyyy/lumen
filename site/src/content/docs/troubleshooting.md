@@ -61,6 +61,14 @@ Hold `Ctrl` and look whether the path is underlined. If it is not, lumen found n
 
 If it opens in the wrong program, say which editor you want: [`[editor]`](/docs/configuration/#editor) in the config.
 
+## There is no light in the title bar
+
+The light and the numbers on tabs come from [pulse](/docs/machine/), which is not public yet. Where it is installed and nothing shows:
+
+- lumen has to find it: on the `PATH` lumen was started with, or in `~/go/bin` or `~/.local/bin`.
+- `enabled` in the `[pulse]` table of the config must not be `false`.
+- A pulse that is too old to know `pulse watch` is started and ends at once. lumen tries three times and then leaves it alone until it is started again.
+
 ## `glint --thumbs` draws blocks, not pictures
 
 - glint is older than 0.11.1 and doesn't know lumen. Update it, or run `glint --thumbs=kitty`.

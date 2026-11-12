@@ -46,6 +46,25 @@ A tab you are not looking at shows a dot when something happened in it:
 
 Start a long build, go to another tab, and the dot tells you when to come back. It goes away when you look at the tab. If the whole window is in the background, the tab that is open in it gets its dot too when a command in it ends or fails, or the bell rings.
 
+## When a program has something to tell
+
+A program can ask for your attention: a build that is through, a long run that ended. Programs do that with a notification, which most terminals pass on to the desktop.
+
+lumen passes it on **only when you are not looking**:
+
+- In the tab you are looking at, nothing happens. What the program printed is in front of you.
+- Any other tab gets a dot in lumen's accent color, and the desktop shows a notification with the program's words. A click on the notification goes to the pane it came from.
+
+A program that never stops telling is heard on the desktop once every three seconds for each pane.
+
+To use it in a script of your own, end it with a line like this one:
+
+```sh
+make all; printf '\e]777;notify;make;all is built\a'
+```
+
+To keep programs from posting on the desktop, set `notifications = false` in the [config](/docs/configuration/). The dot on the tab stays.
+
 ## Setting up your shell
 
 The shell has to tell the terminal where its commands are. That is a standard other terminals read too (OSC 133), so nothing here is for lumen alone.
@@ -92,3 +111,4 @@ Without marks, lumen is the terminal it was before: nothing is missing but what 
 - **In a full-screen program** nothing is marked. A shell you start inside one belongs to that program's screen.
 - **A command that printed nothing** has nothing to copy, and lumen says so.
 - Paths in a command's output are followed from the folder the command ran in, as far as your own shell knows it: for a shell inside another, or on another machine, that is the folder the outer shell is in. See [Files and links](/docs/files-and-links/#web-addresses-and-places-in-code).
+- Where pulse is installed, a mark also says what its command costs. See [The machine](/docs/machine/#what-a-command-costs).

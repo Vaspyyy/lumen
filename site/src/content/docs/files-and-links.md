@@ -73,6 +73,18 @@ Those cover what compilers, linters, test runners and searches print, among them
 
 Not found this way: a path that is broken over two lines, and a path with a space in it.
 
+## Links that type a command
+
+A program can print a link that stands for a command: the next thing you may want to run. [pulse](/docs/tools/#pulse) does that for what it names.
+
+![A line that reads "next: pulse tree 4821.kfx", underlined under the mouse, with a note above it: "pulse tree 4821.kfx, click puts it at the prompt"](/shots/prompt-link.png)
+
+**A click puts the command at your prompt. It does not run it.** You see it, you can change it, and `Enter` is yours. A link is something a program printed, and lumen does not let a program run things by being clicked.
+
+- With the mouse on such a link, lumen shows what the click would type. The link's text need not be the command.
+- Where a program is running in the pane, nothing is typed, and lumen says so: the text would go to that program. lumen knows this when [your shell marks its commands](/docs/commands/), and for a full-screen program always.
+- A command with a line break or any other control character in it is not a link at all.
+
 ## Your editor
 
 A file with a line opens in your editor, at that line. Which program that is:

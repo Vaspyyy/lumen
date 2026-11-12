@@ -12,6 +12,9 @@
 //! nothing has to follow the grid's lines. What a mark says about the command
 //! itself (its text, how it ended, how long it took) is kept in the [`Log`],
 //! under the number in the link.
+//!
+//! A program's wish to tell the user something (OSC 777, OSC 9) is dropped
+//! by the parser in the same way, and is found here too ([`Note`]).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -64,13 +67,53 @@ pub enum Mark {
     /// What follows is to begin on a line of its own (`L`): a new prompt is
     /// on its way.
     FreshLine,
+    /// Not a mark of a command: a program has something to tell the user.
+    Notify(Note),
 }
 
+/// What a program wants the user to know: that a long run is over, say.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Note {
+    /// What it is about. Empty where the program gave only a text.
+    pub title: String,
+    pub body: String,
+}
+
+impl Note {
+    /// The texts as they can be shown: without control characters, and not
+    /// longer than a notification holds. None if nothing is left.
+    fn new(title: &str, body: &str) -> Option<Note> {
+        let shown = |text: &str, most: usize| {
+            let text: String = text.chars().filter(|c| !c.is_control()).collect();
+            text.trim().chars().take(most).collect::<String>()
+        };
+        let note = Note { title: shown(title, 120), body: shown(body, 400) };
+        (!note.title.is_empty() || !note.body.is_empty()).then_some(note)
+    }
+}
+
+/// What the sequences lumen takes note of begin with, after `ESC ]`.
+const KINDS: [&[u8]; 3] = [b"133;", b"777;notify;", b"9;"];
+
 impl Mark {
-    /// What is between `ESC ] 133 ;` and the end of the sequence.
+    /// What is between `ESC ]` and the end of the sequence.
     fn parse(payload: &[u8]) -> Option<Mark> {
         let text = std::str::from_utf8(payload).ok()?;
-        let mut fields = text.split(';');
+        if let Some(rest) = text.strip_prefix("777;notify;") {
+            // `title ; body`: what OSC 777 calls a notification
+            let (title, body) = rest.split_once(';').unwrap_or((rest, ""));
+            return Note::new(title, body).map(Mark::Notify);
+        }
+        if let Some(rest) = text.strip_prefix("9;") {
+            // OSC 9 is a notification's text. Where a number follows it is one of
+            // ConEmu's sequences (a progress bar, a working directory): not for the user.
+            let first = rest.split(';').next().unwrap_or_default();
+            if first.is_empty() || first.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            return Note::new("", rest).map(Mark::Notify);
+        }
+        let mut fields = text.strip_prefix("133;")?.split(';');
         Some(match fields.next()? {
             "A" => Mark::Prompt,
             "B" => Mark::Input,
@@ -119,7 +162,6 @@ impl Scanner {
     /// Calls `found` for each mark that ends in `input`, with how many bytes
     /// of `input` come before and with it.
     pub fn feed(&mut self, input: &[u8], mut found: impl FnMut(usize, Mark)) {
-        const PREFIX: &[u8] = b"133;";
         let mut i = 0;
         while i < input.len() {
             match self.state {
@@ -146,8 +188,11 @@ impl Scanner {
                     let upto = end.map_or(input.len(), |at| i + at);
                     if !self.other {
                         self.payload.extend_from_slice(&input[i..upto]);
-                        let known = self.payload.len().min(PREFIX.len());
-                        self.other = self.payload[..known] != PREFIX[..known] || self.payload.len() > MAX_MARK;
+                        let could_be = KINDS.iter().any(|kind| {
+                            let known = self.payload.len().min(kind.len());
+                            self.payload[..known] == kind[..known]
+                        });
+                        self.other = !could_be || self.payload.len() > MAX_MARK;
                         if self.other {
                             self.payload.clear();
                         }
@@ -180,7 +225,7 @@ impl Scanner {
     fn finish(&mut self, end: usize, found: &mut impl FnMut(usize, Mark)) {
         self.state = State::Text;
         if !self.other
-            && let Some(mark) = self.payload.strip_prefix(b"133;").and_then(Mark::parse)
+            && let Some(mark) = Mark::parse(&self.payload)
         {
             found(end, mark);
         }
@@ -213,6 +258,9 @@ pub struct Command {
     pub exit: Option<i32>,
     /// The shell never said that it ended: the next prompt came while it ran.
     pub left: bool,
+    /// The most memory the pane was seen to use while it ran, in bytes, where
+    /// something looked ([`Log::sample`]).
+    pub peak: Option<u64>,
 }
 
 impl Command {
@@ -253,6 +301,13 @@ impl Command {
             Status::Ended(None) if self.left => format!("ran {took} before the next prompt"),
             Status::Ended(None) => format!("ended after {took}"),
         })
+    }
+
+    /// The most memory it was seen to use, where that is worth a word: a
+    /// command that has ended, and more than a shell alone takes.
+    pub fn peak(&self) -> Option<u64> {
+        const WORTH_A_WORD: u64 = 100 << 20;
+        self.peak.filter(|&peak| self.ended.is_some() && peak >= WORTH_A_WORD)
     }
 
     /// The command in a few words, for where it is named in passing.
@@ -309,7 +364,12 @@ pub struct Log {
     over: Option<u32>,
     /// The shell's process, whose folder a command starts in.
     shell: Option<u32>,
+    /// What programs wanted the user to know, until someone takes it.
+    notes: Vec<Note>,
 }
+
+/// More notes than this don't wait to be taken: the oldest go.
+const MAX_NOTES: usize = 4;
 
 pub type Shared = Arc<Mutex<Log>>;
 
@@ -336,6 +396,20 @@ impl Log {
     /// The shell has not told of any command: it doesn't mark them.
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty()
+    }
+
+    /// What programs wanted the user to know since this was last asked.
+    pub fn take_notes(&mut self) -> Vec<Note> {
+        std::mem::take(&mut self.notes)
+    }
+
+    /// The pane was seen to use this much memory. The command that runs keeps the most of it.
+    pub fn sample(&mut self, memory: u64) {
+        if let Some(id) = self.current.filter(|_| self.phase == Phase::Running)
+            && let Some(command) = self.commands.get_mut(&id)
+        {
+            command.peak = Some(command.peak.unwrap_or(0).max(memory));
+        }
     }
 
     fn open(&mut self) -> u32 {
@@ -378,6 +452,17 @@ impl Log {
     /// Takes on what a mark says, with the cursor where the mark stood in
     /// the output.
     pub fn apply<L: EventListener>(&mut self, mark: Mark, term: &mut Term<L>) {
+        // a note is not about the grid: a full-screen program has as much to tell as any other
+        let mark = match mark {
+            Mark::Notify(note) => {
+                if self.notes.len() >= MAX_NOTES {
+                    self.notes.remove(0);
+                }
+                self.notes.push(note);
+                return;
+            },
+            mark => mark,
+        };
         // a full-screen program's screen has no commands; a shell inside it is that program's to show
         if term.mode().contains(TermMode::ALT_SCREEN) {
             return;
@@ -480,6 +565,7 @@ impl Log {
                     self.failed += command.failed() as u64;
                 }
             },
+            Mark::Notify(_) => {},
         }
     }
 }
@@ -501,8 +587,8 @@ pub fn advance<L: EventListener>(
         done = end;
         // Inside a synchronized update the parser holds the text back until the
         // update ends. The mark belongs between that text, so the update is ended
-        // here: in order matters more than all at once.
-        if parser.sync_bytes_count() > 0 {
+        // here: in order matters more than all at once. A note has no place in the text.
+        if parser.sync_bytes_count() > 0 && !matches!(mark, Mark::Notify(_)) {
             parser.stop_sync(term);
         }
         log.lock().unwrap().apply(mark, term);
@@ -1157,6 +1243,84 @@ mod tests {
         screen.print("\x1b]8;;http://example.com\x1b\\name\x1b]133;D;0\x07 more");
         let link = |col: usize| screen.term.grid()[Line(1)][Column(col)].hyperlink().map(|link| link.uri().to_string());
         assert_eq!(link(5).as_deref(), Some("http://example.com"));
+    }
+
+    #[test]
+    fn a_program_has_something_to_tell() {
+        let note = |title: &str, body: &str| Mark::Notify(Note { title: title.into(), body: body.into() });
+        // what `pulse run` says at the end of a long run
+        let found = marks(&[b"done\r\n\x1b]777;notify;cargo test;exit 0 after 48.2 s, peak 8.9 GB\x1b\\"]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].1, note("cargo test", "exit 0 after 48.2 s, peak 8.9 GB"));
+        // a text of its own may hold the sign that separates the fields
+        let found = marks(&[b"\x1b]777;notify;build;", b"2 errors; 1 warning\x07"]);
+        assert_eq!(found[0].1, note("build", "2 errors; 1 warning"));
+        // a text alone
+        assert_eq!(marks(&[b"\x1b]9;Tests are through\x07"])[0].1, note("", "Tests are through"));
+        assert_eq!(marks(&[b"\x1b]777;notify;Only a title\x07"])[0].1, note("Only a title", ""));
+        // not for the user: a progress bar and a folder as ConEmu says them, other
+        // kinds of OSC 777, and notes with nothing in them
+        for other in [
+            &b"\x1b]9;4;1;50\x07"[..],
+            b"\x1b]9;9;/home\x07",
+            b"\x1b]9;12\x07",
+            b"\x1b]9;\x07",
+            b"\x1b]777;precmd\x07",
+            b"\x1b]777;notify;;\x07",
+            b"\x1b]99;i=1;Hello\x07",
+        ] {
+            assert_eq!(marks(&[other]), [], "{}", String::from_utf8_lossy(other));
+        }
+        // what a notification can't show is left out
+        let found = marks(&["\x1b]777;notify;a\tb\u{9b}c;  line\none  \x07".as_bytes()]);
+        assert_eq!(found[0].1, note("abc", "lineone"));
+        let long = format!("\x1b]9;{}\x07", "é".repeat(1000));
+        match &marks(&[long.as_bytes()])[0].1 {
+            Mark::Notify(note) => assert_eq!(note.body.chars().count(), 400),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn notes_wait_to_be_taken() {
+        let mut screen = Screen::new();
+        screen.print("\x1b]777;notify;one;first\x07 text \x1b]9;second\x07");
+        // the text around a note is written as if the note were not there
+        assert_eq!(screen.line(0), " text");
+        let notes = screen.log.lock().unwrap().take_notes();
+        assert_eq!(notes.iter().map(|note| note.body.as_str()).collect::<Vec<_>>(), ["first", "second"]);
+        assert_eq!(screen.log.lock().unwrap().take_notes(), []);
+        // a full-screen program is heard too
+        screen.print("\x1b[?1049h\x1b]9;from the other screen\x07\x1b[?1049l");
+        assert_eq!(screen.log.lock().unwrap().take_notes().len(), 1);
+        // only the last few are kept for someone who never asks
+        for n in 0..10 {
+            screen.print(&format!("\x1b]9;note {n}\x07"));
+        }
+        let notes = screen.log.lock().unwrap().take_notes();
+        assert_eq!(notes.len(), MAX_NOTES);
+        assert_eq!(notes.last().unwrap().body, "note 9");
+    }
+
+    #[test]
+    fn a_command_keeps_the_most_memory_it_was_seen_with() {
+        let mut screen = Screen::new();
+        // nothing runs: nothing to keep it for
+        screen.log.lock().unwrap().sample(1 << 30);
+        screen.print("\x1b]133;A\x07~> \x1b]133;B\x07cargo build\r\n\x1b]133;C\x07");
+        for memory in [2u64 << 30, 9 << 30, 3 << 30] {
+            screen.log.lock().unwrap().sample(memory);
+        }
+        // while it runs, what it uses now is the word, not what it used at most
+        assert_eq!(screen.command(0).peak(), None);
+        screen.print("\x1b]133;D;0\x07");
+        screen.log.lock().unwrap().sample(1 << 30);
+        assert_eq!(screen.command(0).peak(), Some(9 << 30));
+        // a shell's own few megabytes are not worth a word
+        screen.print("\x1b]133;A\x07~> \x1b]133;B\x07true\r\n\x1b]133;C\x07");
+        screen.log.lock().unwrap().sample(40 << 20);
+        screen.print("\x1b]133;D;0\x07");
+        assert_eq!(screen.command(1).peak(), None);
     }
 
     #[test]

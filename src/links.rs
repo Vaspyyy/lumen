@@ -27,6 +27,9 @@ pub enum Target {
     File(PathBuf),
     /// A line in a file on this machine: what an error or a search hit names.
     Place { path: PathBuf, line: u32, column: Option<u32> },
+    /// A command for the shell's prompt: a click puts it there, and whether
+    /// it is run stays with the user.
+    Prompt(String),
     /// Anything else: a web page, a mail address.
     Url(String),
 }
@@ -36,7 +39,7 @@ impl Target {
     pub fn path(&self) -> Option<&Path> {
         match self {
             Target::Copy(path) | Target::File(path) | Target::Place { path, .. } => Some(path),
-            Target::Url(_) => None,
+            Target::Prompt(_) | Target::Url(_) => None,
         }
     }
 }
@@ -48,9 +51,28 @@ pub fn target(uri: &str) -> Option<Target> {
     match scheme.to_ascii_lowercase().as_str() {
         "glint-copy" => local_path(rest).map(Target::Copy),
         "file" => local_path(rest).map(Target::File),
+        "lumen-prompt" => prompt_text(rest).map(Target::Prompt),
         "lumen-image" | "lumen-mark" => None,
         _ => Some(Target::Url(uri.to_string())),
     }
+}
+
+/// The text a `lumen-prompt:` link wants at the prompt, if it can be put
+/// there as it is: one line of plain text. A link is what a program
+/// printed, and that is not trusted the way typing is. A line break in it
+/// would run what stands before it, and a control character is a key
+/// pressed for the user.
+fn prompt_text(rest: &str) -> Option<String> {
+    let text = String::from_utf8(percent_decode(rest)?).ok()?;
+    let plain = text.chars().all(|c| !c.is_control() && !unseen(c));
+    (plain && !text.trim().is_empty() && text.chars().count() <= 2000).then_some(text)
+}
+
+/// Characters that are not seen and change how the text around them reads:
+/// the separators of lines and paragraphs, and those that turn the direction
+/// of writing, which can make a command look like another one.
+fn unseen(c: char) -> bool {
+    matches!(c, '\u{2028}' | '\u{2029}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
 
 /// What plain text names at its character `at`: a web address, or a file
@@ -321,6 +343,40 @@ mod tests {
         // every file is there, in /w
         let (target, range) = in_text(&chars, at, |name| Some(Path::new("/w").join(name)))?;
         Some((target, chars[range].iter().collect()))
+    }
+
+    #[test]
+    fn a_command_for_the_prompt() {
+        let prompt = |uri: &str| match target(uri) {
+            Some(Target::Prompt(text)) => Some(text),
+            _ => None,
+        };
+        // as pulse writes them
+        assert_eq!(prompt("lumen-prompt:pulse%20tree%204821.kfx").as_deref(), Some("pulse tree 4821.kfx"));
+        assert_eq!(prompt("lumen-prompt:pulse%20show%20r7k2mq").as_deref(), Some("pulse show r7k2mq"));
+        assert_eq!(prompt("lumen-prompt:echo%20%22gr%C3%BC%C3%9Fe%22").as_deref(), Some("echo \"grüße\""));
+        // a link never presses a key: no Enter, no Ctrl+C, no escape sequence
+        for uri in [
+            "lumen-prompt:rm%20-rf%20~%0A",
+            "lumen-prompt:true%0Dfalse",
+            "lumen-prompt:%03",
+            "lumen-prompt:ls%1b[A",
+            "lumen-prompt:a%09b",
+            "lumen-prompt:a%7fb",
+            "lumen-prompt:a%C2%9Bb",
+            // a line that reads the other way round
+            "lumen-prompt:a%E2%80%AEb",
+            "lumen-prompt:a%E2%80%A8b",
+            // nothing, and not text
+            "lumen-prompt:",
+            "lumen-prompt:%20%20",
+            "lumen-prompt:%ff%fe",
+            "lumen-prompt:%2",
+        ] {
+            assert_eq!(target(uri), None, "{uri}");
+        }
+        assert_eq!(prompt(&format!("lumen-prompt:{}", "a".repeat(2000))).map(|text| text.len()), Some(2000));
+        assert_eq!(target(&format!("lumen-prompt:{}", "a".repeat(2001))), None);
     }
 
     #[test]

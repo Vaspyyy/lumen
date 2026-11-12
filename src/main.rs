@@ -15,6 +15,7 @@ mod mouse;
 mod palette;
 mod phone;
 mod pty;
+mod pulse;
 mod terminal;
 mod view;
 mod workspace;
@@ -49,6 +50,7 @@ impl AssetSource for Assets {
             "icons/maximize.svg" => include_bytes!("../assets/icons/maximize.svg"),
             "icons/restore.svg" => include_bytes!("../assets/icons/restore.svg"),
             "icons/search.svg" => include_bytes!("../assets/icons/search.svg"),
+            "icons/pulse.svg" => include_bytes!("../assets/icons/pulse.svg"),
             _ => return Ok(None),
         };
         Ok(Some(Cow::Borrowed(bytes)))
@@ -196,6 +198,17 @@ fn main() {
             }
         })
         .detach();
+        // a click on a notification leads to the pane it is about
+        cx.on_system_notification_response(|response, cx| {
+            for window in cx.windows() {
+                let Some(window) = window.downcast::<Workspace>() else { continue };
+                let shown = window.update(cx, |workspace, window, cx| workspace.show_pane(&response.tag, window, cx));
+                if shown.unwrap_or(false) {
+                    break;
+                }
+            }
+        });
+        pulse::init(cx);
         open_window(spawn, cx);
         watch_config(cx);
         cx.activate(true);

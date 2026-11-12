@@ -30,6 +30,7 @@ use crate::config::Config;
 use crate::element::{Geometry, MarkSpot, Motion, TerminalElement};
 use crate::keys::Press;
 use crate::links::{self, Target};
+use crate::pulse::{self, Pulse};
 use crate::terminal::{CommandEvent, Listener, Started, Terminal, TerminalEvent};
 use crate::{keys, mouse};
 
@@ -50,6 +51,8 @@ pub enum ViewEvent {
     Notice(String),
     /// A line in a file is to be opened in the editor.
     Edit { path: PathBuf, line: u32, column: Option<u32> },
+    /// The program has something to tell the user.
+    Notify(commands::Note),
 }
 
 /// A line of the screen, as it is read for what its text names: taken while
@@ -220,6 +223,7 @@ impl TerminalView {
                 TerminalEvent::Exited => cx.emit(ViewEvent::Closed),
                 TerminalEvent::Bell => cx.emit(ViewEvent::Bell),
                 TerminalEvent::Command(event) => cx.emit(ViewEvent::Command(*event)),
+                TerminalEvent::Notify(note) => cx.emit(ViewEvent::Notify(note.clone())),
             }),
             cx.on_focus(&focus, window, |this, _, cx| {
                 this.touch();
@@ -529,11 +533,12 @@ impl TerminalView {
     }
 
     /// The hovered link, if a click would follow it now: a file from a
-    /// listing always, anything else with Ctrl held. Shift leaves the text
-    /// to be selected, and a program that uses the mouse gets the click.
+    /// listing and a command for the prompt always, anything else with Ctrl
+    /// held. Shift leaves the text to be selected, and a program that uses
+    /// the mouse gets the click.
     fn live_link(&self, cx: &App) -> Option<&Hover> {
         let hover = self.hover.as_ref()?;
-        let wanted = matches!(hover.target, Target::Copy(_)) || self.modifiers.control;
+        let wanted = matches!(hover.target, Target::Copy(_) | Target::Prompt(_)) || self.modifiers.control;
         let free = !self.modifiers.shift && !self.selecting && !self.mode(cx).intersects(TermMode::MOUSE_MODE);
         (wanted && free).then_some(hover)
     }
@@ -550,8 +555,24 @@ impl TerminalView {
             (Target::Place { path, line, column }, _) => {
                 cx.emit(ViewEvent::Edit { path: path.clone(), line: *line, column: *column })
             },
+            (Target::Prompt(text), _) => self.put_at_prompt(text, cx),
             (Target::Url(url), _) => cx.open_url(url),
         }
+    }
+
+    /// Puts a command at the shell's prompt, as a link asked for. It is not
+    /// run: Enter is the user's. Where lumen knows that no prompt is waiting
+    /// (a full-screen program has the screen, or the shell says a command
+    /// runs), nothing is typed: the text would go to that program.
+    fn put_at_prompt(&mut self, text: &str, cx: &mut Context<Self>) {
+        let terminal = self.terminal.read(cx);
+        let full_screen = terminal.mode().contains(TermMode::ALT_SCREEN);
+        let running = terminal.commands.lock().unwrap().running().is_some();
+        if full_screen || running {
+            cx.emit(ViewEvent::Notice(format!("A program runs here, so this was not typed: {text}")));
+            return;
+        }
+        self.paste_text(text, cx);
     }
 
     /// Puts a file on the clipboard, and says so.
@@ -674,38 +695,64 @@ impl TerminalView {
     /// What is said about a command while the mouse is on its mark.
     fn render_mark(&self, spot: MarkSpot, geometry: Geometry, cx: &App) -> Option<impl IntoElement + use<>> {
         let config = cx.global::<Config>();
-        let about = self.terminal.read(cx).commands.lock().unwrap().get(spot.id)?.describe()?;
+        let terminal = self.terminal.read(cx);
+        let (mut about, running) = {
+            let log = terminal.commands.lock().unwrap();
+            let command = log.get(spot.id)?;
+            let mut about = command.describe()?;
+            if let Some(peak) = command.peak() {
+                about += &format!(" · up to {}", pulse::bytes(peak));
+            }
+            (about, command.status() == commands::Status::Running)
+        };
+        // what it costs right now, where pulse tells
+        let now = cx.try_global::<Pulse>().and_then(|pulse| pulse.0.read(cx).of(terminal.shell_pid()));
+        if let Some(now) = now.filter(|_| running) {
+            about += &format!(" · {}", now.work());
+        }
         const HEIGHT: f32 = 26.;
         // above the command's lines, or below them where there is no room above
         let above = spot.bounds.top() - geometry.bounds.origin.y - px(HEIGHT + 4.);
         let top = if above >= px(0.) { above } else { spot.bounds.bottom() - geometry.bounds.origin.y + px(4.) };
         Some(
-            div()
-                .absolute()
+            chip(config)
                 .left(geometry.origin.x - geometry.bounds.origin.x)
                 .top(top)
-                .flex()
-                .items_center()
-                .gap(px(8.))
                 .h(px(HEIGHT))
-                .px(px(10.))
-                .rounded(px(8.))
-                .bg(config.colors.primary.background.hsla().opacity(0.95))
-                .border_1()
-                .border_color(gpui::white().opacity(0.14))
-                .shadow(vec![BoxShadow {
-                    color: gpui::black().opacity(0.35),
-                    offset: point(px(0.), px(2.)),
-                    blur_radius: px(10.),
-                    spread_radius: px(0.),
-                    inset: false,
-                }])
-                .font_family(crate::fonts::ui())
-                .text_size(px(12.5))
-                .text_color(gpui::white().opacity(0.92))
                 .child(SharedString::from(about))
                 .child(div().text_color(gpui::white().opacity(0.45)).child("click copies the output")),
         )
+    }
+
+    /// What a click on a link for the prompt would type: the link's text
+    /// need not say it.
+    fn render_prompt_hint(&self, hover: &Hover, geometry: Geometry, cx: &App) -> Option<impl IntoElement + use<>> {
+        let Target::Prompt(text) = &hover.target else {
+            return None;
+        };
+        let &(row, col, len) = hover.segments.first()?;
+        const HEIGHT: f32 = 26.;
+        const MOST: usize = 72;
+        let shown = match text.char_indices().nth(MOST) {
+            Some((at, _)) => format!("{}…", &text[..at]),
+            None => text.clone(),
+        };
+        let left = geometry.origin.x + geometry.cell.width * col as f32 - geometry.bounds.origin.x;
+        let line = geometry.origin.y + geometry.cell.height * row as f32 - geometry.bounds.origin.y;
+        // above the link, or below it where there is no room above
+        let above = line - px(HEIGHT + 4.);
+        let top = if above >= px(0.) { above } else { line + geometry.cell.height + px(4.) };
+        let hint = chip(cx.global::<Config>())
+            .top(top)
+            .h(px(HEIGHT))
+            .child(div().font_family(cx.global::<Config>().font.family.clone()).child(SharedString::from(shown)))
+            .child(div().text_color(gpui::white().opacity(0.45)).child("click puts it at the prompt"));
+        // a link at the right edge has its note end where the link ends
+        Some(if col * 2 > geometry.cols {
+            hint.right(geometry.bounds.size.width - left - geometry.cell.width * len as f32)
+        } else {
+            hint.left(left)
+        })
     }
 
     fn toggle_search(&mut self, _: &ToggleSearch, _: &mut Window, cx: &mut Context<Self>) {
@@ -1149,6 +1196,10 @@ impl Render for TerminalView {
             (Some(spot), Some(geometry)) => self.render_mark(spot, geometry, cx),
             _ => None,
         };
+        let hint = match (&link, self.geometry.get()) {
+            (Some(hover), Some(geometry)) => self.render_prompt_hint(hover, geometry, cx),
+            _ => None,
+        };
         let mut context = KeyContext::default();
         context.add("Terminal");
         // the keys for commands are lumen's only where the shell marks its commands
@@ -1214,8 +1265,33 @@ impl Render for TerminalView {
             })
             .children(spots)
             .children(about)
+            .children(hint)
             .children(search)
     }
+}
+
+/// A note that floats over the pane, about what the mouse is on.
+fn chip(config: &Config) -> gpui::Div {
+    div()
+        .absolute()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .px(px(10.))
+        .rounded(px(8.))
+        .bg(config.colors.primary.background.hsla().opacity(0.95))
+        .border_1()
+        .border_color(gpui::white().opacity(0.14))
+        .shadow(vec![BoxShadow {
+            color: gpui::black().opacity(0.35),
+            offset: point(px(0.), px(2.)),
+            blur_radius: px(10.),
+            spread_radius: px(0.),
+            inset: false,
+        }])
+        .font_family(crate::fonts::ui())
+        .text_size(px(12.5))
+        .text_color(gpui::white().opacity(0.92))
 }
 
 /// Text input. The terminal has no text of its own to edit: what the input

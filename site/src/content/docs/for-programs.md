@@ -27,6 +27,7 @@ The better way to find out what a terminal can do is to ask it. lumen answers th
 | Wide characters | Characters that take two cells, such as CJK and most emoji |
 | Links | OSC 8. See [Files and links](/docs/files-and-links/) |
 | Commands | The marks of OSC 133: where a prompt, a command's output and its end are. See [Marks for commands](#marks-for-commands) |
+| Notifications | OSC 777 and OSC 9. See [Notifications](#notifications) |
 | Pictures | The kitty graphics protocol, in part. See [Pictures](/docs/images/) |
 | Keyboard | The kitty keyboard protocol, all of its levels |
 | Mouse | Click, drag and motion reports, in the SGR format and the older one |
@@ -86,6 +87,37 @@ Anything after a further `;` is left alone, with one exception: `C;cmdline_url=T
 - On the alternate screen the marks are ignored.
 
 What lumen does with them is in [Commands](/docs/commands/). `lumen shell-integration bash` prints a small, complete example for a shell.
+
+## Notifications
+
+A program asks for the user's attention with one of:
+
+```
+ESC ] 777 ; notify ; TITLE ; TEXT ESC \
+ESC ] 9 ; TEXT ESC \
+```
+
+Either may end in `BEL` instead. These are the sequences other terminals show as a desktop notification.
+
+lumen shows one only when the tab is not the one being looked at: the tab gets a dot, and the desktop a notification that leads back to the pane. In the tab that is looked at, nothing happens, so say what you have to say in your output as well.
+
+- The title is cut at 120 characters and the text at 400. Control characters are left out.
+- With OSC 9 the title is the tab's.
+- An OSC 9 whose text begins with a number and a semicolon is one of ConEmu's sequences, such as a progress bar, and is ignored.
+- One pane is heard on the desktop once in three seconds.
+
+## Links that put a command at the prompt
+
+An OSC 8 link with the scheme `lumen-prompt` stands for a command:
+
+```
+lumen-prompt:COMMAND
+```
+
+`COMMAND` is the command's text, percent-encoded: `lumen-prompt:pulse%20tree%204821.kfx`. A click on the link types the text at the shell's prompt and does not run it.
+
+- The text is one line of at most 2000 characters, without control characters and without characters that turn the direction of writing. A link with anything else in it is not followed.
+- Other terminals don't know the scheme and hand it to the desktop, which has nothing for it. Print these links only where `TERM_PROGRAM` is `lumen`.
 
 ## Places in code
 
