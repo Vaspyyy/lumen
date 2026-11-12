@@ -1,4 +1,5 @@
 // Modified by Longbridge for gpui-fast.
+// Modified for lumen: `activate` uses a token given by `give_activation_token` if there is one.
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     ffi::c_void,
@@ -1880,6 +1881,13 @@ impl PlatformWindow for WaylandWindow {
 
     fn activate(&self) {
         let state = self.borrow();
+        // a token another program got for us is granted where one we request isn't
+        if let Some(activation) = &state.globals.activation
+            && let Some(token) = crate::linux::take_given_activation_token()
+        {
+            activation.activate(token, &state.surface);
+            return;
+        }
         if let (Some(activation), Some(app_id)) = (&state.globals.activation, state.app_id.clone())
         {
             let token = activation.get_activation_token(

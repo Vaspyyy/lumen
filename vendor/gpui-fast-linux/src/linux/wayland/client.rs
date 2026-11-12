@@ -1,4 +1,5 @@
 // Modified by Longbridge for gpui-fast.
+// Modified for lumen: a new window takes focus with a token given by `give_activation_token`.
 use std::{
     cell::{RefCell, RefMut},
     hash::Hash,
@@ -565,7 +566,10 @@ pub(crate) enum PendingActivation {
 
 impl WaylandClientState {
     fn consume_startup_activation_token(&mut self, surface: &wl_surface::WlSurface) {
-        let Some(startup_activation_token) = self.startup_activation_token.take() else {
+        // one another program got for this window goes first: the startup token is older
+        let given = crate::linux::take_given_activation_token();
+        let Some(startup_activation_token) = given.or_else(|| self.startup_activation_token.take())
+        else {
             return;
         };
         let Some(activation) = self.globals.activation.as_ref() else {

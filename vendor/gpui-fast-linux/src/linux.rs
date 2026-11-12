@@ -1,4 +1,5 @@
 // Modified by Longbridge for gpui-fast.
+// Modified for lumen: `give_activation_token`.
 mod dispatcher;
 mod display_connection;
 mod headless;
@@ -30,8 +31,32 @@ pub(crate) use wayland::*;
 pub(crate) use x11::*;
 
 use std::rc::Rc;
+use std::sync::Mutex;
 
 use gpui::WindowingModes;
+
+/// A token that another program got for this one: see [`give_activation_token`].
+static GIVEN_ACTIVATION_TOKEN: Mutex<Option<String>> = Mutex::new(None);
+
+/// Hands the platform an xdg-activation token that another program got, for example the
+/// launcher that asked this running app for a window. On Wayland, the next window that opens
+/// uses it to take focus, or the next window that is activated, if that comes first: a token
+/// the app requests itself is only granted right after the user did something in it. A newer
+/// token replaces one that is still unused. X11 has no such tokens and ignores it.
+pub fn give_activation_token(token: String) {
+    *GIVEN_ACTIVATION_TOKEN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(token).filter(|t| !t.is_empty());
+}
+
+/// The token [`give_activation_token`] handed over, once.
+#[cfg_attr(not(feature = "wayland"), allow(dead_code))]
+pub(crate) fn take_given_activation_token() -> Option<String> {
+    GIVEN_ACTIVATION_TOKEN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take()
+}
 
 /// Returns the default platform implementation for the current OS.
 ///
