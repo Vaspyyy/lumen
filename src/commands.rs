@@ -783,9 +783,9 @@ fn marks_on<L>(term: &Term<L>, line: Line) -> impl Iterator<Item = (u32, Part)> 
 ///
 /// Lines that are marked for no command lie between the copies where a
 /// program has printed with links of its own, or where the shell left lines
-/// empty. They don't end the search. A line that begins with another
-/// command's does: the command is older, and nothing of this one stands
-/// above it. Without one,
+/// empty. They don't end the search. A line that is marked for another
+/// command and has nothing of this one does: the command is older, and
+/// nothing of this one stands above it. Without one,
 /// the search goes `reach` lines up: as far as a copy can have been moved
 /// by what was written since. (A program that scrolls the screen again and
 /// again while a prompt is open can move a copy further than that. Shells
@@ -803,11 +803,10 @@ fn forget_above<L>(term: &mut Term<L>, line: Line, id: u32, part: Option<Part>, 
         // of this prompt, joined into one line, or this prompt written where the
         // end of that still stood. What is this command's on such a line is left
         // over as on any other.
-        let (mut ours, mut first) = (false, None);
+        let (mut ours, mut others) = (false, false);
         for (other, of) in marks_on(term, above) {
             if of != Part::Left {
-                first.get_or_insert(other);
-                ours |= other == id;
+                *if other == id { &mut ours } else { &mut others } = true;
             }
         }
         if ours {
@@ -820,8 +819,8 @@ fn forget_above<L>(term: &mut Term<L>, line: Line, id: u32, part: Option<Part>, 
                 }
             }
         }
-        // a line that begins with another command's: nothing of this one is above it
-        if first.is_some_and(|first| first != id) {
+        // a line that is all another command's: nothing of this one is above it
+        if others && !ours {
             break;
         }
         above -= 1;
@@ -1353,6 +1352,28 @@ mod tests {
         assert!(beside(3).starts_with(&[1]) && beside(3).ends_with(&[0]));
         screen.print("\r\nitem1  item2\r\n").print(prompt);
         assert_eq!(screen.places(), [(0, -6, 3), (1, 5, 6)]);
+    }
+
+    /// Two lines one above the other that begin with what was typed at an older
+    /// prompt and go on with this one. The terminal leaves such lines when it
+    /// wraps lines anew; here the cursor is put there.
+    #[test]
+    fn a_prompt_behind_what_was_typed_before_on_two_lines() {
+        let mut screen = Screen::new();
+        screen.print("\x1b]133;L\x07\x1b]133;A\x07> \x1b]133;B\x07").print(&"a".repeat(70));
+        screen.print("\r\n\x1b]133;C\x07out\r\n\x1b]133;D;0\x07\x1b]133;L\x07");
+        // the next prompt, of two lines, behind the second and the third line of what was typed
+        screen.print("\x1b[2;20H\x1b]133;A\x07~/x\x1b[3;20H> \x1b]133;B\x07ls");
+        let ids = |line| marks_on(&screen.term, Line(line)).map(|(id, _)| id).collect::<Vec<_>>();
+        assert!(ids(1).starts_with(&[0]) && ids(1).contains(&1), "{:?}", ids(1));
+        assert!(ids(2).starts_with(&[0]) && ids(2).contains(&1), "{:?}", ids(2));
+        // the prompt is written again further down
+        screen.print("\x1b[6;1H\x1b]133;A\x07~/x\r\n> \x1b]133;B\x07ls");
+        let stale = (0..5)
+            .flat_map(|line| marks_on(&screen.term, Line(line)))
+            .filter(|&(id, part)| id == 1 && part != Part::Left);
+        assert_eq!(stale.count(), 0);
+        assert_eq!(screen.places(), [(0, 0, 2), (1, 5, 6)]);
     }
 
     /// How far up what is left of a prompt is looked for.
