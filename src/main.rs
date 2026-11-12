@@ -1,6 +1,7 @@
 //! lumen: a terminal emulator.
 
 mod actions;
+mod blocks;
 mod config;
 mod element;
 mod fonts;

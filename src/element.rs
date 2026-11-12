@@ -21,6 +21,7 @@ use gpui::{
     fill, font, point, px, quad, relative, size, transparent_black,
 };
 
+use crate::blocks::{self, snap};
 use crate::config::Config;
 use crate::graphics;
 use crate::palette;
@@ -181,6 +182,8 @@ struct CursorLayout {
     glow: bool,
     /// The character under a block cursor, in the cursor's text color.
     text: Option<ShapedLine>,
+    /// A block element under a block cursor, in that color.
+    block: Option<(blocks::Shape, Hsla)>,
 }
 
 /// A part of an image, as far as its cells are on screen.
@@ -197,6 +200,8 @@ pub struct Layout {
     cell: Size<Pixels>,
     rects: Vec<(Bounds<Pixels>, Hsla)>,
     images: Vec<ImageLayout>,
+    /// The block elements, which are filled and not written.
+    fills: Vec<(Bounds<Pixels>, Hsla)>,
     lines: Vec<(Point<Pixels>, ShapedLine)>,
     /// What is drawn over the text: the line under a link, text being composed.
     marks: Vec<(Bounds<Pixels>, Hsla)>,
@@ -288,15 +293,20 @@ impl Element for TerminalElement {
         self.geometry.set(Some(geometry));
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
 
+        // Cells are filled on whole screen pixels, each up to where the next begins:
+        // what is filled in cells next to each other joins, without a seam or an overlap.
+        let scale = window.scale_factor();
         let cell_bounds = |col: usize, row: usize, cells: usize| {
-            let left = (origin.x + cell_width * col as f32).floor();
-            let right = (origin.x + cell_width * (col + cells) as f32).ceil();
-            Bounds::new(point(left, origin.y + cell_height * row as f32), size(right - left, cell_height))
+            let x = |col: usize| snap(origin.x + cell_width * col as f32, scale);
+            let y = |row: usize| snap(origin.y + cell_height * row as f32, scale);
+            Bounds::from_corners(point(x(col), y(row)), point(x(col + cells), y(row + 1)))
         };
 
         // Read the grid. Nothing slow happens while the lock is held.
         let mut backgrounds: Vec<(usize, usize, usize, Hsla)> = Vec::new();
         let mut runs: Vec<Run> = Vec::new();
+        // the block elements: row, column, cells, shape, color
+        let mut block_cells: Vec<(usize, usize, usize, blocks::Shape, Hsla)> = Vec::new();
         // the cells that show part of an image: row, column, placement, column and row in the image
         let mut image_cells: Vec<(usize, usize, u32, usize, usize)> = Vec::new();
         let mut found: Vec<(usize, usize, usize, Hsla)> = Vec::new();
@@ -395,9 +405,15 @@ impl Element for TerminalElement {
                     Line::None
                 };
                 let strike = flags.contains(Flags::STRIKEOUT);
-                let blank = (cell.c == ' ' || cell.c == '\0' || flags.contains(Flags::HIDDEN))
-                    && underline == Line::None
-                    && !strike;
+                // a block element is filled, not written: its cell is a blank one to the text
+                let shape = blocks::shape(cell.c)
+                    .filter(|_| !wide && !flags.contains(Flags::HIDDEN) && cell.zerowidth().is_none());
+                if let Some(shape) = shape {
+                    push_block(&mut block_cells, row, col, shape, fg_color);
+                }
+                let c = if shape.is_some() { ' ' } else { cell.c };
+                let blank =
+                    (c == ' ' || c == '\0' || flags.contains(Flags::HIDDEN)) && underline == Line::None && !strike;
                 let style = RunStyle {
                     fg: fg_color,
                     bold: flags.contains(Flags::BOLD),
@@ -424,7 +440,7 @@ impl Element for TerminalElement {
                     run = Some(Run { row, col, cells: 0, text: String::new(), style });
                 }
                 let current = run.as_mut().unwrap();
-                current.text.push(if blank { ' ' } else { cell.c });
+                current.text.push(if blank { ' ' } else { c });
                 if !blank {
                     for &c in cell.zerowidth().into_iter().flatten() {
                         current.text.push(c);
@@ -461,6 +477,12 @@ impl Element for TerminalElement {
         let mut rects = Vec::with_capacity(backgrounds.len() + found.len());
         for (row, col, cells, color) in backgrounds.into_iter().chain(found) {
             rects.push((cell_bounds(col, row, cells), color));
+        }
+
+        let mut fills = Vec::with_capacity(block_cells.len());
+        for (row, col, cells, shape, color) in block_cells {
+            let color = color.opacity(shape.cover);
+            fills.extend(shape.rects(cell_bounds(col, row, cells), scale).map(|rect| (rect, color)));
         }
 
         // Cells of one image that are next to each other are one piece of it.
@@ -586,9 +608,13 @@ impl Element for TerminalElement {
                     window.request_animation_frame();
                 }
             }
-            let text = (shape == CursorShape::Block && c != ' ' && c != '\0').then(|| {
+            let ink = colors.cursor.text.unwrap_or(colors.primary.background).hsla().opacity(lit);
+            let block = blocks::shape(c)
+                .filter(|_| shape == CursorShape::Block && cells == 1 && !flags.contains(Flags::HIDDEN))
+                .map(|block| (block, ink.opacity(block.cover)));
+            let text = (shape == CursorShape::Block && c != ' ' && c != '\0' && block.is_none()).then(|| {
                 let style = RunStyle {
-                    fg: colors.cursor.text.unwrap_or(colors.primary.background).hsla().opacity(lit),
+                    fg: ink,
                     bold: flags.contains(Flags::BOLD),
                     italic: flags.contains(Flags::ITALIC),
                     underline: Line::None,
@@ -600,11 +626,11 @@ impl Element for TerminalElement {
                 text_system.shape_line(text.into(), font_size, &[run], Some(cell_width * cells as f32))
             });
             let glow = config.cursor.glow && self.focused && shape != CursorShape::HollowBlock;
-            CursorLayout { bounds, shape, color, glow, text }
+            CursorLayout { bounds, shape, color, glow, text, block }
         });
         self.motion.set(motion);
 
-        Layout { hitbox, cell, rects, images, lines, marks, composing, cursor, pointer }
+        Layout { hitbox, cell, rects, images, fills, lines, marks, composing, cursor, pointer }
     }
 
     fn paint(
@@ -626,6 +652,9 @@ impl Element for TerminalElement {
         }
         for image in &layout.images {
             let _ = window.paint_image(image.clip, image.bounds, Corners::default(), image.image.clone(), 0, false);
+        }
+        for (rect, color) in &layout.fills {
+            window.paint_quad(fill(*rect, *color));
         }
         for (origin, line) in &layout.lines {
             let _ = line.paint(*origin, layout.cell.height, TextAlign::Left, None, window, cx);
@@ -668,6 +697,11 @@ impl Element for TerminalElement {
                     window.paint_quad(solid(lit, 2.));
                     if let Some(text) = &cursor.text {
                         let _ = text.paint(b.origin, layout.cell.height, TextAlign::Left, None, window, cx);
+                    }
+                    if let Some((block, ink)) = cursor.block {
+                        for rect in block.rects(b, window.scale_factor()) {
+                            window.paint_quad(fill(rect, ink));
+                        }
                     }
                 },
                 CursorShape::Beam | CursorShape::Underline => window.paint_quad(solid(lit, 1.)),
@@ -732,6 +766,28 @@ fn push_background(list: &mut Vec<(usize, usize, usize, Hsla)>, row: usize, col:
         return;
     }
     list.push((row, col, cells, color));
+}
+
+/// Adds a cell's block element. A row of cells with the same one in the same
+/// color is one entry, when the shape is the same across the cell's width.
+fn push_block(
+    list: &mut Vec<(usize, usize, usize, blocks::Shape, Hsla)>,
+    row: usize,
+    col: usize,
+    shape: blocks::Shape,
+    color: Hsla,
+) {
+    if let Some(last) = list.last_mut()
+        && last.0 == row
+        && last.1 + last.2 == col
+        && last.3 == shape
+        && last.4 == color
+        && shape.spans_width()
+    {
+        last.2 += 1;
+        return;
+    }
+    list.push((row, col, 1, shape, color));
 }
 
 /// Ends a run: the blank cells at its end are not text.

@@ -42,6 +42,12 @@ It does not take the nearest font the system offers. That would often be a font 
 
 No font has every character. Where yours has none, such as for an emoji or for a script it doesn't cover, lumen draws the character with another font from your system that has it.
 
+## Characters lumen draws itself
+
+The block characters, from `▀` to `▟` (U+2580 to U+259F), do not come from the font. Programs build bars, charts, QR codes and coarse pictures from them, and for that each has to fill its part of the cell exactly. A font's shapes don't: they are made for the font's own line and are soft at the edges, which leaves thin lines between them. lumen fills these characters itself, on the cell's edges, with every font and at every size. The three shades, `░`, `▒` and `▓`, are an even quarter, half and three quarters of the text color.
+
+The characters that draw lines, such as `─` and `│`, come from the font.
+
 ## Icons
 
 Tools such as [glint](https://github.com/Vaspyyy/glint) draw icons next to file names. Those icons are characters from a [Nerd Font](https://www.nerdfonts.com/). Install one, as your terminal font or just next to it, and they appear. Without one you see empty boxes where the icons would be, and glint can be told to leave them out with `--icons never`.

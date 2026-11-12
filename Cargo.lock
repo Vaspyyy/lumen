@@ -3560,7 +3560,7 @@ dependencies = [
 
 [[package]]
 name = "lumen"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "alacritty_terminal",
  "base64",
@@ -3581,7 +3581,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-link"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64",
  "ed25519-dalek 2.2.0",
@@ -3593,7 +3593,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-mobile"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "alacritty_terminal",
  "base64",
