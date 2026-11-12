@@ -45,7 +45,7 @@ pub struct GoToTab(pub usize);
 pub fn bind(cx: &mut App) {
     let terminal = Some("Terminal");
     // a full-screen program has no commands on its screen: these keys are its own there
-    let shell = Some("Terminal && !alt_screen");
+    let shell = Some("Terminal && marks && !alt_screen");
     let mut keys = vec![
         KeyBinding::new("ctrl-shift-c", Copy, terminal),
         KeyBinding::new("ctrl-shift-v", Paste, terminal),

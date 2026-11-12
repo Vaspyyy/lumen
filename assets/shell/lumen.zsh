@@ -7,8 +7,14 @@
 if [[ -o interactive && -z ${__lumen_marks-} ]]; then
     typeset -g __lumen_marks=1
 
+    # How the command ended. Only after a command: a shell that has just
+    # started has none to tell of.
     __lumen_ended() {
-        print -n "\e]133;D;$?\a"
+        local ended=$?
+        if [[ -n ${__lumen_ran-} ]]; then
+            typeset -g __lumen_ran=
+            print -n "\e]133;D;$ended\a"
+        fi
     }
 
     # A prompt that a theme has just set anew is marked again.
@@ -18,8 +24,27 @@ if [[ -o interactive && -z ${__lumen_marks-} ]]; then
         fi
     }
 
+    # The command is sent off. Its text goes along: what stands on the screen
+    # beside it may be a right prompt.
     __lumen_output() {
-        print -n '\e]133;C\a'
+        emulate -L zsh
+        setopt no_multibyte
+        typeset -g __lumen_ran=1
+        local command=${1:-$3} text= c
+        local -i i
+        # a command longer than this is read from the screen
+        if (( ${#command} == 0 || ${#command} > 4096 )); then
+            print -n '\e]133;C\a'
+            return
+        fi
+        for (( i = 1; i <= ${#command}; i++ )); do
+            c=$command[i]
+            case $c in
+                [a-zA-Z0-9._~/-]) text+=$c ;;
+                *) text+=%${(l:2::0:)$(( [##16] #c ))} ;;
+            esac
+        done
+        print -n "\e]133;C;cmdline_url=$text\a"
     }
 
     autoload -Uz add-zsh-hook

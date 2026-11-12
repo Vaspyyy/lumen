@@ -65,24 +65,24 @@ In other terminals the link is handed to the desktop, where [glint](https://gith
 
 ## Marks for commands
 
-A shell tells lumen where its commands are with the marks of OSC 133, each as `ESC ] 133 ; X ESC \\` or ending in `BEL`:
+A shell tells lumen where its commands are with the marks of OSC 133, each as `ESC ] 133 ; X ESC \` or ending in `BEL`:
 
 | Mark | Says |
 | --- | --- |
-| `A` | A prompt begins here |
+| `A` | A prompt begins here. If the cursor is not at the start of a line, lumen begins a new line first |
 | `B` | The prompt has ended, what is typed begins |
 | `C` | The command was sent off, its output begins |
 | `D` | The command has ended. `D;0` gives its exit status |
 
 Anything after a further `;` is left alone, with one exception: `C;cmdline_url=TEXT` gives the command's text, percent-encoded, as fish sends it. Without it, lumen reads the text from the screen, between `B` and `C`.
 
-`B` can be left out. A prompt that is written again in the same place, as after a resize, stays the same command. On the alternate screen the marks are ignored.
+`B` can be left out. A prompt that is written again in the same place, as after a resize, stays the same command. An `A` or a `C` that comes while a command runs, with no `D` before it, is taken for a shell inside that command: the command is no longer followed. On the alternate screen the marks are ignored.
 
 What lumen does with them is in [Commands](/docs/commands/). `lumen shell-integration bash` prints a small, complete example for a shell.
 
 ## Places in code
 
-lumen opens `path:line` in the user's editor on a `Ctrl+Click`, with no link around it. A tool that prints places as `path:line`, `path:line:column`, `path(line)` or `path(line,column)`, with the path relative to the folder it was run in or to a folder above that, needs to do nothing more. See [Files and links](/docs/files-and-links/#web-addresses-and-places-in-code).
+lumen opens `path:line` in the user's editor on a `Ctrl+Click`, with no link around it. A tool that prints places as `path:line`, `path:line:column`, `path(line)` or `path(line,column)`, with the path relative to the folder it was run in, needs to do nothing more. A path with a `/` in it may also be relative to one of the five folders above. See [Files and links](/docs/files-and-links/#web-addresses-and-places-in-code).
 
 ## Not supported
 

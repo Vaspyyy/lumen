@@ -52,6 +52,51 @@ pub enum ViewEvent {
     Edit { path: PathBuf, line: u32, column: Option<u32> },
 }
 
+/// A line of the screen, as it is read for what its text names: taken while
+/// the terminal is locked, and looked at after.
+struct Seen {
+    /// Each character with the column it stands in, and whether it is a wide one.
+    cells: Vec<(usize, char, bool)>,
+    /// The character under the mouse.
+    at: usize,
+    /// The folder the command that printed the line ran in, where the shell told of it.
+    folder: Option<PathBuf>,
+}
+
+impl Seen {
+    /// The line with the character at `col`. None where there is nothing but space.
+    fn at(term: &Term<Listener>, terminal: &Terminal, line: Line, col: usize) -> Option<Seen> {
+        let cells: Vec<(usize, char, bool)> = term.grid()[line]
+            .into_iter()
+            .enumerate()
+            .filter(|(_, cell)| !cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER))
+            .map(|(col, cell)| (col, cell.c, cell.flags.contains(Flags::WIDE_CHAR)))
+            .collect();
+        let at = cells.iter().rposition(|&(cell_col, ..)| cell_col <= col)?;
+        if cells[at].1.is_whitespace() {
+            return None;
+        }
+        let log = terminal.commands.lock().unwrap();
+        // A shell that marks no commands has none to ask, and all of the scrollback
+        // would be searched for one.
+        let printed_by = if log.is_empty() {
+            None
+        } else {
+            commands::place_at(term, line).or_else(|| commands::above(term, line, |_| true))
+        };
+        let folder = printed_by.and_then(|place| log.get(place.id)?.cwd.clone());
+        Some(Seen { cells, at, folder })
+    }
+}
+
+/// What the disk last said about a path.
+struct Found {
+    name: String,
+    folder: Option<PathBuf>,
+    path: Option<PathBuf>,
+    at: Instant,
+}
+
 /// A link the mouse is on.
 #[derive(Clone, PartialEq)]
 pub struct Hover {
@@ -127,6 +172,8 @@ pub struct TerminalView {
     mouse: Option<Point<Pixels>>,
     modifiers: Modifiers,
     hover: Option<Hover>,
+    /// The path that was last looked up for a link in plain text.
+    found: RefCell<Option<Found>>,
     /// Where the marks of the commands on screen are, as of the last frame.
     marks: Rc<RefCell<Vec<MarkSpot>>>,
     /// The command whose mark the mouse is on.
@@ -218,6 +265,7 @@ impl TerminalView {
             mouse: None,
             modifiers: Modifiers::default(),
             hover: None,
+            found: RefCell::new(None),
             marks: Rc::default(),
             hovered_mark: None,
             keys_down: Vec::new(),
@@ -370,7 +418,13 @@ impl TerminalView {
         let link_at = |row: usize, col: usize| term.grid()[Line(row as i32 - offset)][Column(col)].hyperlink();
         // a link the program marked, or else what its plain text names
         let Some((target, link)) = link_at(row, col).and_then(|link| Some((links::target(link.uri())?, link))) else {
-            return self.text_under_mouse(&term, terminal, Line(row as i32 - offset), row, col);
+            // What plain text names is looked for only while Ctrl is held, which is when a
+            // click would follow it: a file is looked up on disk. That is done without
+            // the terminal's lock, which the program's output waits for.
+            let seen =
+                if self.modifiers.control { Seen::at(&term, terminal, Line(row as i32 - offset), col) } else { None };
+            drop(term);
+            return self.text_link(seen?, terminal, row);
         };
         // the cells around `col` that carry the same link
         let stretch = |row: usize, col: usize| {
@@ -421,39 +475,41 @@ impl TerminalView {
         Some(Hover { target, segments })
     }
 
-    /// What the plain text under the mouse names: a web address, or a file
-    /// that is there. Looked for only while Ctrl is held, which is when a
-    /// click would follow it: a file is looked up on disk.
-    fn text_under_mouse(
-        &self,
-        term: &Term<Listener>,
-        terminal: &Terminal,
-        line: Line,
-        row: usize,
-        col: usize,
-    ) -> Option<Hover> {
-        if !self.modifiers.control {
-            return None;
-        }
-        // the line's characters, each with its column: a wide one takes two cells
-        let cells: Vec<(usize, char)> = term.grid()[line]
-            .into_iter()
-            .enumerate()
-            .filter(|(_, cell)| !cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER))
-            .map(|(col, cell)| (col, cell.c))
-            .collect();
-        let text: Vec<char> = cells.iter().map(|&(_, c)| c).collect();
-        let at = cells.iter().rposition(|&(cell_col, _)| cell_col <= col)?;
-        let (target, part) = links::in_text(&text, at, |name| {
-            // a path is meant from where the command that printed it was run
-            let log = terminal.commands.lock().unwrap();
-            let printed_by = commands::place_at(term, line).or_else(|| commands::above(term, line, |_| true));
-            let folder = printed_by.and_then(|place| log.get(place.id)?.cwd.clone()).or_else(|| terminal.cwd());
-            links::find_file(name, folder.as_deref())
+    /// What the plain text of a line names where the mouse is: a web address,
+    /// or a file that is there.
+    fn text_link(&self, seen: Seen, terminal: &Terminal, row: usize) -> Option<Hover> {
+        let text: Vec<char> = seen.cells.iter().map(|&(_, c, _)| c).collect();
+        let folder = seen.folder;
+        let (target, part) = links::in_text(&text, seen.at, |name| {
+            // a path is meant from where the command that printed it was run, or else from where the shell is now
+            let folder = folder.or_else(|| terminal.cwd());
+            self.find_file(name, folder.as_deref())
         })?;
-        let (first, last) = (cells[part.start].0, cells[part.end - 1].0);
-        let wide = term.grid()[line][Column(last)].flags.contains(Flags::WIDE_CHAR);
+        let (first, (last, _, wide)) = (seen.cells[part.start].0, seen.cells[part.end - 1]);
         Some(Hover { target, segments: vec![(row, first, last + 1 + wide as usize - first)] })
+    }
+
+    /// Where a path as a program printed it leads. The answer is kept for a
+    /// moment: the question comes with every move of the mouse over the same
+    /// word, and each time it is the disk that is asked.
+    fn find_file(&self, name: &str, folder: Option<&std::path::Path>) -> Option<PathBuf> {
+        const FRESH: Duration = Duration::from_millis(1500);
+        let mut found = self.found.borrow_mut();
+        if let Some(found) = found.as_ref()
+            && found.name == name
+            && found.folder.as_deref() == folder
+            && found.at.elapsed() < FRESH
+        {
+            return found.path.clone();
+        }
+        let path = links::find_file(name, folder);
+        *found = Some(Found {
+            name: name.to_string(),
+            folder: folder.map(PathBuf::from),
+            path: path.clone(),
+            at: Instant::now(),
+        });
+        path
     }
 
     fn update_hover(&mut self, cx: &mut Context<Self>) {
@@ -1087,6 +1143,10 @@ impl Render for TerminalView {
         };
         let mut context = KeyContext::default();
         context.add("Terminal");
+        // the keys for commands are lumen's only where the shell marks its commands
+        if !self.terminal.read(cx).commands.lock().unwrap().is_empty() {
+            context.add("marks");
+        }
         if self.mode(cx).contains(TermMode::ALT_SCREEN) {
             context.add("alt_screen");
         }
@@ -1098,7 +1158,9 @@ impl Render for TerminalView {
             .on_key_down(cx.listener(Self::key_down))
             .on_key_up(cx.listener(Self::key_up))
             .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
+                // Ctrl makes a link of what plain text names: under a mouse that rests, too
                 this.modifiers = event.modifiers;
+                this.update_hover(cx);
                 cx.notify();
             }))
             .on_action(cx.listener(Self::copy))

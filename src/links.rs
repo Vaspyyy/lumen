@@ -138,14 +138,6 @@ pub fn in_text(text: &[char], at: usize, find: impl FnOnce(&str) -> Option<PathB
     }
     let path_end = place.map_or(to, |(mark, ..)| mark);
     let name: String = word[from..path_end].iter().collect();
-    // what could be a file: a path, or a name with an ending
-    let likely = !name.contains("://")
-        && name.len() <= 4096
-        && (name.contains('/') || name.contains('.'))
-        && name.chars().any(|c| c.is_alphanumeric());
-    if !likely {
-        return None;
-    }
     // `File "x.py", line 12`: how Python names a place
     let place = place.or_else(|| {
         let rest: String = text[end..].iter().take(24).collect();
@@ -153,6 +145,14 @@ pub fn in_text(text: &[char], at: usize, find: impl FnOnce(&str) -> Option<PathB
         let line = number[..number.find(|c: char| !c.is_ascii_digit()).unwrap_or(number.len())].parse().ok()?;
         Some((path_end, line, None, path_end))
     });
+    // what could be a file: a path, a name with an ending, or any name with a line behind it (`Makefile:12`)
+    let likely = !name.contains("://")
+        && name.len() <= 4096
+        && (name.contains('/') || name.contains('.') || (place.is_some() && name.chars().any(char::is_alphabetic)))
+        && name.chars().any(|c| c.is_alphanumeric());
+    if !likely {
+        return None;
+    }
     let name_end = place.map_or(path_end, |(.., after)| after);
     if !(start + from..start + name_end).contains(&at) {
         return None;
@@ -353,6 +353,11 @@ mod tests {
         assert_eq!(file("  File \"tools/x.py\", line 12, in f", "tools"), found("/w/tools/x.py", "tools/x.py"));
         assert_eq!(file("see README.md.", "README"), found("/w/README.md", "README.md"));
         assert_eq!(file("`docs/a.md`,", "docs"), found("/w/docs/a.md", "docs/a.md"));
+        // a name with a line behind it needs no ending
+        let make = "Makefile:12: recipe for target 'all' failed";
+        assert_eq!(file(make, "Make"), found("/w/Makefile", "Makefile:12"));
+        assert_eq!(file("  File \"build\", line 3", "build"), found("/w/build", "build"));
+        assert_eq!(file("the Makefile is here", "Make"), None);
         // words that are no file names, and the mouse beside the name
         assert_eq!(file("exit 12:30 today", "12"), None);
         assert_eq!(file("word", "word"), None);

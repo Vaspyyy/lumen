@@ -111,11 +111,9 @@ pub fn launch(
     let file = path.to_string_lossy().into_owned();
     let column_or_first = column.unwrap_or(1);
     if command.contains("{file}") {
+        let places = [("{file}", file), ("{line}", line.to_string()), ("{column}", column_or_first.to_string())];
         for word in &mut argv {
-            *word = word
-                .replace("{file}", &file)
-                .replace("{line}", &line.to_string())
-                .replace("{column}", &column_or_first.to_string());
+            *word = filled(word, &places);
         }
     } else {
         match form {
@@ -133,6 +131,28 @@ pub fn launch(
         }
     }
     Some(Launch { argv, terminal: terminal.unwrap_or(in_terminal) })
+}
+
+/// `word` with each place in it filled in. What is filled in is not looked
+/// at again: a file may have `{line}` in its name.
+fn filled(word: &str, places: &[(&str, String)]) -> String {
+    let mut out = String::with_capacity(word.len());
+    let mut rest = word;
+    while let Some(at) = rest.find('{') {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        match places.iter().find(|(place, _)| rest.starts_with(place)) {
+            Some((place, value)) => {
+                out.push_str(value);
+                rest = &rest[place.len()..];
+            },
+            None => {
+                out.push('{');
+                rest = &rest[1..];
+            },
+        }
+    }
+    out + rest
 }
 
 #[cfg(test)]
@@ -171,8 +191,12 @@ mod tests {
         assert!(!started(Some("myedit {file}"), Some(false), &[]).unwrap().1);
         assert!(started(Some("code"), Some(true), &[]).unwrap().1);
         // without a column, the first
-        let launch = launch(Some("hx"), None, |_| None, Path::new("/a.rs"), 3, None).unwrap();
-        assert_eq!(launch.argv, ["hx", "/a.rs:3:1"]);
+        let hx = launch(Some("hx"), None, |_| None, Path::new("/a.rs"), 3, None).unwrap();
+        assert_eq!(hx.argv, ["hx", "/a.rs:3:1"]);
+        // a file's name is taken as it is, whatever is in it
+        let odd =
+            launch(Some("ed {file} +{line} {other} {"), None, |_| None, Path::new("/a{line}{column}.rs"), 3, None);
+        assert_eq!(odd.unwrap().argv, ["ed", "/a{line}{column}.rs", "+3", "{other}", "{"]);
     }
 
     #[test]

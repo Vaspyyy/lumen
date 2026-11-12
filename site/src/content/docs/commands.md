@@ -14,7 +14,7 @@ Every command you have run has a small mark in the margin, beside its prompt:
 | The mark is | The command |
 | --- | --- |
 | Lit, in lumen's accent color | Still runs |
-| Red | Failed: it ended with an exit status other than 0 |
+| Red | Failed: it ended with an exit status other than 0, and not because you stopped it with `Ctrl+C` |
 | Faint | Ended well, or was stopped with `Ctrl+C` |
 
 Move the mouse onto a mark and lumen says how it went: `done in 2.4 s`, `exit 1 after 12 ms`, `running for 3 min 12 s`.
@@ -31,7 +31,7 @@ A prompt where nothing was run has no mark.
 | `Ctrl+Shift+Down` | Go to the next command. After the last one, back to the bottom |
 | `Ctrl+Shift+O` | Copy the output of the last command, also of one that still runs. When you have scrolled back, of the command at the top of the view |
 
-A full-screen program such as vim gets these keys itself. They are lumen's only at a shell.
+These keys are lumen's where the shell marks its commands. A full-screen program such as vim gets them itself, and in a shell that marks nothing they go to the program as they always did.
 
 ## What a tab tells you
 
@@ -44,7 +44,7 @@ A tab you are not looking at shows a dot when something happened in it:
 | Red | A command there has failed |
 | In lumen's accent color | A program there rang the bell |
 
-Start a long build, go to another tab, and the dot tells you when to come back. It goes away when you look at the tab. If the whole window is in the background, the tab that is open in it gets a dot too.
+Start a long build, go to another tab, and the dot tells you when to come back. It goes away when you look at the tab. If the whole window is in the background, the tab that is open in it gets its dot too when a command in it ends or fails, or the bell rings.
 
 ## Setting up your shell
 
@@ -83,8 +83,9 @@ Without marks, lumen is the terminal it was before: nothing is missing but what 
 ## Good to know
 
 - **The marks need room.** They stand in the space around a pane's text, which is [`padding`](/docs/configuration/) in the config. With less than 4 pixels of it they are not drawn. The keys work all the same.
-- **Over SSH** it works when the shell on the other machine marks its commands. A fish 4 there does.
+- **A prompt begins on a new line.** Where a command's output did not end with a line break, bash writes its prompt right behind it. With marks, lumen gives the prompt a line of its own, so that the last line of the output stays with its command.
+- **Over SSH** it works when the shell on the other machine marks its commands. A fish 4 there does. The same goes for a shell you start inside another. From the first prompt of the inner shell on, the marks are its own: the `ssh` command that led there is no longer followed, and its mark says how long it ran before that prompt.
 - **Inside tmux or another multiplexer** there are no marks: it keeps them to itself.
 - **In a full-screen program** nothing is marked. A shell you start inside one belongs to that program's screen.
 - **A command that printed nothing** has nothing to copy, and lumen says so.
-- Paths in a command's output are followed from the folder the command ran in. See [Files and links](/docs/files-and-links/#web-addresses-and-places-in-code).
+- Paths in a command's output are followed from the folder the command ran in, as far as your own shell knows it: for a shell inside another, or on another machine, that is the folder the outer shell is in. See [Files and links](/docs/files-and-links/#web-addresses-and-places-in-code).

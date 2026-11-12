@@ -67,7 +67,7 @@ File "tools/build.py", line 42
 
 Those cover what compilers, linters, test runners and searches print, among them crux, seek and recap. A full stop, a comma or a bracket around an address or a path is left out.
 
-**Only a file that is there is a link.** lumen looks on the disk before it underlines a path, so a word with a dot in it does not turn into a link by chance. It looks only while `Ctrl` is held.
+**Only a file that is there is a link.** lumen looks on the disk before it underlines a path, so a word with a dot in it does not turn into a link by chance. It looks only while `Ctrl` is held, and only for a word that has a `/` or a `.` in it, or a line behind it: `Makefile` alone is not looked for, `Makefile:12` is.
 
 **Where a path is looked for.** A path that starts with `/` or `~` is taken as it is. Any other is followed from the folder the command that printed it ran in, which lumen knows when [your shell marks its commands](/docs/commands/); without that, from the folder the pane's shell is in now. Tools that run further down in a project often name files from its top, so for a path with a `/` in it the five folders above are tried as well, up to your home folder. A bare name such as `main.rs` is looked for in that one folder only.
 

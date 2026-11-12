@@ -98,8 +98,9 @@ pub struct Terminal {
     pub images: graphics::Shared,
     /// The commands the shell has told of.
     pub commands: commands::Shared,
-    /// The command that was running and how many had ended, when that was last looked at.
-    commands_seen: (Option<u32>, u64),
+    /// The command that was running, and how many had ended and failed,
+    /// when that was last looked at.
+    commands_seen: (Option<u32>, (u64, u64)),
     io: Sender,
     pub size: TermSize,
     title: Option<String>,
@@ -185,7 +186,7 @@ impl Terminal {
             term,
             images,
             commands,
-            commands_seen: (None, 0),
+            commands_seen: (None, (0, 0)),
             io,
             size,
             title: None,
@@ -197,14 +198,14 @@ impl Terminal {
 
     /// Tells of the commands that were sent off or ended since this last looked.
     fn notice_commands(&mut self, cx: &mut Context<Self>) {
-        let (running, last, ended) = {
+        let (running, ended) = {
             let log = self.commands.lock().unwrap();
-            let (last, ended) = log.last_ended();
-            (log.running().map(|(id, _)| id), last.map(|command| command.failed()), ended)
+            (log.running().map(|(id, _)| id), log.ended())
         };
         let (was_running, had_ended) = std::mem::replace(&mut self.commands_seen, (running, ended));
-        if ended != had_ended {
-            cx.emit(TerminalEvent::Command(CommandEvent::Ended { failed: last.unwrap_or(false) }));
+        if ended.0 != had_ended.0 {
+            // of several that ended since the last look, one that failed is the news
+            cx.emit(TerminalEvent::Command(CommandEvent::Ended { failed: ended.1 != had_ended.1 }));
         }
         if running.is_some() && running != was_running {
             cx.emit(TerminalEvent::Command(CommandEvent::Started));

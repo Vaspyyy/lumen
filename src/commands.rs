@@ -207,6 +207,8 @@ pub struct Command {
     pub at: Option<SystemTime>,
     pub ended: Option<Instant>,
     pub exit: Option<i32>,
+    /// The shell never said that it ended: the next prompt came while it ran.
+    pub left: bool,
 }
 
 impl Command {
@@ -244,6 +246,7 @@ impl Command {
             Status::Ended(Some(0)) => format!("done in {took}"),
             Status::Ended(Some(INTERRUPTED)) => format!("interrupted after {took}"),
             Status::Ended(Some(code)) => format!("exit {code} after {took}"),
+            Status::Ended(None) if self.left => format!("ran {took} before the next prompt"),
             Status::Ended(None) => format!("ended after {took}"),
         })
     }
@@ -291,10 +294,10 @@ pub struct Log {
     /// The command whose prompt is open or that runs.
     current: Option<u32>,
     phase: Phase,
-    /// The command that ended last.
-    last_ended: Option<u32>,
-    /// How many commands have ended: what tells a reader that one has since it last looked.
+    /// How many commands have ended, and how many of them failed: what tells
+    /// a reader that one has since it last looked.
     ended: u64,
+    failed: u64,
     /// The shell's process, whose folder a command starts in.
     shell: Option<u32>,
 }
@@ -316,9 +319,14 @@ impl Log {
         Some((id, self.commands.get(&id)?))
     }
 
-    /// The command that ended last, and how many have ended so far.
-    pub fn last_ended(&self) -> (Option<&Command>, u64) {
-        (self.last_ended.and_then(|id| self.commands.get(&id)), self.ended)
+    /// How many commands have ended so far, and how many of them failed.
+    pub fn ended(&self) -> (u64, u64) {
+        (self.ended, self.failed)
+    }
+
+    /// The shell has not told of any command: it doesn't mark them.
+    pub fn is_empty(&self) -> bool {
+        self.commands.is_empty()
     }
 
     fn open(&mut self) -> u32 {
@@ -338,8 +346,22 @@ impl Log {
         {
             command.ended = Some(Instant::now());
             command.exit = exit;
-            self.last_ended = Some(id);
             self.ended += 1;
+            self.failed += command.failed() as u64;
+        }
+        self.phase = Phase::Idle;
+    }
+
+    /// A prompt or another command came while a command ran, without a word
+    /// of how it ended. A shell inside it has taken over (one it started,
+    /// or one on another machine), or the shell never says how commands end.
+    /// As far as lumen can tell it is over, but nobody is told of an end
+    /// that nobody has seen.
+    fn leave(&mut self) {
+        if let Some(command) = self.current.and_then(|id| self.commands.get_mut(&id)) {
+            command.ended = Some(Instant::now());
+            command.exit = None;
+            command.left = true;
         }
         self.phase = Phase::Idle;
     }
@@ -354,8 +376,16 @@ impl Log {
         match mark {
             Mark::Prompt => {
                 if self.phase == Phase::Running {
-                    // the shell is back at a prompt without having said how the command ended
-                    self.end(None);
+                    // a prompt, and no word of how the command ended
+                    self.leave();
+                }
+                // A prompt begins on a line of its own. A shell that doesn't see to that
+                // (bash, after output without a line break at its end) is given the line,
+                // so that the output's last line stays the output's. A prompt that is
+                // written again where it stands is left where it is.
+                if !matches!(self.phase, Phase::Prompt | Phase::Input) && term.grid().cursor.point.column.0 > 0 {
+                    term.carriage_return();
+                    term.linefeed();
                 }
                 // A prompt that is written again where it stands (after a resize, after
                 // a completion) is still the same prompt. One on a line of its own is a new one.
@@ -380,7 +410,7 @@ impl Log {
                 let id = match (self.current, self.phase) {
                     (Some(id), Phase::Prompt | Phase::Input) => id,
                     (_, Phase::Running) => {
-                        self.end(None);
+                        self.leave();
                         self.open()
                     },
                     // a command without a prompt before it
@@ -721,7 +751,7 @@ mod tests {
         screen.print("ls");
         assert_eq!(owner(&screen.term, Line(3)), Some(2));
         let log = screen.log.lock().unwrap();
-        assert_eq!(log.last_ended().1, 2);
+        assert_eq!(log.ended().0, 2);
         assert!(log.running().is_none());
     }
 
@@ -776,11 +806,14 @@ mod tests {
         screen.print("\x1b]133;A\x07~> \x1b]133;B\x07sleep 9\r\n\x1b]133;C\x07");
         screen.print("\x1b]133;A\x07~> \x1b]133;B\x07");
         assert_eq!(screen.command(0).status(), Status::Ended(None));
+        assert_eq!(screen.command(0).describe().unwrap().split_once(" before ").unwrap().1, "the next prompt");
         assert_eq!(screen.places(), [(0, 0, 0), (1, 1, 1)]);
+        // nobody saw it end, so nobody is told that it has
+        assert_eq!(screen.log.lock().unwrap().ended(), (0, 0));
         // an end without a command before it says nothing
         let mut screen = Screen::new();
         screen.print("\x1b]133;D;0\x07\x1b]133;A\x07~> ");
-        assert_eq!(screen.log.lock().unwrap().last_ended().1, 0);
+        assert_eq!(screen.log.lock().unwrap().ended(), (0, 0));
         // a command without a prompt
         let mut screen = Screen::new();
         screen.print("\x1b]133;C\x07out\r\n\x1b]133;D;3\x07");
@@ -830,12 +863,56 @@ mod tests {
     }
 
     #[test]
+    fn a_prompt_begins_on_a_line_of_its_own() {
+        let mut screen = Screen::new();
+        // bash writes its prompt where the output stopped
+        screen.run("printf hello", "hello", 0).run("printf 'a\\nb'", "a\r\nb", 0);
+        screen.print("\x1b]133;A\x07$ \x1b]133;B\x07");
+        assert_eq!(screen.line(1), "hello");
+        assert_eq!(screen.line(2), "~> printf 'a\\nb'");
+        assert_eq!(screen.line(4), "b");
+        assert_eq!(screen.line(5), "$");
+        let first = place_at(&screen.term, Line(0)).unwrap();
+        assert_eq!(text(&screen.term, output(&screen.term, first).unwrap()), "hello");
+        let second = place_at(&screen.term, Line(2)).unwrap();
+        assert_eq!(text(&screen.term, output(&screen.term, second).unwrap()), "a\nb");
+        // a prompt that is written again where it stands stays there
+        screen.print("ls\x1b]133;A\x07\x1b[1G\x1b[K$ \x1b]133;B\x07ls");
+        assert_eq!(screen.line(5), "$ ls");
+        assert_eq!(screen.line(6), "");
+    }
+
+    #[test]
+    fn several_commands_end_and_one_of_them_fails() {
+        let mut screen = Screen::new();
+        screen.run("false", "", 1).run("true", "", 0);
+        assert_eq!(screen.log.lock().unwrap().ended(), (2, 1));
+        // stopped from the keyboard is not a failure
+        screen.run("sleep 9", "^C", 130);
+        assert_eq!(screen.log.lock().unwrap().ended(), (3, 1));
+    }
+
+    #[test]
+    fn a_shell_inside_a_command_takes_over() {
+        let mut screen = Screen::new();
+        // `ssh host` runs, and the shell over there shows its prompt and runs a command
+        screen.print("\x1b]133;A\x07~> \x1b]133;B\x07ssh host\r\n\x1b]133;C\x07Welcome\r\n");
+        screen.run("ls", "a  b\r\n", 0);
+        let outer = screen.command(0);
+        assert_eq!(outer.status(), Status::Ended(None));
+        assert!(outer.left && !outer.failed());
+        // only the command over there ended for all to see
+        assert_eq!(screen.log.lock().unwrap().ended(), (1, 0));
+        assert_eq!(screen.places().len(), 2);
+    }
+
+    #[test]
     fn a_full_screen_program_has_no_commands() {
         let mut screen = Screen::new();
         screen.run("vim", "\x1b[?1049h\x1b]133;A\x07~> \x1b]133;B\x07x\x1b]133;C\x07\x1b]133;D;1\x07\x1b[?1049l", 0);
         assert_eq!(screen.places(), [(0, 0, 0)]);
         assert_eq!(screen.command(0).status(), Status::Ended(Some(0)));
-        assert_eq!(screen.log.lock().unwrap().last_ended().1, 1);
+        assert_eq!(screen.log.lock().unwrap().ended().0, 1);
     }
 
     #[test]
