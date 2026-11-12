@@ -388,7 +388,8 @@ pub struct Log {
     aside: bool,
     /// How many bytes were written to the terminal since the prompt that is
     /// open began, or was last written again. An earlier copy of it is no
-    /// more lines up than that: a line takes a byte at least.
+    /// more lines up than that: a line takes a byte at least. An image counts
+    /// for as many bytes as it can have rows.
     written: usize,
     /// The command that ran when it did. How it ended may still be said.
     over: Option<u32>,
@@ -440,6 +441,12 @@ impl Log {
         {
             command.peak = Some(command.peak.unwrap_or(0).max(memory));
         }
+    }
+
+    /// This much more was written to the terminal: bytes, or what moves its
+    /// lines as that many bytes do.
+    pub fn wrote(&mut self, bytes: usize) {
+        self.written = self.written.saturating_add(bytes);
     }
 
     fn open(&mut self) -> u32 {
@@ -651,7 +658,7 @@ pub fn advance<L: EventListener>(
             parser.stop_sync(term);
         }
         let mut log = log.lock().unwrap();
-        log.written = log.written.saturating_add(std::mem::take(&mut scanner.fed));
+        log.wrote(std::mem::take(&mut scanner.fed));
         log.apply(mark, term);
     }
     parser.advance(term, &bytes[done..]);
@@ -737,7 +744,9 @@ fn marks_on<L>(term: &Term<L>, line: Line) -> impl Iterator<Item = (u32, Part)> 
 /// empty. They don't end the search. A line of another command does: the
 /// command is older, and nothing of this one stands above it. Without one,
 /// the search goes as far up as `written` bytes can have moved a line, and
-/// two screens further for a screen that was cleared in between.
+/// two screens further for a screen that was cleared in between. (A program
+/// that scrolls the screen again and again while a prompt is open can move
+/// a copy further than that. Shells don't.)
 fn forget_above<L>(term: &mut Term<L>, line: Line, id: u32, part: Option<Part>, written: usize) {
     let reach = written.saturating_add(2 * term.screen_lines());
     let reach = i32::try_from(reach).unwrap_or(i32::MAX);

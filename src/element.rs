@@ -353,12 +353,18 @@ impl Element for TerminalElement {
             let overrides = content.colors;
             ground = palette::ground(overrides, colors);
             behind = ground.unwrap_or(colors.primary.background);
-            ink = palette::ink(overrides, colors).hsla();
+            let ink_rgb = palette::ink(overrides, colors);
+            ink = ink_rgb.hsla();
             let (of_cursor, under_cursor) = palette::cursor(overrides, colors);
             (cursor_color, on_cursor) = (of_cursor.hsla(), under_cursor.hsla());
             // The theme's colors for the selection were chosen for the theme's
             // background: on one a program has set, they may be lost.
-            let selection_bg = colors.selection.background.filter(|_| ground.is_none()).map(|c| c.hsla());
+            let selection_rgb = colors.selection.background.filter(|_| ground.is_none());
+            let selection_bg = selection_rgb.map(|c| c.hsla());
+            // what selected text stands on: the theme's color for it, or a wash of the
+            // text's color over the pane
+            const WASH: f32 = 0.28;
+            let selected_on = selection_rgb.unwrap_or_else(|| palette::over(ink_rgb, WASH, behind));
             let selection_fg = colors.selection.text.filter(|_| ground.is_none()).map(|c| c.hsla());
             let mut run: Option<Run> = None;
             pointer = if self.hovered_mark.is_some() {
@@ -431,15 +437,18 @@ impl Element for TerminalElement {
                 } else if selected {
                     // Without a selection color, the selection is a see-through wash of the
                     // text color: of the one a program has set, which is seen on its background.
-                    let wash = selection_bg.unwrap_or(Hsla { a: 0.28, ..ink });
+                    let wash = selection_bg.unwrap_or(Hsla { a: WASH, ..ink });
                     push_background(&mut backgrounds, row, col, width, wash);
                     if let Some(color) = selection_fg {
                         fg_color = color;
-                    } else if !palette::apart(palette::rgb(fg, overrides, colors), behind, false) {
-                        // Text in the color of the pane's background stood on a block of
-                        // its own (inverse text, mostly), which the selection has taken
-                        // the place of: it is drawn in the color of the text.
-                        fg_color = Hsla { a: fg_color.a, ..ink };
+                    } else {
+                        // text that stood on a block of its own, which the selection has
+                        // taken the place of, may be lost on what is behind it now
+                        let text = palette::rgb(fg, overrides, colors);
+                        let seen = palette::selected(text, behind, ink_rgb, selected_on);
+                        if seen != text {
+                            fg_color = Hsla { a: fg_color.a, ..seen.hsla() };
+                        }
                     }
                 } else if !default_bg {
                     push_background(&mut backgrounds, row, col, width, palette::resolve(bg, overrides, colors));

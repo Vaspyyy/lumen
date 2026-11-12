@@ -601,6 +601,9 @@ fn show<L: EventListener>(
     place(term, id, cols, rows, control.stay);
 }
 
+/// An image is no more rows high than this.
+pub const MAX_ROWS: usize = 2000;
+
 /// The cells an image takes (columns, rows), and its size on screen in
 /// cells: an image is shown at its own size unless the program says how
 /// many columns or rows it gets, and stretched when it says both.
@@ -614,7 +617,7 @@ fn cells_for(image: (u32, u32), asked: (u32, u32), cell: (f32, f32)) -> (usize, 
         (0, r) => (r as f32 * ch * iw / ih / cw, r as f32),
         (c, r) => (c as f32, r as f32),
     };
-    let (w, h) = (w.clamp(0.01, 2000.), h.clamp(0.01, 2000.));
+    let (w, h) = (w.clamp(0.01, 2000.), h.clamp(0.01, MAX_ROWS as f32));
     (w.ceil() as usize, h.ceil() as usize, (w, h))
 }
 

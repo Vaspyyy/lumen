@@ -129,6 +129,21 @@ pub fn contrast(a: Rgb, b: Rgb) -> f32 {
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
+/// One color over another, as much of it as `alpha` says.
+pub fn over(top: Rgb, alpha: f32, under: Rgb) -> Rgb {
+    let mix = |top: u8, under: u8| (f32::from(under) + (f32::from(top) - f32::from(under)) * alpha).round() as u8;
+    Rgb(mix(top.0, under.0), mix(top.1, under.1), mix(top.2, under.2))
+}
+
+/// The color selected text is drawn in, where the theme names none: its
+/// own. But text in the color of the pane's background (`behind`) stood on
+/// a block of its own, as inverse text does, and the selection has taken the
+/// place of that block. Such text is drawn in the color of the text (`ink`)
+/// where that is seen better on what the selection puts behind it (`on`).
+pub fn selected(text: Rgb, behind: Rgb, ink: Rgb, on: Rgb) -> Rgb {
+    if !apart(text, behind, false) && contrast(ink, on) > contrast(text, on) { ink } else { text }
+}
+
 /// Whether text in one color can be told from the color behind it. Two
 /// colors that differ less than this are the same to anyone who is not
 /// looking for a difference. `dim` text is drawn partly see-through.
@@ -207,6 +222,28 @@ mod tests {
         // set on the theme's own background
         overrides[NamedColor::Background] = None;
         assert_eq!(cursor(&overrides, &colors), (Rgb(215, 130, 126), colors.primary.background));
+    }
+
+    #[test]
+    fn selected_text_that_stood_on_a_block_of_its_own() {
+        // the theme's own colors, and a selection that is a wash of the text's color
+        let (ground, ink) = (Rgb(0x12, 0x11, 0x1a), Rgb(0xe4, 0xe1, 0xee));
+        let wash = over(ink, 0.28, ground);
+        assert_eq!(over(Rgb(255, 255, 255), 0.5, Rgb(0, 0, 0)), Rgb(128, 128, 128));
+        // inverse text was in the background's color on a block: on the wash it is lost
+        assert_eq!(selected(ground, ground, ink, wash), ink);
+        // so is text in a color written out that is close to the background's
+        assert_eq!(selected(Rgb(0x1a, 0x1a, 0x22), ground, ink, wash), ink);
+        // text in any other color keeps it
+        let red = Rgb(0xf2, 0x7a, 0x93);
+        assert_eq!(selected(red, ground, ink, wash), red);
+        // A theme with a light color for the selection: dark text on a block is
+        // seen on it as it is, and would be lost in the color of the text.
+        let (ground, ink, light) = (Rgb(0x1e, 0x1e, 0x2e), Rgb(0xcd, 0xd6, 0xf4), Rgb(0xf5, 0xe0, 0xdc));
+        assert_eq!(selected(Rgb(0x26, 0x26, 0x26), ground, ink, light), Rgb(0x26, 0x26, 0x26));
+        assert_eq!(selected(ground, ground, ink, light), ground);
+        // and one with a dark color for it
+        assert_eq!(selected(ground, ground, ink, Rgb(0x3a, 0x35, 0x50)), ink);
     }
 
     #[test]

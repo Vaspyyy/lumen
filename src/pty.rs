@@ -167,6 +167,8 @@ impl<L: EventListener + Send + 'static> IoLoop<L> {
                             if let Some(answer) = self.graphics.apply(step, &mut **term, self.cell) {
                                 state.queue.push_back(answer.into());
                             }
+                            // an image moves what stands above it up by its rows, for a few bytes
+                            self.commands.lock().unwrap().wrote(crate::graphics::MAX_ROWS);
                         }
                     },
                 }
