@@ -16,7 +16,7 @@ use lumen_link::SessionInfo;
 use super::frame::{self, Hello, Kill, Refused};
 use super::keeper::{env_name_ok, socket_path};
 use super::sys;
-use super::{runtime_dir, this_lumen, usage_error};
+use super::{runtime_dir, this_lumen, unknown_arg, usage_error};
 
 /// How long `attach` waits for a keeper it started.
 const KEEPER_START: Duration = Duration::from_secs(3);
@@ -49,7 +49,7 @@ fn parse_attach_args(args: &[String]) -> Result<AttachArgs, i32> {
                 let dir = std::env::current_dir().map(|here| here.join(&dir)).unwrap_or(dir);
                 cwd = Some(dir.to_string_lossy().into_owned());
             },
-            other => return Err(usage_error(format!("unknown option {other}"))),
+            other => return Err(unknown_arg(other)),
         }
     }
     let Some(session) = session else { return Err(usage_error("attach wants --session NAME")) };
@@ -346,7 +346,7 @@ pub fn sessions(args: &[String]) -> i32 {
         Some("kill") => kill(&args[1..]),
         Some("--json") if args.len() == 1 => list(true),
         None => list(false),
-        Some(other) if other.starts_with('-') => usage_error(format!("unknown option {other}")),
+        Some(other) if other.starts_with('-') => unknown_arg(other),
         Some(other) => usage_error(format!("unexpected {other}")),
     }
 }
@@ -442,7 +442,7 @@ fn kill(args: &[String]) -> i32 {
         [all] if all == "--all" => Kill { name: None, all: true },
         [name] if !name.starts_with('-') => Kill { name: Some(name.clone()), all: false },
         [] => return usage_error("sessions kill wants a name, or --all"),
-        [other] => return usage_error(format!("unknown option {other}")),
+        [other] => return unknown_arg(other),
         _ => return usage_error("sessions kill takes one name, or --all"),
     };
     let payload = serde_json::to_vec(&request_body).unwrap_or_default();

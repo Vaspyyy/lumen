@@ -62,8 +62,6 @@ impl AssetSource for Assets {
 }
 
 const USAGE: &str = "\
-lumen: a terminal emulator
-
 USAGE
     lumen [options] [-e program [args...]]
 
@@ -71,9 +69,34 @@ OPTIONS
     -e, --command <program> [args...]   run this instead of the shell (takes the rest of the line)
     -d, --working-directory <dir>       start in this folder
         --config-path                   print where the config file is read from
-    -v, --version                       print the version
+    -V, --version                       print the version
     -h, --help                          print this help
 ";
+
+/// `lumen --help`: the banner the other tools' help has, then the sections,
+/// with the banner and the headings colored on a terminal.
+fn help_text(color: bool) -> String {
+    let paint = |code: &str, s: &str| if color { format!("\x1b[{code}m{s}\x1b[0m") } else { s.to_string() };
+    // packaging/install.sh knows a lumen by "✦ lumen" in the program
+    let mut text = format!(
+        "\n  {} {}  {}\n\n",
+        paint("38;5;183;1", "✦ lumen"),
+        paint("38;5;59", &format!("v{}", env!("CARGO_PKG_VERSION"))),
+        paint("38;5;146;3", "a terminal emulator"),
+    );
+    for line in format!("{USAGE}\n{}\n{}", integration::USAGE, phone::USAGE).lines() {
+        if line.is_empty() {
+            text.push('\n');
+        } else if line.starts_with(|c: char| c.is_ascii_uppercase()) {
+            text.push_str(&format!("  {}\n", paint("38;5;111;1", line)));
+        } else {
+            text.push_str(line);
+            text.push('\n');
+        }
+    }
+    text.push('\n');
+    text
+}
 
 /// What the command line asked for, or the exit status when it asked for
 /// something that needs no window.
@@ -83,10 +106,13 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Spawn, i32> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-h" | "--help" => {
-                print!("{USAGE}\n{}\n{}", integration::USAGE, phone::USAGE);
+                use std::io::IsTerminal;
+                let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+                print!("{}", help_text(color));
                 return Err(0);
             },
-            "-v" | "--version" => {
+            // -v is what it was before the tools agreed on -V
+            "-V" | "-v" | "--version" => {
                 println!("lumen {}", env!("CARGO_PKG_VERSION"));
                 return Err(0);
             },
@@ -109,8 +135,12 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Spawn, i32> {
                 }
                 spawn.command = Some(command);
             },
+            other if other.starts_with('-') => {
+                eprintln!("lumen: unknown flag {other} (see lumen --help)");
+                return Err(2);
+            },
             other => {
-                eprintln!("lumen: unknown option {other}\nTry 'lumen --help'.");
+                eprintln!("lumen: unknown command {other} (see lumen --help)");
                 return Err(2);
             },
         }
@@ -213,4 +243,31 @@ fn main() {
         watch_config(cx);
         cx.activate(true);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(list: &[&str]) -> impl Iterator<Item = String> {
+        list.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter()
+    }
+
+    #[test]
+    fn help_has_the_banner_install_sh_knows() {
+        // packaging/install.sh tells a lumen from other programs by it
+        let help = help_text(false);
+        assert!(help.starts_with(&format!("\n  ✦ lumen v{}  a terminal emulator\n", env!("CARGO_PKG_VERSION"))));
+        assert!(help.contains("\n    -V, --version "));
+        assert!(help.contains("\n  PHONES\n"));
+        assert!(!help.contains('\x1b'));
+        assert!(help_text(true).contains("\x1b[38;5;111;1mOPTIONS\x1b[0m"));
+    }
+
+    #[test]
+    fn unknown_flags_and_commands_are_usage_errors() {
+        assert!(matches!(parse_args(args(&["--bogus"])), Err(2)));
+        assert!(matches!(parse_args(args(&["bogus"])), Err(2)));
+        assert!(matches!(parse_args(args(&["-d"])), Err(2)));
+    }
 }

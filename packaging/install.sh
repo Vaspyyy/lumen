@@ -38,9 +38,10 @@ usage() {
 }
 
 # Whether the program at $1 is this lumen. Other programs are called lumen
-# too, and one of them may be what is in the folder.
+# too, and one of them may be what is in the folder. The text is the start of
+# lumen --help: "✦ lumen" from 0.5.2 on, "lumen: a terminal emulator" before.
 ours() {
-    grep -q -F 'lumen: a terminal emulator' "$1" 2>/dev/null
+    grep -q -F -e '✦ lumen' -e 'lumen: a terminal emulator' "$1" 2>/dev/null
 }
 
 # The same question for a launcher entry.

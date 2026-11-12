@@ -16,8 +16,8 @@ android {
         applicationId = "io.github.vaspyyy.lumen"
         minSdk = 30
         targetSdk = 36
-        versionCode = 501
-        versionName = "0.5.1"
+        versionCode = 502
+        versionName = "0.5.2"
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }

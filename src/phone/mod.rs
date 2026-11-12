@@ -53,6 +53,17 @@ fn usage_error(message: impl std::fmt::Display) -> i32 {
     2
 }
 
+/// An argument a command doesn't take, told the way the other tools tell an
+/// unknown flag, and its exit status.
+fn unknown_arg(arg: &str) -> i32 {
+    if arg.starts_with('-') {
+        eprintln!("lumen: unknown flag {arg} (see lumen --help)");
+        2
+    } else {
+        usage_error(format!("unexpected {arg}"))
+    }
+}
+
 /// The folder where lumen's sockets are: `$XDG_RUNTIME_DIR/lumen`.
 ///
 /// Without `XDG_RUNTIME_DIR` (an SSH login without PAM has none), the

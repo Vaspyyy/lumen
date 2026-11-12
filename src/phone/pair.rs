@@ -20,7 +20,7 @@ use lumen_link::{EnrollReply, EnrollRequest, Offer};
 
 use super::authorized::{self, PhoneKey};
 use super::sys::{self, Interface};
-use super::{runtime_dir, this_lumen, usage_error};
+use super::{runtime_dir, this_lumen, unknown_arg, usage_error};
 
 /// How long `lumen pair` waits for a phone, and how long its key is good for.
 const PAIRING_TIME: Duration = Duration::from_secs(10 * 60);
@@ -86,7 +86,7 @@ fn parse_pair_args(args: &[String]) -> Result<PairArgs, i32> {
             "--authorized-keys" => parsed.keys = Some(value("a file")?.into()),
             "--host-key" => parsed.host_keys.push(value("a file")?.into()),
             "--yes" | "-y" => parsed.yes = true,
-            other => return Err(usage_error(format!("unknown option {other}"))),
+            other => return Err(unknown_arg(other)),
         }
     }
     Ok(parsed)
@@ -751,7 +751,7 @@ fn keys_arg(args: &[String], positional: usize) -> Result<(Vec<String>, Option<P
                 Some(file) => keys = Some(PathBuf::from(file)),
                 None => return Err(usage_error(format!("{arg} wants a file"))),
             },
-            other if other.starts_with("--") => return Err(usage_error(format!("unknown option {other}"))),
+            other if other.starts_with("--") => return Err(unknown_arg(other)),
             other => rest.push(other.to_string()),
         }
     }

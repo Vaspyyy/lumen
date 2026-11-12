@@ -34,7 +34,7 @@ use polling::{Event as Interest, Events as Ready, PollMode, Poller};
 use super::frame::{self, Hello, Kill, Refused};
 use super::replay::replay;
 use super::sys::{self, Winsize};
-use super::{runtime_dir, usage_error};
+use super::{runtime_dir, unknown_arg};
 
 /// How far a client may fall behind before what it hasn't been sent is
 /// thrown away and it gets a fresh picture instead.
@@ -54,7 +54,7 @@ pub fn socket_path(dir: &Path) -> PathBuf {
 
 pub fn keeper(args: &[String]) -> i32 {
     if let Some(arg) = args.first() {
-        return usage_error(format!("unknown option {arg}"));
+        return unknown_arg(arg);
     }
     let dir = match runtime_dir() {
         Ok(dir) => dir,

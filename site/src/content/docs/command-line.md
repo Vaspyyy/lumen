@@ -14,7 +14,7 @@ lumen [options] [-e program [args...]]
 | `-e`, `--command` *program* *[args...]* | Runs this program instead of your shell. Everything after it belongs to the program |
 | `-d`, `--working-directory` *dir* | Starts in this folder |
 | `--config-path` | Prints where the config file is read from, and ends |
-| `-v`, `--version` | Prints the version, and ends |
+| `-V`, `--version` | Prints the version, and ends. `-v` does too, as it did before 0.5.2 |
 | `-h`, `--help` | Prints a short help, and ends |
 
 ## Examples
