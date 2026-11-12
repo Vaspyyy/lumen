@@ -53,9 +53,10 @@ A program can ask for your attention: a build that is through, a long run that e
 lumen passes it on **only when you are not looking**:
 
 - In the tab you are looking at, nothing happens. What the program printed is in front of you.
-- Any other tab gets a dot in lumen's accent color, and the desktop shows a notification with the program's words. A click on the notification goes to the pane it came from.
+- Any other tab gets a dot, and the desktop shows a notification with the program's words. A click on the notification goes to the pane it came from. The dot is in lumen's accent color, unless the tab already has a green or a red one: those stay.
+- The same goes for the tab that is open in a window you have left for another program.
 
-A program that never stops telling is heard on the desktop once every three seconds for each pane.
+A program that never stops telling is not heard forever. Each pane gets a notification on the desktop at most once in three seconds, and five in all until you look at its tab again.
 
 To use it in a script of your own, end it with a line like this one:
 

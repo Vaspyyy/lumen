@@ -79,15 +79,21 @@ pub struct Note {
     pub body: String,
 }
 
+/// The most characters of a notification's title and of its text that are kept.
+pub const TITLE_MOST: usize = 120;
+const BODY_MOST: usize = 400;
+
+/// A program's text as a notification can show it: without control
+/// characters, and not longer than `most` characters.
+pub fn shown(text: &str, most: usize) -> String {
+    let text: String = text.chars().filter(|c| !c.is_control()).collect();
+    text.trim().chars().take(most).collect()
+}
+
 impl Note {
-    /// The texts as they can be shown: without control characters, and not
-    /// longer than a notification holds. None if nothing is left.
+    /// The texts as they can be shown. None if nothing is left of them.
     fn new(title: &str, body: &str) -> Option<Note> {
-        let shown = |text: &str, most: usize| {
-            let text: String = text.chars().filter(|c| !c.is_control()).collect();
-            text.trim().chars().take(most).collect::<String>()
-        };
-        let note = Note { title: shown(title, 120), body: shown(body, 400) };
+        let note = Note { title: shown(title, TITLE_MOST), body: shown(body, BODY_MOST) };
         (!note.title.is_empty() || !note.body.is_empty()).then_some(note)
     }
 }

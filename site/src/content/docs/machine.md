@@ -26,7 +26,7 @@ A tab whose programs are at work says so beside its name:
 | `5.6` | The work of 5.6 CPU cores. Shown from 0.2 on, and lit from 2 on |
 | `4.1G` | 4.1 GB of memory. Shown from 1 GB on |
 
-The numbers are for everything the tab's panes have started: a build with all its compilers, a server with all its workers. Rest the mouse on the tab and it names the heaviest job and the number of processes: `cargo build · 5.6 cores · 4.1 GB`.
+The numbers are for everything the tab's panes have started: a build with all its compilers, a server with all its workers. Rest the mouse on a tab that runs something and it names the heaviest job and the number of processes: `cargo build · 5.6 cores · 4.1 GB`.
 
 So with a few tabs open you see which one the fans are for, without leaving the one you are in.
 
@@ -42,7 +42,11 @@ pulse looks every three seconds, so "up to" is the most that was seen: a short p
 ## What it takes
 
 - pulse on your `PATH`, or in `~/go/bin` or `~/.local/bin`, where lumen looks too.
-- Nothing else. lumen starts one pulse for all its windows, tells it which shells to look at, and stops it when lumen ends. If pulse ends by itself, lumen starts it again.
+- Nothing else. lumen starts one pulse for all its windows, tells it which shells to look at, and stops it when lumen ends.
+
+lumen looks for pulse when it starts. Install pulse later, and it shows in the next lumen you start.
+
+If pulse ends by itself, or says nothing for longer than three of its looks and five seconds, what it last said is taken off the screen. lumen starts it again after 20 seconds. After three starts in a row that led to no reading, it leaves pulse alone.
 
 ## Settings
 

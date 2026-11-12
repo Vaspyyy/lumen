@@ -132,6 +132,10 @@ pub struct Search {
 /// More matches than this are not kept: the newest are.
 const MAX_MATCHES: usize = 5000;
 
+/// How long a pane has had the keyboard, and its window been in front,
+/// before a click on a command for the prompt is taken for one.
+const AWAKE: Duration = Duration::from_millis(300);
+
 /// A file being dragged out of a listing.
 #[derive(Clone)]
 pub struct DraggedFile {
@@ -183,6 +187,10 @@ pub struct TerminalView {
     mouse: Option<Point<Pixels>>,
     modifiers: Modifiers,
     hover: Option<Hover>,
+    /// When the pane last got the keyboard, or its window came to the front.
+    awake: Instant,
+    /// The mouse went down on a link in a pane that was already being worked in.
+    armed: bool,
     /// The path that was last looked up for a link in plain text.
     found: RefCell<Option<Found>>,
     /// Where the marks of the commands on screen are, as of the last frame.
@@ -227,8 +235,16 @@ impl TerminalView {
             }),
             cx.on_focus(&focus, window, |this, _, cx| {
                 this.touch();
+                this.awake = Instant::now();
                 this.report_focus(true, cx);
                 cx.emit(ViewEvent::Focused);
+                cx.notify();
+            }),
+            cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    this.awake = Instant::now();
+                }
+                // a command for the prompt is a link only in the window that is worked in
                 cx.notify();
             }),
             cx.on_blur(&focus, window, |this, _, cx| {
@@ -277,6 +293,8 @@ impl TerminalView {
             mouse: None,
             modifiers: Modifiers::default(),
             hover: None,
+            awake: Instant::now(),
+            armed: false,
             found: RefCell::new(None),
             marks: Rc::default(),
             hovered_mark: None,
@@ -484,6 +502,26 @@ impl TerminalView {
             Target::Copy(path) if !names(&text, &path) => Target::File(path),
             target => target,
         };
+        // A command for the prompt is typed by a plain click. So its link is one only on
+        // its text: a program can't lay it over the empty parts of the screen, where a
+        // click means something else.
+        if matches!(target, Target::Prompt(_)) {
+            let shows = |col: usize| {
+                let cells = &term.grid()[Line(row as i32 - offset)];
+                // the second half of a wide character shows what the first half does
+                let second = cells[Column(col)].flags.contains(Flags::WIDE_CHAR_SPACER) && col > 0;
+                let cell = &cells[Column(if second { col - 1 } else { col })];
+                cell.hyperlink().as_ref() == Some(&link)
+                    && !cell.flags.contains(Flags::HIDDEN)
+                    && cell.fg != cell.bg
+                    && !links::blank(cell.c)
+            };
+            // one space between two words of it is part of it
+            let between = col > 0 && col + 1 < cols && shows(col - 1) && shows(col + 1);
+            if !shows(col) && !between {
+                return None;
+            }
+        }
         Some(Hover { target, segments })
     }
 
@@ -533,29 +571,42 @@ impl TerminalView {
     }
 
     /// The hovered link, if a click would follow it now: a file from a
-    /// listing and a command for the prompt always, anything else with Ctrl
-    /// held. Shift leaves the text to be selected, and a program that uses
-    /// the mouse gets the click.
-    fn live_link(&self, cx: &App) -> Option<&Hover> {
+    /// listing always, a command for the prompt in the pane that is worked
+    /// in (`focused`), anything else with Ctrl held. Shift leaves the text to
+    /// be selected, and a program that uses the mouse gets the click.
+    fn live_link(&self, focused: bool, cx: &App) -> Option<&Hover> {
         let hover = self.hover.as_ref()?;
-        let wanted = matches!(hover.target, Target::Copy(_) | Target::Prompt(_)) || self.modifiers.control;
+        let wanted = match hover.target {
+            Target::Copy(_) => true,
+            Target::Prompt(_) => focused,
+            _ => self.modifiers.control,
+        };
         let free = !self.modifiers.shift && !self.selecting && !self.mode(cx).intersects(TermMode::MOUSE_MODE);
         (wanted && free).then_some(hover)
     }
 
     /// A click on the hovered link: a listed file is copied, or opened with
-    /// Ctrl held; everything else is opened.
-    fn follow(&mut self, open: bool, cx: &mut Context<Self>) {
+    /// Ctrl held; a command is put at the prompt; everything else is opened.
+    fn follow(&mut self, click: &ClickEvent, cx: &mut Context<Self>) {
+        let armed = std::mem::take(&mut self.armed);
         let Some(hover) = self.hover.clone() else {
             return;
         };
-        match (&hover.target, open) {
+        match (&hover.target, click.modifiers().control) {
             (Target::Copy(path), false) => self.copy_file(path, cx),
             (Target::Copy(path) | Target::File(path), _) => cx.open_with_system(path),
             (Target::Place { path, line, column }, _) => {
                 cx.emit(ViewEvent::Edit { path: path.clone(), line: *line, column: *column })
             },
-            (Target::Prompt(text), _) => self.put_at_prompt(text, cx),
+            (Target::Prompt(text), _) => {
+                // Typed once, however often the mouse is clicked. Not by the click that
+                // brought the pane or the window to the front, and only if the link is
+                // still what the mouse is on: the screen may have moved under it.
+                let still = || self.link_under_mouse(cx).is_some_and(|now| now.target == hover.target);
+                if armed && click.click_count() <= 1 && still() {
+                    self.put_at_prompt(text, cx);
+                }
+            },
             (Target::Url(url), _) => cx.open_url(url),
         }
     }
@@ -725,33 +776,60 @@ impl TerminalView {
     }
 
     /// What a click on a link for the prompt would type: the link's text
-    /// need not say it.
+    /// need not say it. All of it is shown, over as many lines as it takes.
     fn render_prompt_hint(&self, hover: &Hover, geometry: Geometry, cx: &App) -> Option<impl IntoElement + use<>> {
         let Target::Prompt(text) = &hover.target else {
             return None;
         };
         let &(row, col, len) = hover.segments.first()?;
-        const HEIGHT: f32 = 26.;
-        const MOST: usize = 72;
-        let shown = match text.char_indices().nth(MOST) {
-            Some((at, _)) => format!("{}…", &text[..at]),
-            None => text.clone(),
-        };
+        const NOTE: &str = "click puts it at the prompt";
+        const EDGE: Pixels = px(8.);
+        const LINE: f32 = 18.;
+        let config = cx.global::<Config>();
+        let pane = geometry.bounds.size;
         let left = geometry.origin.x + geometry.cell.width * col as f32 - geometry.bounds.origin.x;
         let line = geometry.origin.y + geometry.cell.height * row as f32 - geometry.bounds.origin.y;
-        // above the link, or below it where there is no room above
-        let above = line - px(HEIGHT + 4.);
-        let top = if above >= px(0.) { above } else { line + geometry.cell.height + px(4.) };
-        let hint = chip(cx.global::<Config>())
-            .top(top)
-            .h(px(HEIGHT))
-            .child(div().font_family(cx.global::<Config>().font.family.clone()).child(SharedString::from(shown)))
-            .child(div().text_color(gpui::white().opacity(0.45)).child("click puts it at the prompt"));
-        // a link at the right edge has its note end where the link ends
-        Some(if col * 2 > geometry.cols {
-            hint.right(geometry.bounds.size.width - left - geometry.cell.width * len as f32)
+        let end = left + geometry.cell.width * len as f32;
+        // About how wide the note is on one line: its letters are as wide as they are
+        // in the widest of the fonts it may be set in.
+        let letters = |count: usize| px(count as f32 * 7.8);
+        let (command, note) = (letters(text.chars().count()), letters(NOTE.len()));
+        let one_line = command + note + px(30.);
+        let widest = (pane.width - EDGE * 2.).max(px(120.));
+        let command_shown = div().font_family(config.font.family.clone()).child(SharedString::from(text.clone()));
+        let note_shown = div().text_color(gpui::white().opacity(0.45)).child(NOTE);
+        let (hint, height) = if one_line <= widest {
+            let hint = chip(config).h(px(26.)).child(command_shown).child(note_shown);
+            // it begins where the link does, or ends where it ends, or else lies as far left as it must
+            let hint = if left + one_line <= pane.width - EDGE {
+                hint.left(left)
+            } else if end - one_line >= EDGE {
+                hint.right(pane.width - end)
+            } else {
+                hint.left(EDGE)
+            };
+            (hint, px(26.))
         } else {
-            hint.left(left)
+            // the text takes the pane's width and the lines it needs, the note stands under it
+            let lines = (command / (widest - px(22.))).ceil().max(1.) + 1.;
+            let hint = chip(config)
+                .flex_col()
+                .items_start()
+                .gap(px(2.))
+                .py(px(5.))
+                .left(EDGE)
+                .w(widest)
+                .line_height(px(LINE))
+                .child(command_shown.w_full())
+                .child(note_shown);
+            (hint, px(lines * LINE + 12.))
+        };
+        // above the link, or below it where there is more room
+        let (above, below) = (line - px(4.), pane.height - line - geometry.cell.height - px(4.));
+        Some(if above >= height || above >= below {
+            hint.bottom(pane.height - above)
+        } else {
+            hint.top(line + geometry.cell.height + px(4.))
         })
     }
 
@@ -1059,14 +1137,16 @@ impl TerminalView {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, window, cx| {
+                            // a pane or a window that only just came to the front was clicked
+                            // on to get there, whatever was under the mouse
+                            let here = this.focus.is_focused(window) && (window.is_window_active() || crate::preview());
+                            this.armed = here && this.awake.elapsed() >= AWAKE;
                             // the click is the link's: no selection starts under it
                             window.focus(&this.focus, cx);
                             cx.stop_propagation();
                         }),
                     )
-                    .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
-                        this.follow(event.modifiers().control, cx);
-                    }));
+                    .on_click(cx.listener(|this, event: &ClickEvent, _, cx| this.follow(event, cx)));
                 match &file {
                     Some(file) => {
                         let name = file.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -1184,7 +1264,7 @@ fn find<T>(term: &Term<T>, query: &str) -> Vec<Match> {
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.focus.is_focused(window) && (window.is_window_active() || crate::preview());
-        let link = self.live_link(cx).cloned();
+        let link = self.live_link(focused, cx).cloned();
         let spots = match (&link, self.geometry.get()) {
             (Some(hover), Some(geometry)) => self.render_link(hover, geometry, cx),
             _ => Vec::new(),

@@ -81,9 +81,10 @@ A program can print a link that stands for a command: the next thing you may wan
 
 **A click puts the command at your prompt. It does not run it.** You see it, you can change it, and `Enter` is yours. A link is something a program printed, and lumen does not let a program run things by being clicked.
 
-- With the mouse on such a link, lumen shows what the click would type. The link's text need not be the command.
+- With the mouse on such a link, lumen shows what the click would type, all of it. The link's text need not be the command.
+- It works in the pane you are typing in. In another pane, or in a window you have left, the first click only takes you there.
 - Where a program is running in the pane, nothing is typed, and lumen says so: the text would go to that program. lumen knows this when [your shell marks its commands](/docs/commands/), and for a full-screen program always.
-- A command with a line break or any other control character in it is not a link at all.
+- A program can't hide such a link. It takes a click only on text you can see, and a command is not a link at all if it is longer than 300 characters, or has a line break, a control character or anything unseen in it.
 
 ## Your editor
 

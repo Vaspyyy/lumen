@@ -208,6 +208,31 @@ fn tag_of(pane: EntityId) -> String {
 
 /// A pane that is forever telling is heard this often on the desktop.
 const NOTE_GAP: Duration = Duration::from_secs(3);
+/// And this many times, until its tab is looked at again. Each notification
+/// on the desktop is held open until it goes away there.
+const NOTE_MOST: u32 = 5;
+
+/// When a pane last had a notification on the desktop, and how many it had
+/// since its tab was last looked at.
+#[derive(Clone, Copy)]
+struct Noted {
+    last: Instant,
+    count: u32,
+}
+
+impl Noted {
+    /// Whether the pane may have another one at `now`.
+    fn allows(&self, now: Instant) -> bool {
+        self.count < NOTE_MOST && now.duration_since(self.last) >= NOTE_GAP
+    }
+}
+
+/// A notification's text as the desktop is given it. The desktop reads a
+/// few tags in it, and a program's text is not written in them: `a < b`
+/// is shown as it stands.
+fn as_body(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
 
 struct Tab {
     id: usize,
@@ -260,8 +285,8 @@ pub struct Workspace {
     title: String,
     /// The shells of its panes, as pulse was last told.
     shells: Vec<u32>,
-    /// When each pane last had a notification on the desktop.
-    noted: HashMap<EntityId, Instant>,
+    /// The notifications each pane had on the desktop.
+    noted: HashMap<EntityId, Noted>,
     _observers: Vec<Subscription>,
 }
 
@@ -304,8 +329,11 @@ impl Workspace {
                 cx.observe_global_in::<Config>(window, Self::config_changed),
                 // back at the window, what its tab had to tell has been seen
                 cx.observe_window_activation(window, |this, window, cx| {
-                    if window.is_window_active()
-                        && let Some(tab) = this.tabs.get_mut(this.active)
+                    if !window.is_window_active() {
+                        return;
+                    }
+                    this.looked_at(this.active);
+                    if let Some(tab) = this.tabs.get_mut(this.active)
                         && tab.news.take().is_some()
                     {
                         cx.notify();
@@ -446,18 +474,36 @@ impl Workspace {
             return;
         }
         let (id, now) = (pane.entity_id(), Instant::now());
-        if self.noted.get(&id).is_some_and(|last| now.duration_since(*last) < NOTE_GAP) {
+        let had = self.noted.get(&id).copied();
+        if had.is_some_and(|had| !had.allows(now)) {
             return;
         }
-        self.noted.insert(id, now);
-        // a text without a title is about what the tab is called
-        let title = if note.title.is_empty() { pane.read(cx).terminal.read(cx).title() } else { note.title.clone() };
+        self.noted.insert(id, Noted { last: now, count: had.map_or(0, |had| had.count) + 1 });
+        // A text without a title is about what the pane is called: a name the program
+        // in it chose, so it is cleaned like the program's own title.
+        let title = if note.title.is_empty() {
+            crate::commands::shown(&pane.read(cx).terminal.read(cx).title(), crate::commands::TITLE_MOST)
+        } else {
+            note.title.clone()
+        };
         cx.show_system_notification(SystemNotification {
             tag: tag_of(id).into(),
             title: title.into(),
-            body: note.body.clone().into(),
+            body: as_body(&note.body).into(),
             actions: Vec::new(),
         });
+    }
+
+    /// A tab is looked at: its panes may tell the desktop again.
+    fn looked_at(&mut self, index: usize) {
+        let Some(tab) = self.tabs.get(index) else {
+            return;
+        };
+        let mut panes = Vec::new();
+        tab.root.panes(&mut panes);
+        for pane in panes {
+            self.noted.remove(&pane.entity_id());
+        }
     }
 
     /// Brings the pane a notification was about to the front. False if it
@@ -543,6 +589,7 @@ impl Workspace {
         }
         self.active = index;
         self.tabs[index].news = None;
+        self.looked_at(index);
         let focus = self.tabs[index].active.focus_handle(cx);
         window.focus(&focus, cx);
         cx.notify();
@@ -953,7 +1000,7 @@ impl Workspace {
                 .when(memory >= 1., |this| this.child(SharedString::from(format!("{memory:.1}G"))))
         });
         // a shell that runs nothing has nothing to say
-        let tip = usage.filter(|usage| usage.notable() || usage.processes > 1).map(|usage| {
+        let tip = usage.filter(|usage| usage.notable() || usage.job.is_some()).map(|usage| {
             let mut lines = vec![SharedString::from(usage.describe())];
             if usage.processes > 1 {
                 lines.push(format!("{} processes", usage.processes).into());
@@ -1401,5 +1448,33 @@ impl Render for Workspace {
             .pr(margin(!t.right))
             .child(surface)
             .children(resize_handles(frame))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pane_is_heard_so_often_and_no_more() {
+        let start = Instant::now();
+        let noted = Noted { last: start, count: 1 };
+        assert!(!noted.allows(start + Duration::from_secs(1)));
+        assert!(noted.allows(start + NOTE_GAP));
+        // and then not at all, until its tab is looked at
+        let noted = Noted { last: start, count: NOTE_MOST };
+        assert!(!noted.allows(start + Duration::from_secs(3600)));
+        assert!(Noted { last: start, count: NOTE_MOST - 1 }.allows(start + NOTE_GAP));
+    }
+
+    #[test]
+    fn a_notification_shows_its_text_as_it_stands() {
+        assert_eq!(as_body("done in 12 s"), "done in 12 s");
+        assert_eq!(as_body("a < b && b > c"), "a &lt; b &amp;&amp; b &gt; c");
+        assert_eq!(
+            as_body("<a href=\"https://example.com\">here</a>"),
+            "&lt;a href=\"https://example.com\"&gt;here&lt;/a&gt;"
+        );
+        assert_eq!(as_body("&lt;"), "&amp;lt;");
     }
 }

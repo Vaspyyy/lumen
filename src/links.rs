@@ -62,17 +62,49 @@ pub fn target(uri: &str) -> Option<Target> {
 /// printed, and that is not trusted the way typing is. A line break in it
 /// would run what stands before it, and a control character is a key
 /// pressed for the user.
+///
+/// What a click would type is shown before the click, all of it. So it is
+/// short enough to be read, and has nothing in it that is not seen: the
+/// only space is the plain one.
 fn prompt_text(rest: &str) -> Option<String> {
     let text = String::from_utf8(percent_decode(rest)?).ok()?;
-    let plain = text.chars().all(|c| !c.is_control() && !unseen(c));
-    (plain && !text.trim().is_empty() && text.chars().count() <= 2000).then_some(text)
+    let plain = text.chars().all(|c| c == ' ' || !blank(c));
+    (plain && !text.trim().is_empty() && text.chars().count() <= PROMPT_MOST).then_some(text)
 }
 
-/// Characters that are not seen and change how the text around them reads:
-/// the separators of lines and paragraphs, and those that turn the direction
-/// of writing, which can make a command look like another one.
+/// The longest command a link may put at the prompt, in characters.
+pub const PROMPT_MOST: usize = 300;
+
+/// A character that shows nothing where it stands: a space of any kind, a
+/// control character, or one of those in [`unseen`].
+pub fn blank(c: char) -> bool {
+    c.is_whitespace() || c.is_control() || unseen(c)
+}
+
+/// Characters that are not seen, though they are not spaces: those that
+/// turn the direction of writing, which can make a command look like
+/// another one, and those that join, split or mark the text around them
+/// without a shape of their own, which can hide that two commands differ.
 fn unseen(c: char) -> bool {
-    matches!(c, '\u{2028}' | '\u{2029}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+    matches!(
+        c,
+        '\u{00ad}' // a hyphen that shows only at a line's end
+        | '\u{034f}'
+        | '\u{061c}' // marks the direction of writing
+        | '\u{115f}' | '\u{1160}' | '\u{3164}' | '\u{ffa0}' // fillers: letters without a shape
+        | '\u{17b4}' | '\u{17b5}'
+        | '\u{180b}'..='\u{180f}'
+        | '\u{200b}'..='\u{200f}' // spaces without width, joiners, marks of direction
+        | '\u{2028}'..='\u{202e}' // ends of lines and paragraphs, turns of direction
+        | '\u{2060}'..='\u{206f}' // joiners, operators that are not shown, turns of direction
+        | '\u{2800}' // a braille pattern with no dot
+        | '\u{fe00}'..='\u{fe0f}' // choose between forms of the character before
+        | '\u{feff}'
+        | '\u{fff9}'..='\u{fffb}'
+        | '\u{1bca0}'..='\u{1bca3}'
+        | '\u{1d173}'..='\u{1d17a}'
+        | '\u{e0000}'..='\u{e0fff}' // tags, and more that choose between forms
+    )
 }
 
 /// What plain text names at its character `at`: a web address, or a file
@@ -367,6 +399,20 @@ mod tests {
             // a line that reads the other way round
             "lumen-prompt:a%E2%80%AEb",
             "lumen-prompt:a%E2%80%A8b",
+            "lumen-prompt:a%D8%9Cb",
+            // what is there and is not seen: a soft hyphen, a space without width, a
+            // joiner, a word joiner, a byte order mark, a filler, a tag
+            "lumen-prompt:a%C2%ADb",
+            "lumen-prompt:a%E2%80%8Bb",
+            "lumen-prompt:a%E2%80%8Db",
+            "lumen-prompt:a%E2%81%A0b",
+            "lumen-prompt:a%EF%BB%BFb",
+            "lumen-prompt:a%E3%85%A4b",
+            "lumen-prompt:a%F3%A0%80%A1b",
+            // a space that is not the plain one
+            "lumen-prompt:a%C2%A0b",
+            "lumen-prompt:a%E2%80%83b",
+            "lumen-prompt:a%E3%80%80b",
             // nothing, and not text
             "lumen-prompt:",
             "lumen-prompt:%20%20",
@@ -375,8 +421,23 @@ mod tests {
         ] {
             assert_eq!(target(uri), None, "{uri}");
         }
-        assert_eq!(prompt(&format!("lumen-prompt:{}", "a".repeat(2000))).map(|text| text.len()), Some(2000));
-        assert_eq!(target(&format!("lumen-prompt:{}", "a".repeat(2001))), None);
+        // as long as can be read before the click, and no longer
+        assert_eq!(prompt(&format!("lumen-prompt:{}", "a".repeat(300))).map(|text| text.len()), Some(300));
+        assert_eq!(
+            prompt(&format!("lumen-prompt:{}", "%C3%BC".repeat(300))).map(|text| text.chars().count()),
+            Some(300)
+        );
+        assert_eq!(target(&format!("lumen-prompt:{}", "a".repeat(301))), None);
+    }
+
+    #[test]
+    fn what_shows_nothing_where_it_stands() {
+        for c in [' ', '\t', '\u{a0}', '\u{3000}', '\u{200b}', '\u{2800}', '\u{3164}', '\u{feff}', '\u{7}'] {
+            assert!(blank(c), "{c:?}");
+        }
+        for c in ['a', '-', '_', '.', 'ü', '字', '█', '⠁'] {
+            assert!(!blank(c), "{c:?}");
+        }
     }
 
     #[test]

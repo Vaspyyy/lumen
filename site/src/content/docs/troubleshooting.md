@@ -67,7 +67,8 @@ The light and the numbers on tabs come from [pulse](/docs/machine/), which is no
 
 - lumen has to find it: on the `PATH` lumen was started with, or in `~/go/bin` or `~/.local/bin`.
 - `enabled` in the `[pulse]` table of the config must not be `false`.
-- A pulse that is too old to know `pulse watch` is started and ends at once. lumen tries three times and then leaves it alone until it is started again.
+- lumen looks for pulse when it starts. A pulse installed since then shows in the next lumen you start.
+- A pulse that is too old to know `pulse watch` is started and ends at once. lumen tries three times, 20 seconds apart, and then leaves it alone until lumen is started again or the `[pulse]` table changes.
 
 ## `glint --thumbs` draws blocks, not pictures
 

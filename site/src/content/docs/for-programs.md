@@ -99,12 +99,13 @@ ESC ] 9 ; TEXT ESC \
 
 Either may end in `BEL` instead. These are the sequences other terminals show as a desktop notification.
 
-lumen shows one only when the tab is not the one being looked at: the tab gets a dot, and the desktop a notification that leads back to the pane. In the tab that is looked at, nothing happens, so say what you have to say in your output as well.
+lumen shows one only when the tab is not being looked at, because another tab is open or the window is in the background: the tab gets a dot, and the desktop a notification that leads back to the pane. In the tab that is looked at, nothing happens, so say what you have to say in your output as well.
 
 - The title is cut at 120 characters and the text at 400. Control characters are left out.
-- With OSC 9 the title is the tab's.
-- An OSC 9 whose text begins with a number and a semicolon is one of ConEmu's sequences, such as a progress bar, and is ignored.
-- One pane is heard on the desktop once in three seconds.
+- The text is shown as it stands. `<`, `>` and `&` are not read as the desktop's markup.
+- With OSC 9 the title is the pane's own: the one a program set, or else the name of the folder the shell is in.
+- An OSC 9 is ignored when its first field is empty or a number. The first field is the text up to the first semicolon, or all of it. Those are ConEmu's sequences, such as a progress bar. So a text that is only a number is not shown.
+- One pane is heard on the desktop at most once in three seconds, and five times until its tab is looked at again.
 
 ## Links that put a command at the prompt
 
@@ -116,7 +117,10 @@ lumen-prompt:COMMAND
 
 `COMMAND` is the command's text, percent-encoded: `lumen-prompt:pulse%20tree%204821.kfx`. A click on the link types the text at the shell's prompt and does not run it.
 
-- The text is one line of at most 2000 characters, without control characters and without characters that turn the direction of writing. A link with anything else in it is not followed.
+- The text is one line of at most 300 characters. lumen shows all of it before the click, so nothing in it may be unseen: no control character, no space other than the plain one, and none of the characters without a shape of their own, such as those that turn the direction of writing, spaces without width and joiners. A link with anything else in it is not followed.
+- It is a link where its text is. On an empty cell, on hidden text, and on text in the color of its background, a click is not for the link. One space between two characters of it counts as text.
+- It is a link only in the pane that has the keyboard, in the window in front. A click that brings a pane or a window to the front types nothing, and a double click types once.
+- Where lumen knows that a program runs in the pane, nothing is typed.
 - Other terminals don't know the scheme and hand it to the desktop, which has nothing for it. Print these links only where `TERM_PROGRAM` is `lumen`.
 
 ## Places in code

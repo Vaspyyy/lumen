@@ -9,11 +9,12 @@
 //! Without pulse none of this is shown, and nothing else is missing.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use futures::channel::mpsc::unbounded;
@@ -144,12 +145,16 @@ pub fn bytes(bytes: u64) -> String {
 /// with), or where `go install` and install scripts put a program. A lumen
 /// started from the desktop's menu may not have been told of those folders,
 /// though every shell in it has.
+///
+/// A folder that is not named from the root is passed over: an empty entry
+/// in `PATH` means the folder lumen happens to be started in, and a file
+/// called pulse there is not the user's program.
 fn find(path: Option<&std::ffi::OsStr>, home: Option<&Path>) -> Option<PathBuf> {
     let named: Vec<PathBuf> = path.map(|path| std::env::split_paths(path).collect()).unwrap_or_default();
     let usual = home.into_iter().flat_map(|home| [home.join("go/bin"), home.join(".local/bin")]);
-    named.into_iter().chain(usual).map(|folder| folder.join("pulse")).find(|program| {
-        std::fs::metadata(program).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-    })
+    named.into_iter().chain(usual).filter(|folder| folder.is_absolute()).map(|folder| folder.join("pulse")).find(
+        |program| std::fs::metadata(program).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0),
+    )
 }
 
 /// The line that tells pulse which processes to report on from now on.
@@ -163,11 +168,51 @@ fn asking(pids: &[u32]) -> String {
     line
 }
 
+/// The longest line that is read. A reading is a few thousand bytes: what
+/// goes on and on without a line's end is not pulse, and is not kept.
+const LONGEST: u64 = 1 << 20;
+
+/// The next line of `output`, without its end. None when there is no more,
+/// and `Some(None)` for a line longer than `longest` bytes.
+fn next_line(output: &mut impl BufRead, longest: u64) -> Option<Option<String>> {
+    let mut line = Vec::new();
+    let read = output.by_ref().take(longest).read_until(b'\n', &mut line).ok()?;
+    if read == 0 {
+        return None;
+    }
+    if line.last() != Some(&b'\n') && read as u64 >= longest {
+        return Some(None);
+    }
+    Some(Some(String::from_utf8_lossy(&line).trim_end_matches(['\n', '\r']).to_string()))
+}
+
+/// Makes writing to pulse's input fail where it would wait. A pulse that
+/// has stopped reading must not stop lumen with it.
+fn never_wait(input: &ChildStdin) {
+    let fd = input.as_raw_fd();
+    // SAFETY: `fd` is open for as long as `input` is borrowed, and these calls only change its flags.
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags >= 0 {
+            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+    }
+}
+
+/// How long pulse may say nothing before it is taken for stuck, where it
+/// is asked for a reading every `every` seconds.
+fn patience(every: u32) -> Duration {
+    Duration::from_secs(u64::from(every) * 3 + 5)
+}
+
 /// A pulse that is running, and its input.
 struct Watch {
     child: Child,
     input: ChildStdin,
+    /// When it last said something, or was started.
+    heard: Instant,
     _lines: Task<()>,
+    _stuck: Task<()>,
 }
 
 impl Drop for Watch {
@@ -263,8 +308,11 @@ impl Monitor {
             return;
         }
         if let Some(watch) = &mut self.watch {
-            // if pulse has ended, its output ending says so
-            let _ = watch.input.write_all(asking(&pids).as_bytes()).and_then(|()| watch.input.flush());
+            // What can't be written now is asked again with the next reading. If pulse
+            // has ended, its output ending says so; if it is stuck, its silence does.
+            if watch.input.write_all(asking(&pids).as_bytes()).and_then(|()| watch.input.flush()).is_err() {
+                return;
+            }
         }
         self.asked = pids;
     }
@@ -308,32 +356,59 @@ impl Monitor {
             return;
         };
         let (Some(mut input), Some(output)) = (child.stdin.take(), child.stdout.take()) else {
+            let _ = child.kill();
+            let _ = child.wait();
             return;
         };
+        never_wait(&input);
         let _ = input.write_all(asking(&self.asked).as_bytes()).and_then(|()| input.flush());
         let (tx, mut rx) = unbounded();
         std::thread::spawn(move || {
-            for line in BufReader::new(output).lines() {
-                let Ok(line) = line else { break };
-                if tx.unbounded_send(line).is_err() {
+            let mut output = BufReader::new(output);
+            while let Some(line) = next_line(&mut output, LONGEST) {
+                // after a line that is too long, nothing more is read
+                if tx.unbounded_send(line.clone()).is_err() || line.is_none() {
                     break;
                 }
             }
         });
         let lines = cx.spawn(async move |this, cx| {
             while let Some(line) = rx.next().await {
-                if this.update(cx, |this, cx| this.take(&line, cx)).is_err() {
+                if this.update(cx, |this, cx| this.take(line.as_deref(), cx)).is_err() {
                     return;
                 }
             }
             let _ = this.update(cx, |this, cx| this.ended(cx));
         });
-        self.watch = Some(Watch { child, input, _lines: lines });
+        // A pulse that is still there and says nothing would leave its last reading on
+        // show for good: its silence ends it like its output ending does.
+        let patience = patience(every);
+        let stuck = cx.spawn(async move |this, cx| {
+            let mut wait = patience;
+            loop {
+                cx.background_executor().timer(wait).await;
+                let left = this
+                    .update(cx, |this, _| this.watch.as_ref().map(|watch| patience.checked_sub(watch.heard.elapsed())));
+                match left {
+                    Ok(Some(Some(left))) => wait = left.max(Duration::from_millis(100)),
+                    Ok(Some(None)) => {
+                        let _ = this.update(cx, |this, cx| this.ended(cx));
+                        return;
+                    },
+                    _ => return,
+                }
+            }
+        });
+        self.watch = Some(Watch { child, input, heard: Instant::now(), _lines: lines, _stuck: stuck });
     }
 
-    /// A line pulse printed.
-    fn take(&mut self, line: &str, cx: &mut Context<Self>) {
-        let Some(reading) = Reading::parse(line) else {
+    /// A line pulse printed, or None for one that was too long to read.
+    fn take(&mut self, line: Option<&str>, cx: &mut Context<Self>) {
+        // a line that was on its way when pulse was let go says nothing any more
+        let Some(watch) = &mut self.watch else {
+            return;
+        };
+        let Some(reading) = line.and_then(Reading::parse) else {
             // not the pulse lumen knows: it is not asked again
             self.failed = TRIES;
             self.watch = None;
@@ -342,13 +417,16 @@ impl Monitor {
             cx.notify();
             return;
         };
+        watch.heard = Instant::now();
         self.failed = 0;
         self.uses = reading.pids.iter().map(|found| (found.pid, found.clone())).collect();
         self.reading = Some(reading);
+        // what could not be written when the panes changed
+        self.ask();
         cx.notify();
     }
 
-    /// pulse's output ended: it is gone.
+    /// pulse's output ended, or it has said nothing for too long: it is let go.
     fn ended(&mut self, cx: &mut Context<Self>) {
         if self.watch.take().is_none() {
             return;
@@ -451,6 +529,50 @@ mod tests {
         assert_eq!(find(Some(&path), Some(&home)), Some(bin.join("pulse")));
         assert_eq!(find(None, None), None);
         std::fs::remove_dir_all(&scratch).unwrap();
+    }
+
+    #[test]
+    fn a_folder_that_is_not_named_from_the_root_is_passed_over() {
+        // An empty entry in PATH and `.` mean the folder lumen was started in. The
+        // same folder, named from here and from the root:
+        let scratch = std::env::temp_dir().join(format!("lumen-pulse-here-{}", std::process::id()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::write(scratch.join("pulse"), "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(scratch.join("pulse"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let up: PathBuf = std::env::current_dir().unwrap().components().skip(1).map(|_| "..").collect();
+        let from_here = up.join(scratch.strip_prefix("/").unwrap());
+        let there = from_here.join("pulse").is_file();
+        let found = (
+            find(Some(from_here.as_os_str()), Some(&from_here)),
+            find(Some(std::ffi::OsStr::new("")), None),
+            find(Some(scratch.as_os_str()), None),
+        );
+        std::fs::remove_dir_all(&scratch).unwrap();
+        assert!(there);
+        assert_eq!(found, (None, None, Some(scratch.join("pulse"))));
+    }
+
+    #[test]
+    fn a_line_without_end_is_not_read() {
+        let mut output = std::io::Cursor::new(b"one\r\ntwo\n\nlast".to_vec());
+        assert_eq!(next_line(&mut output, 16), Some(Some("one".to_string())));
+        assert_eq!(next_line(&mut output, 16), Some(Some("two".to_string())));
+        assert_eq!(next_line(&mut output, 16), Some(Some(String::new())));
+        assert_eq!(next_line(&mut output, 16), Some(Some("last".to_string())));
+        assert_eq!(next_line(&mut output, 16), None);
+        // as long as allowed is read, longer is not
+        let mut output = std::io::Cursor::new(b"0123456789abcde\n0123456789abcdef\nmore\n".to_vec());
+        assert_eq!(next_line(&mut output, 16), Some(Some("0123456789abcde".to_string())));
+        assert_eq!(next_line(&mut output, 16), Some(None));
+        let mut endless = std::io::repeat(b'x').take(1 << 30);
+        assert_eq!(next_line(&mut BufReader::new(&mut endless), LONGEST), Some(None));
+        assert!(endless.limit() > (1 << 30) - 2 * LONGEST);
+    }
+
+    #[test]
+    fn a_silent_pulse_is_given_time() {
+        assert_eq!(patience(3), Duration::from_secs(14));
+        assert_eq!(patience(60), Duration::from_secs(185));
     }
 
     #[test]
