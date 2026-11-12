@@ -389,12 +389,16 @@ pub struct Log {
     /// How many bytes were written to the terminal since the prompt that is
     /// open began, or was last written again. An earlier copy of it is no
     /// more lines up than that: a line takes a byte at least. An image counts
-    /// for as many bytes as it can have rows, and lines that were made
-    /// narrower for as many as they can have become.
+    /// for as many bytes as it can have rows.
     written: usize,
     /// The same since the end of the prompt was last told: what stands typed
     /// above that end is no older.
     typed: usize,
+    /// The most cells a line had and the most lines the screen had before
+    /// the terminal last changed its size, since the prompt that is open
+    /// began. Nothing, where it has kept its size.
+    widest: usize,
+    tallest: usize,
     /// The command that ran when it did. How it ended may still be said.
     over: Option<u32>,
     /// The shell's process, whose folder a command starts in.
@@ -454,16 +458,25 @@ impl Log {
         self.typed = self.typed.saturating_add(bytes);
     }
 
-    /// The terminal's lines were `old` cells long and are `new` now, which is
-    /// less, on a screen of `screen` lines. A line that is too long for that
-    /// takes several rows now, so what stood some rows above the cursor can
-    /// stand that many times as far up. A wide character that doesn't fit at
-    /// the end of a row leaves a cell empty there.
-    fn narrowed(&mut self, old: usize, new: usize, screen: usize) {
-        let rows = old.div_ceil(new.saturating_sub(1).max(1));
-        for count in [&mut self.written, &mut self.typed] {
-            *count = count.saturating_add(2 * screen).saturating_mul(rows);
-        }
+    /// The terminal had lines of `columns` cells on a screen of `screen`
+    /// lines, and is given another size.
+    fn resized(&mut self, columns: usize, screen: usize) {
+        self.widest = self.widest.max(columns);
+        self.tallest = self.tallest.max(screen);
+    }
+
+    /// How many lines above the cursor's something can stand at most that
+    /// was on the screen when `bytes` were still to be written: a line for
+    /// each byte, the cursor's own, and two screens for a screen that was
+    /// cleared in between and for where on it the cursor stood. On lines
+    /// that were longer once, each of those can have become several rows: a
+    /// wide character that doesn't fit at the end of a row leaves a cell
+    /// empty there.
+    fn reach<L>(&self, term: &Term<L>, bytes: usize) -> usize {
+        let lines = bytes.saturating_add(2 * self.tallest.max(term.screen_lines()) + 1);
+        let columns = term.columns();
+        let rows = if self.widest > columns { self.widest.div_ceil(columns.saturating_sub(1).max(1)) } else { 1 };
+        lines.saturating_mul(rows)
     }
 
     fn open(&mut self) -> u32 {
@@ -567,13 +580,14 @@ impl Log {
                 let id = match self.current {
                     Some(id) if again => {
                         // what is left of it further up is an earlier copy, and no command
-                        forget_above(term, line, id, None, self.written);
+                        let reach = self.reach(term, self.written);
+                        forget_above(term, line, id, None, reach);
                         id
                     },
                     _ => self.open(),
                 };
-                self.written = 0;
-                self.typed = 0;
+                (self.written, self.typed) = (0, 0);
+                (self.widest, self.tallest) = (0, 0);
                 self.phase = Phase::Prompt;
                 remark(term, &before, Some(id));
                 tag(term, Some((id, Part::Prompt)));
@@ -605,7 +619,9 @@ impl Log {
                         // so there is left of an earlier copy, on lines the terminal has
                         // wrapped anew.
                         let line = term.grid().cursor.point.line;
-                        forget_above(term, line, id, Some(Part::Input), std::mem::take(&mut self.typed));
+                        let typed = std::mem::take(&mut self.typed);
+                        let reach = self.reach(term, typed);
+                        forget_above(term, line, id, Some(Part::Input), reach);
                     }
                     tag(term, Some((id, Part::Input)));
                 }
@@ -653,14 +669,12 @@ impl Log {
     }
 }
 
-/// Gives the terminal another size. Narrower lines are more lines: the log
-/// is told, so that what is left of a prompt is still found above it.
+/// Gives the terminal another size. Narrower lines are more lines, and a
+/// smaller screen has kept more of them above it: the log is told what the
+/// size was, so that what is left of a prompt is still found above it.
 pub fn resize<L: EventListener, S: Dimensions>(log: &Shared, term: &mut Term<L>, size: S) {
-    let (columns, screen) = (term.columns(), term.screen_lines());
+    log.lock().unwrap().resized(term.columns(), term.screen_lines());
     term.resize(size);
-    if term.columns() < columns {
-        log.lock().unwrap().narrowed(columns, term.columns(), screen);
-    }
 }
 
 /// Parses `bytes` into the grid, and takes on the marks among them where
@@ -771,12 +785,11 @@ fn marks_on<L>(term: &Term<L>, line: Line) -> impl Iterator<Item = (u32, Part)> 
 /// program has printed with links of its own, or where the shell left lines
 /// empty. They don't end the search. A line of another command does: the
 /// command is older, and nothing of this one stands above it. Without one,
-/// the search goes as far up as `written` bytes can have moved a line, and
-/// two screens further for a screen that was cleared in between. (A program
-/// that scrolls the screen again and again while a prompt is open can move
-/// a copy further than that. Shells don't.)
-fn forget_above<L>(term: &mut Term<L>, line: Line, id: u32, part: Option<Part>, written: usize) {
-    let reach = written.saturating_add(2 * term.screen_lines());
+/// the search goes `reach` lines up: as far as a copy can have been moved
+/// by what was written since. (A program that scrolls the screen again and
+/// again while a prompt is open can move a copy further than that. Shells
+/// don't.)
+fn forget_above<L>(term: &mut Term<L>, line: Line, id: u32, part: Option<Part>, reach: usize) {
     let reach = i32::try_from(reach).unwrap_or(i32::MAX);
     let top = term.topmost_line().max(Line(line.0.saturating_sub(reach)));
     let columns = term.columns();
@@ -1269,8 +1282,8 @@ mod tests {
         let mut screen = Screen::new();
         let prompt = "\x1b]133;A\x07$ \x1b]133;B\x07";
         screen.print("\x1b]133;L\x07").print(prompt).print("cd fo");
-        // something writes below the prompt, at the right end of each line
-        for _ in 0..60 {
+        // something writes below the prompt, at the right end of each line, and tells of nothing
+        for _ in 0..400 {
             screen.print("\r\n\x1b[28Cx");
         }
         screen.print("\r\n");
@@ -1278,32 +1291,44 @@ mod tests {
         // what is below the cursor and writes its prompt again.
         screen.resize(3).print("\r\x1b[J").print(prompt).print("cd fo");
         let copy = (screen.term.topmost_line().0..0).find(|&line| screen.line(line) == "$ c").unwrap();
-        assert_eq!((copy, owner(&screen.term, Line(copy))), (-598, None));
+        assert_eq!((copy, owner(&screen.term, Line(copy))), (-3998, None));
         assert_eq!(screen.places(), [(0, 5, 7)]);
     }
 
-    /// A shell that writes only the end of its prompt again: what stands typed
-    /// above it is looked for as far up as was written since the last time,
-    /// not since the prompt began.
+    /// How far up what is left of a prompt is looked for.
     #[test]
-    fn the_end_of_a_prompt_written_again_and_again() {
+    fn how_far_up_a_copy_can_stand() {
         let mut screen = Screen::new();
-        screen.print("\x1b]133;L\x07\x1b]133;A\x07~/code\r\r\n$ \x1b]133;B\x07").print("ls");
-        // a job in the background prints much while the prompt is open
-        screen.print(&"x".repeat(5000)).print("\r\n$ \x1b]133;B\x07").print("ls");
+        let reach = |screen: &Screen, bytes| screen.log.lock().unwrap().reach(&screen.term, bytes);
         let counts = |screen: &Screen| {
             let log = screen.log.lock().unwrap();
             (log.written, log.typed)
         };
+        screen.print("\x1b]133;L\x07\x1b]133;A\x07~/code\r\r\n$ \x1b]133;B\x07").print("ls");
+        // two screens of eight lines and the cursor's own, and a line for each byte
+        assert_eq!((reach(&screen, 0), reach(&screen, 100)), (17, 117));
+        // A job in the background prints much while the prompt is open, and the
+        // shell writes the end of its prompt again: what stands typed above it is
+        // looked for as far up as was written since the last time.
+        screen.print(&"x".repeat(5000)).print("\r\n$ \x1b]133;B\x07").print("ls");
         assert_eq!(counts(&screen), (5033, 0));
-        // narrower lines are more rows, and count as if they had been written
+        // Narrower lines are more rows: 30 cells are up to three rows of 15 that
+        // end with a wide character. Again narrower, they count from their longest.
         screen.resize(15);
-        assert_eq!(counts(&screen), ((5033 + 16) * 3, 16 * 3));
-        screen.print("\r\x1b[K$ \x1b]133;B\x07").print("ls");
-        assert_eq!(counts(&screen).1, 0);
-        // a prompt from its beginning starts both anew: its own 19 bytes are all there is
+        assert_eq!(reach(&screen, 100), 117 * 3);
+        screen.resize(11);
+        assert_eq!(reach(&screen, 100), 117 * 3);
+        screen.resize(10);
+        assert_eq!(reach(&screen, 100), 117 * 4);
+        // as wide as they were, they are the rows they were
+        screen.resize(30);
+        assert_eq!(reach(&screen, 100), 117);
+        // a smaller screen has kept the lines of the larger one above it
+        resize(&screen.log, &mut screen.term, TermSize { cols: 30, rows: 4, cell_width: 8., cell_height: 16. });
+        assert_eq!(reach(&screen, 100), 117);
+        // a prompt from its beginning starts all of it anew: its own 19 bytes are all there is
         screen.print("\r\x1b[A\x1b[J\x1b]133;A\x07~/code\r\r\n$ \x1b]133;B\x07");
-        assert_eq!(counts(&screen), (19, 0));
+        assert_eq!((counts(&screen), reach(&screen, 0)), ((19, 0), 9));
     }
 
     /// zsh 5.9 with a prompt at the right, as captured.
