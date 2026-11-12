@@ -716,22 +716,24 @@ fn marks_on<L>(term: &Term<L>, line: Line) -> impl Iterator<Item = (u32, Part)> 
     within.then(|| &term.grid()[line]).into_iter().flatten().filter_map(|cell| cell_of(cell.hyperlink()?.uri()))
 }
 
-/// Marks as left over what is marked for command `id` on the lines right
-/// above `line`: all of it, or only what is marked as this `part`. They are
-/// the lines of an earlier copy of its prompt, with what stood typed at it
-/// and what the shell printed below it (a list of completions).
+/// Marks as left over what is marked for command `id` on the lines above
+/// `line`: all of it, or only what is marked as this `part`. They are the
+/// lines of an earlier copy of its prompt, with what stood typed at it and
+/// what the shell printed below it (a list of completions).
+///
+/// Lines that are marked for no command lie between the copies where a
+/// program has printed with links of its own, or where the shell left lines
+/// empty. They don't end the search: a line of another command does, and
+/// it goes no further than [`own_lines`] looks for a command's lines.
 fn forget_above<L>(term: &mut Term<L>, line: Line, id: u32, part: Option<Part>) {
-    let top = term.topmost_line();
+    let top = term.topmost_line().max(line - term.screen_lines() as i32);
     let columns = term.columns();
     let uri = link_of(id, Part::Left);
     let left = alacritty_terminal::term::cell::Hyperlink::new(Some(uri.clone()), uri);
     let mut above = line - 1;
-    // a prompt may begin with an empty line or two
-    let mut empty = 0;
     while above >= top {
         match owner(term, above) {
             Some(other) if other == id => {
-                empty = 0;
                 let row = &mut term.grid_mut()[above];
                 for column in (0..columns).map(Column) {
                     let marked = row[column].hyperlink().and_then(|link| cell_of(link.uri()));
@@ -741,8 +743,8 @@ fn forget_above<L>(term: &mut Term<L>, line: Line, id: u32, part: Option<Part>) 
                     }
                 }
             },
-            None if empty < 2 && term.grid()[above].is_clear() => empty += 1,
-            _ => break,
+            Some(_) => break,
+            None => {},
         }
         above -= 1;
     }
@@ -1292,6 +1294,41 @@ mod tests {
         screen.print("clear\r\n\x1b]133;C\x07\x1b[H\x1b[2J\x1b]133;D;0\x07").print(prompt);
         assert_eq!(screen.places().last(), Some(&(1, 0, 0)));
         assert_eq!(screen.command(0).text.as_deref(), Some("clear"));
+    }
+
+    /// fish with a key that lists the folder under the prompt, by an `ls` that
+    /// names files with links.
+    #[test]
+    fn a_prompt_below_what_was_printed_with_links_of_its_own() {
+        let mut screen = Screen::new();
+        let prompt = "\x1b]133;A;click_events=1\x07> \x1b]133;B\x07";
+        screen.print(prompt).print("true\r\n\x1b]133;C\x07\x1b]133;D;0\x07").print(prompt).print("cd fo");
+        // After the first name's link has ended, the listing is marked for nothing.
+        // fish writes its prompt again below it.
+        screen.print("\r\n\x1b]8;;file:///foo1\x07foo1\x1b]8;;\x07  foo2\r\nfoo3\r\n").print(prompt).print("cd fo");
+        assert_eq!(screen.places(), [(0, 0, 0), (1, 4, 4)]);
+        assert_eq!(owner(&screen.term, Line(1)), None);
+        // the listing was printed by no command, and is not what `true` printed
+        assert_eq!(printed(&screen.term, Line(3)), None);
+        assert_eq!(output(&screen.term, place_at(&screen.term, Line(0)).unwrap()), None);
+        // the line is emptied and sent off, and a command typed: it is where it stands
+        screen.print("\x15\r\n").print(prompt).print("ls\r\n\x1b]133;C\x07");
+        assert_eq!(screen.places(), [(0, 0, 0), (1, 5, 5)]);
+        assert_eq!(screen.command(1).text.as_deref(), Some("ls"));
+        // empty lines between two copies of a prompt, more than a prompt begins with
+        let mut screen = Screen::new();
+        screen.print(prompt).print("\r\n\r\n\r\n\r\n").print(prompt);
+        assert_eq!(screen.places(), [(0, 4, 4)]);
+        // a prompt of another command ends the search: it is that command's still
+        let mut screen = Screen::new();
+        screen
+            .print(prompt)
+            .print("true\r\n\x1b]133;C\x07a\r\n\x1b]133;D;0\x07")
+            .print(prompt)
+            .print("\r\n")
+            .print(prompt);
+        assert_eq!(screen.places(), [(0, 0, 0), (1, 3, 3)]);
+        assert_eq!(text(&screen.term, output(&screen.term, place_at(&screen.term, Line(0)).unwrap()).unwrap()), "a");
     }
 
     /// fish 4.9 with a prompt of two lines, in a window that is made narrower, as captured.
