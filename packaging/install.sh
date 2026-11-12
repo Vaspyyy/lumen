@@ -386,7 +386,7 @@ Nothing was installed."
     say "lumen $version is installed: $bin_dir/lumen"
     # Without systemd for this user (over SSH, say) nothing could turn the
     # services on: they are left for an install that can.
-    if [ -f "$1/lumen.service" ] && ! user_systemd; then
+    if [ -f "$1/lumen.service" ] && ! user_systemd && { [ "${LUMEN_DAEMON:-1}" != 0 ] || [ "${LUMEN_AUTO_UPDATE:-1}" != 0 ]; }; then
         say "systemd doesn't run for this user here, so lumen gets no service that starts it at login, and doesn't update itself."
     fi
     install_daemon "$1"

@@ -16,14 +16,24 @@ install -Dm644 packaging/lumen.desktop "$data/applications/lumen.desktop"
 units=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
 # quoted as systemd reads a path: \ and " escaped, % and $ doubled
 quoted=$(printf '%s' "$program" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/%/%%/g' -e 's/\$/$$/g')
-# install_unit FILE... ENABLE: writes the files, then turns ENABLE on. A file that is
-# not the one lumen ships (it starts with another line) stays as it is, and one
-# you turned off stays off.
+# Whether $1 is a service or timer lumen ships: each starts with its own line, as
+# packaging/install.sh knows them.
+ours() {
+    case ${1##*/} in
+        lumen.service) mark='# Keeps a lumen running without a window from login on' ;;
+        lumen-update.service) mark='# Updates lumen and the tools made for it' ;;
+        lumen-update.timer) mark='# Starts lumen-update.service once a day' ;;
+        *) return 1 ;;
+    esac
+    head -n 1 "$1" | grep -q -F -e "$mark"
+}
+# install_unit ENABLE FILE...: writes the files, then turns ENABLE on. A file that is
+# not one lumen ships stays as it is, and one you turned off stays off.
 install_unit() {
     on=$1
     shift
     for file in "$@"; do
-        if [ -e "$units/$file" ] && [ "$(head -n 1 "$units/$file")" != "$(head -n 1 "packaging/$file")" ]; then
+        if [ -e "$units/$file" ] && ! ours "$units/$file"; then
             echo "$units/$file is not the one lumen comes with: it stays as it is"
             return 0
         fi

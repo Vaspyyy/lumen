@@ -55,7 +55,7 @@ One command for every system with a C library as new as the one in Ubuntu 22.04 
 curl -fsSL https://vaspyyy.github.io/lumen/install.sh | sh
 ```
 
-This needs no root. The script fetches the newest release, checks that it arrived whole against the checksum in the release, and puts the program into `~/.local/bin` and the launcher entry and the icons into `~/.local/share`. Where systemd runs for your user, it also installs the [daemon](#the-daemon)'s service and the [daily update](#updates)'s timer into `~/.config/systemd/user` and turns them on; `LUMEN_DAEMON=0` or `LUMEN_AUTO_UPDATE=0` in front of `sh` leaves one out. If you like to know what you run, [read it first](https://github.com/Vaspyyy/lumen/blob/main/packaging/install.sh): it is about 300 lines.
+This needs no root. The script fetches the newest release, checks that it arrived whole against the checksum in the release, and puts the program into `~/.local/bin` and the launcher entry and the icons into `~/.local/share`. Where systemd runs for your user, it also installs the [daemon](#the-daemon)'s service and the [daily update](#updates)'s timer into `~/.config/systemd/user` and turns them on; `LUMEN_DAEMON=0` or `LUMEN_AUTO_UPDATE=0` in front of `sh` leaves one out. If you like to know what you run, [read it first](https://github.com/Vaspyyy/lumen/blob/main/packaging/install.sh): it is about 450 lines.
 
 lumen needs a few libraries that a desktop has anyway:
 
@@ -122,12 +122,12 @@ lumen update --check   # only say what is out
 ```
 
 - **lumen** comes from its newest release: the archive is fetched, checked against the release's checksums, and installed into the folder lumen is in, with its launcher entry, icons and services. A lumen you built from source is replaced by the release once a release newer than it is out.
-- **A package** (apt, dnf, zypper, pacman) can only be updated by its package manager, with root. lumen tells you once when a new version is out: install the new package the way you installed the first one. No distribution has lumen in its repositories yet, so your system's own updates don't bring it.
-- **The tools** ([glint](https://github.com/Vaspyyy/glint), crux, recap, seek and pulse) are updated where they are installed, with `go install`, the way they were installed. That needs Go. A tool that isn't installed stays so.
+- **A package** (apt, dnf, zypper, pacman) can only be updated by its package manager, with root. lumen tells you once when a new version is out: install the new package the way you installed the first one. No distribution has lumen in its repositories yet, so your system's own updates don't bring it. `lumen update` doesn't run as root.
+- **The tools** ([glint](https://github.com/Vaspyyy/glint), crux, recap, seek and pulse) are updated with `go install`, the way they were installed, into the folder their program file is in (a link to it, in `~/.local/bin` say, keeps working). That needs Go. A tool that isn't installed stays so, and so does another program of the same name: only what Go built from the tool's module is updated.
 
-Nothing is ever replaced by an older version, so a build of your own that is newer than the newest release stays as it is.
+Nothing is ever replaced by an older version, so a build of your own that is newer than the newest release stays as it is. A build in a cargo `target` folder is never replaced.
 
-The install script and `scripts/install.sh` turn the daily update on, where systemd runs for your user: a timer, `lumen-update.timer`, starts `lumen update` once a day at the lowest priority, so a game or a build doesn't notice it, and you get a notification of what changed. `LUMEN_AUTO_UPDATE=0` in front of the install command leaves it out. With a package, the timer is installed but off; turn it on to have the tools updated and to hear of new versions:
+The install script and `scripts/install.sh` turn the daily update on, where systemd runs for your user: a timer, `lumen-update.timer`, starts `lumen update` once a day at the lowest priority, so a game or a build doesn't notice it, and you get a notification of what changed (where `notify-send` is installed). When it fails, for example because the network isn't there yet, it tries again half an hour later; `journalctl --user -u lumen-update` shows what it did. `LUMEN_AUTO_UPDATE=0` in front of the install command leaves it out. With a package, the timer is installed but off; turn it on to have the tools updated and to hear of new versions:
 
 ```sh
 systemctl --user enable --now lumen-update.timer

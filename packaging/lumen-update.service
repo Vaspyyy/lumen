@@ -7,6 +7,9 @@
 [Unit]
 Description=Update lumen and its tools
 Documentation=https://vaspyyy.github.io/lumen/docs/install/#updates
+# tried again (below) at most three times a day
+StartLimitIntervalSec=1d
+StartLimitBurst=3
 
 [Service]
 Type=oneshot
@@ -15,3 +18,8 @@ ExecStart=/usr/bin/lumen update --notify
 Nice=19
 CPUSchedulingPolicy=idle
 IOSchedulingClass=idle
+# The run after a day the computer was off comes at login, when the network
+# may not be there yet: once more half an hour later.
+Restart=on-failure
+RestartSec=30min
+TimeoutStartSec=1h
