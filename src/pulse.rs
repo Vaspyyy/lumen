@@ -173,15 +173,14 @@ fn asking(pids: &[u32]) -> String {
 const LONGEST: u64 = 1 << 20;
 
 /// The next line of `output`, without its end. None when there is no more,
-/// and `Some(None)` for a line longer than `longest` bytes.
+/// and `Some(None)` for a line longer than `longest` bytes. What stands
+/// after the last line's end is no line: a pulse that ended in the middle of
+/// one has ended, and said nothing with it.
 fn next_line(output: &mut impl BufRead, longest: u64) -> Option<Option<String>> {
     let mut line = Vec::new();
     let read = output.by_ref().take(longest).read_until(b'\n', &mut line).ok()?;
-    if read == 0 {
-        return None;
-    }
-    if line.last() != Some(&b'\n') && read as u64 >= longest {
-        return Some(None);
+    if line.last() != Some(&b'\n') {
+        return (read as u64 >= longest).then_some(None);
     }
     Some(Some(String::from_utf8_lossy(&line).trim_end_matches(['\n', '\r']).to_string()))
 }
@@ -209,10 +208,38 @@ fn patience(every: u32) -> Duration {
 struct Watch {
     child: Child,
     input: ChildStdin,
+    /// What it is still to be told: what its input would not take at once.
+    unsent: Vec<u8>,
     /// When it last said something, or was started.
     heard: Instant,
     _lines: Task<()>,
     _stuck: Task<()>,
+}
+
+impl Watch {
+    /// Tells pulse what is waiting, as far as its input takes it now. The
+    /// rest is told later, from where this stopped: a line is never told
+    /// in part and then again from its start.
+    fn tell(&mut self, more: &str) {
+        self.unsent.extend_from_slice(more.as_bytes());
+        self.unsent = send(&mut self.input, std::mem::take(&mut self.unsent));
+    }
+}
+
+/// Writes `bytes` to `input` as far as that goes without waiting, and gives
+/// back what is left.
+fn send(input: &mut impl Write, mut bytes: Vec<u8>) -> Vec<u8> {
+    while !bytes.is_empty() {
+        match input.write(&bytes) {
+            Ok(0) => break,
+            Ok(sent) => drop(bytes.drain(..sent)),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {},
+            // It would wait: pulse is not reading now. Or pulse is gone, and its
+            // output ending says so.
+            Err(_) => break,
+        }
+    }
+    bytes
 }
 
 impl Drop for Watch {
@@ -308,11 +335,7 @@ impl Monitor {
             return;
         }
         if let Some(watch) = &mut self.watch {
-            // What can't be written now is asked again with the next reading. If pulse
-            // has ended, its output ending says so; if it is stuck, its silence does.
-            if watch.input.write_all(asking(&pids).as_bytes()).and_then(|()| watch.input.flush()).is_err() {
-                return;
-            }
+            watch.tell(&asking(&pids));
         }
         self.asked = pids;
     }
@@ -355,13 +378,12 @@ impl Monitor {
             self.failed = TRIES;
             return;
         };
-        let (Some(mut input), Some(output)) = (child.stdin.take(), child.stdout.take()) else {
+        let (Some(input), Some(output)) = (child.stdin.take(), child.stdout.take()) else {
             let _ = child.kill();
             let _ = child.wait();
             return;
         };
         never_wait(&input);
-        let _ = input.write_all(asking(&self.asked).as_bytes()).and_then(|()| input.flush());
         let (tx, mut rx) = unbounded();
         std::thread::spawn(move || {
             let mut output = BufReader::new(output);
@@ -399,7 +421,9 @@ impl Monitor {
                 }
             }
         });
-        self.watch = Some(Watch { child, input, heard: Instant::now(), _lines: lines, _stuck: stuck });
+        let mut watch = Watch { child, input, unsent: Vec::new(), heard: Instant::now(), _lines: lines, _stuck: stuck };
+        watch.tell(&asking(&self.asked));
+        self.watch = Some(watch);
     }
 
     /// A line pulse printed, or None for one that was too long to read.
@@ -418,11 +442,11 @@ impl Monitor {
             return;
         };
         watch.heard = Instant::now();
+        // what its input would not take when the panes changed
+        watch.tell("");
         self.failed = 0;
         self.uses = reading.pids.iter().map(|found| (found.pid, found.clone())).collect();
         self.reading = Some(reading);
-        // what could not be written when the panes changed
-        self.ask();
         cx.notify();
     }
 
@@ -554,11 +578,12 @@ mod tests {
 
     #[test]
     fn a_line_without_end_is_not_read() {
-        let mut output = std::io::Cursor::new(b"one\r\ntwo\n\nlast".to_vec());
+        // pulse ended in the middle of a line: what it had written of it says nothing
+        let mut output = std::io::Cursor::new(b"one\r\ntwo\n\nhalf a li".to_vec());
         assert_eq!(next_line(&mut output, 16), Some(Some("one".to_string())));
         assert_eq!(next_line(&mut output, 16), Some(Some("two".to_string())));
         assert_eq!(next_line(&mut output, 16), Some(Some(String::new())));
-        assert_eq!(next_line(&mut output, 16), Some(Some("last".to_string())));
+        assert_eq!(next_line(&mut output, 16), None);
         assert_eq!(next_line(&mut output, 16), None);
         // as long as allowed is read, longer is not
         let mut output = std::io::Cursor::new(b"0123456789abcde\n0123456789abcdef\nmore\n".to_vec());
@@ -567,6 +592,39 @@ mod tests {
         let mut endless = std::io::repeat(b'x').take(1 << 30);
         assert_eq!(next_line(&mut BufReader::new(&mut endless), LONGEST), Some(None));
         assert!(endless.limit() > (1 << 30) - 2 * LONGEST);
+    }
+
+    /// An input that takes so many bytes and then would wait.
+    struct Narrow(Vec<u8>, usize);
+
+    impl Write for Narrow {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let room = self.1 - self.0.len();
+            if room == 0 {
+                return Err(std::io::ErrorKind::WouldBlock.into());
+            }
+            let taken = room.min(bytes.len()).min(5);
+            self.0.extend_from_slice(&bytes[..taken]);
+            Ok(taken)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn what_pulse_does_not_take_at_once_is_told_later() {
+        let mut input = Narrow(Vec::new(), 12);
+        let mut unsent = send(&mut input, b"pids 4821 5133\n".to_vec());
+        assert_eq!(input.0, b"pids 4821 51");
+        assert_eq!(unsent, b"33\n");
+        // still no room: nothing is lost, and nothing told twice
+        unsent = send(&mut input, unsent);
+        unsent.extend_from_slice(b"pids 7\n");
+        input.1 = 64;
+        assert!(send(&mut input, unsent).is_empty());
+        assert_eq!(input.0, b"pids 4821 5133\npids 7\n");
     }
 
     #[test]

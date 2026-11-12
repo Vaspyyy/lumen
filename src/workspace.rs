@@ -589,7 +589,10 @@ impl Workspace {
         }
         self.active = index;
         self.tabs[index].news = None;
-        self.looked_at(index);
+        // a tab that comes to the front in a window nobody is at has not been looked at
+        if window.is_window_active() || crate::preview() {
+            self.looked_at(index);
+        }
         let focus = self.tabs[index].active.focus_handle(cx);
         window.focus(&focus, cx);
         cx.notify();

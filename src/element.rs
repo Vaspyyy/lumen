@@ -398,13 +398,7 @@ impl Element for TerminalElement {
                 let wide = flags.contains(Flags::WIDE_CHAR);
                 let width = if wide { 2 } else { 1 };
 
-                let (mut fg, mut bg) = (cell.fg, cell.bg);
-                if flags.contains(Flags::BOLD) && colors.draw_bold_text_with_bright_colors {
-                    fg = palette::brighten(fg);
-                }
-                if flags.contains(Flags::INVERSE) {
-                    std::mem::swap(&mut fg, &mut bg);
-                }
+                let (fg, bg) = palette::drawn(cell.fg, cell.bg, flags, colors);
                 let selected = content.selection.is_some_and(|s| s.contains(indexed.point));
                 let mut fg_color = palette::resolve(fg, overrides, colors);
                 if flags.contains(Flags::DIM) {

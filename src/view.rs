@@ -18,7 +18,8 @@ use gpui::{
     App, Bounds, BoxShadow, ClickEvent, ClipboardItem, Context, Entity, EntityInputHandler, EventEmitter,
     ExternalDragPayload, ExternalPaths, FileDragPaths, FocusHandle, Focusable, KeyContext, KeyDownEvent, KeyUpEvent,
     Keystroke, Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, ScrollDelta, ScrollEvent, SharedString, Subscription, Task, UTF16Selection, Window, div, point, px, svg,
+    Point, ScrollDelta, ScrollEvent, SharedString, Subscription, Task, TextRun, UTF16Selection, Window, div, font,
+    point, px, svg,
 };
 
 use crate::actions::{
@@ -30,6 +31,7 @@ use crate::config::Config;
 use crate::element::{Geometry, MarkSpot, Motion, TerminalElement};
 use crate::keys::Press;
 use crate::links::{self, Target};
+use crate::palette;
 use crate::pulse::{self, Pulse};
 use crate::terminal::{CommandEvent, Listener, Started, Terminal, TerminalEvent};
 use crate::{keys, mouse};
@@ -506,18 +508,26 @@ impl TerminalView {
         // its text: a program can't lay it over the empty parts of the screen, where a
         // click means something else.
         if matches!(target, Target::Prompt(_)) {
+            let colors = &cx.global::<Config>().colors;
+            let cells = &term.grid()[Line(row as i32 - offset)];
             let shows = |col: usize| {
-                let cells = &term.grid()[Line(row as i32 - offset)];
                 // the second half of a wide character shows what the first half does
                 let second = cells[Column(col)].flags.contains(Flags::WIDE_CHAR_SPACER) && col > 0;
                 let cell = &cells[Column(if second { col - 1 } else { col })];
+                // in the colors it is drawn in, whichever way they were written
+                let seen = || {
+                    let (fg, bg) = palette::drawn(cell.fg, cell.bg, cell.flags, colors);
+                    let (fg, bg) = (palette::rgb(fg, term.colors(), colors), palette::rgb(bg, term.colors(), colors));
+                    palette::apart(fg, bg, cell.flags.contains(Flags::DIM))
+                };
                 cell.hyperlink().as_ref() == Some(&link)
                     && !cell.flags.contains(Flags::HIDDEN)
-                    && cell.fg != cell.bg
                     && !links::blank(cell.c)
+                    && seen()
             };
-            // one space between two words of it is part of it
-            let between = col > 0 && col + 1 < cols && shows(col - 1) && shows(col + 1);
+            // one space between two characters of it is part of it
+            let space = cells[Column(col)].c == ' ' && cells[Column(col)].hyperlink().as_ref() == Some(&link);
+            let between = space && col > 0 && col + 1 < cols && shows(col - 1) && shows(col + 1);
             if !shows(col) && !between {
                 return None;
             }
@@ -776,34 +786,62 @@ impl TerminalView {
     }
 
     /// What a click on a link for the prompt would type: the link's text
-    /// need not say it. All of it is shown, over as many lines as it takes.
-    fn render_prompt_hint(&self, hover: &Hover, geometry: Geometry, cx: &App) -> Option<impl IntoElement + use<>> {
+    /// need not say it. All of it is shown, in as many lines as it takes.
+    /// None where the pane has no room for all of it: such a link is not
+    /// followed, because what it would type can't be read first.
+    fn render_prompt_hint(
+        &self,
+        hover: &Hover,
+        geometry: Geometry,
+        window: &Window,
+        cx: &App,
+    ) -> Option<impl IntoElement + use<>> {
         let Target::Prompt(text) = &hover.target else {
             return None;
         };
         let &(row, col, len) = hover.segments.first()?;
         const NOTE: &str = "click puts it at the prompt";
         const EDGE: Pixels = px(8.);
-        const LINE: f32 = 18.;
+        const SIZE: Pixels = px(12.5);
+        const LINE: Pixels = px(18.);
+        // what the chip has around its text: 10 pixels to either side, and its border
+        const AROUND: Pixels = px(22.);
         let config = cx.global::<Config>();
+        let text_system = window.text_system();
+        let family = crate::fonts::grid(&config.font.family, text_system);
+        // the widths are measured, not guessed: a font may draw a character wider than a cell
+        let width_of = |text: &str, family: &SharedString| {
+            let run = TextRun {
+                len: text.len(),
+                font: font(family.clone()),
+                color: gpui::white(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            text_system.shape_line(SharedString::from(text.to_string()), SIZE, &[run], None).width
+        };
         let pane = geometry.bounds.size;
         let left = geometry.origin.x + geometry.cell.width * col as f32 - geometry.bounds.origin.x;
         let line = geometry.origin.y + geometry.cell.height * row as f32 - geometry.bounds.origin.y;
         let end = left + geometry.cell.width * len as f32;
-        // About how wide the note is on one line: its letters are as wide as they are
-        // in the widest of the fonts it may be set in.
-        let letters = |count: usize| px(count as f32 * 7.8);
-        let (command, note) = (letters(text.chars().count()), letters(NOTE.len()));
-        let one_line = command + note + px(30.);
-        let widest = (pane.width - EDGE * 2.).max(px(120.));
-        let command_shown = div().font_family(config.font.family.clone()).child(SharedString::from(text.clone()));
-        let note_shown = div().text_color(gpui::white().opacity(0.45)).child(NOTE);
-        let (hint, height) = if one_line <= widest {
-            let hint = chip(config).h(px(26.)).child(command_shown).child(note_shown);
+        let room = pane.width - EDGE * 2. - AROUND;
+        let (command, note) = (width_of(text, &family), width_of(NOTE, &crate::fonts::ui()));
+        let shown = |line: &str| {
+            div()
+                .flex_none()
+                .font_family(family.clone())
+                .whitespace_nowrap()
+                .child(SharedString::from(line.to_string()))
+        };
+        let note_shown = div().flex_none().whitespace_nowrap().text_color(gpui::white().opacity(0.45)).child(NOTE);
+        let (hint, height) = if command + px(8.) + note <= room {
+            let width = command + px(8.) + note + AROUND;
+            let hint = chip(config).h(px(26.)).child(shown(text)).child(note_shown);
             // it begins where the link does, or ends where it ends, or else lies as far left as it must
-            let hint = if left + one_line <= pane.width - EDGE {
+            let hint = if left + width <= pane.width - EDGE {
                 hint.left(left)
-            } else if end - one_line >= EDGE {
+            } else if end - width >= EDGE {
                 hint.right(pane.width - end)
             } else {
                 hint.left(EDGE)
@@ -811,26 +849,38 @@ impl TerminalView {
             (hint, px(26.))
         } else {
             // the text takes the pane's width and the lines it needs, the note stands under it
-            let lines = (command / (widest - px(22.))).ceil().max(1.) + 1.;
+            let font_id = text_system.resolve_font(&font(family.clone()));
+            let cell = text_system.advance(font_id, SIZE, 'm').map(|size| size.width).unwrap_or(SIZE * 0.6);
+            let cells = (room / cell).floor() as usize;
+            if cells < 8 || note > room {
+                return None;
+            }
+            let lines = in_lines(text, cells);
+            if lines.iter().any(|line| width_of(line, &family) > room) {
+                return None;
+            }
+            let height = LINE * (lines.len() + 1) as f32 + px(14.);
             let hint = chip(config)
                 .flex_col()
                 .items_start()
-                .gap(px(2.))
-                .py(px(5.))
+                .gap(px(0.))
+                .py(px(6.))
                 .left(EDGE)
-                .w(widest)
-                .line_height(px(LINE))
-                .child(command_shown.w_full())
+                .w(pane.width - EDGE * 2.)
+                .line_height(LINE)
+                .children(lines.iter().map(|line| shown(line)))
                 .child(note_shown);
-            (hint, px(lines * LINE + 12.))
+            (hint, height)
         };
-        // above the link, or below it where there is more room
+        // above the link, or else below it
         let (above, below) = (line - px(4.), pane.height - line - geometry.cell.height - px(4.));
-        Some(if above >= height || above >= below {
-            hint.bottom(pane.height - above)
+        if above >= height {
+            Some(hint.bottom(pane.height - above))
+        } else if below >= height {
+            Some(hint.top(line + geometry.cell.height + px(4.)))
         } else {
-            hint.top(line + geometry.cell.height + px(4.))
-        })
+            None
+        }
     }
 
     fn toggle_search(&mut self, _: &ToggleSearch, _: &mut Window, cx: &mut Context<Self>) {
@@ -1264,7 +1314,15 @@ fn find<T>(term: &Term<T>, query: &str) -> Vec<Match> {
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.focus.is_focused(window) && (window.is_window_active() || crate::preview());
-        let link = self.live_link(focused, cx).cloned();
+        let mut link = self.live_link(focused, cx).cloned();
+        let hint = match (&link, self.geometry.get()) {
+            (Some(hover), Some(geometry)) => self.render_prompt_hint(hover, geometry, window, cx),
+            _ => None,
+        };
+        // a command that can't be shown in full where it stands is not typed by a click
+        if hint.is_none() && link.as_ref().is_some_and(|hover| matches!(hover.target, Target::Prompt(_))) {
+            link = None;
+        }
         let spots = match (&link, self.geometry.get()) {
             (Some(hover), Some(geometry)) => self.render_link(hover, geometry, cx),
             _ => Vec::new(),
@@ -1274,10 +1332,6 @@ impl Render for TerminalView {
             self.hovered_mark.and_then(|id| self.marks.borrow().iter().find(|spot| spot.id == id).copied());
         let about = match (hovered_mark, self.geometry.get()) {
             (Some(spot), Some(geometry)) => self.render_mark(spot, geometry, cx),
-            _ => None,
-        };
-        let hint = match (&link, self.geometry.get()) {
-            (Some(hover), Some(geometry)) => self.render_prompt_hint(hover, geometry, cx),
             _ => None,
         };
         let mut context = KeyContext::default();
@@ -1348,6 +1402,24 @@ impl Render for TerminalView {
             .children(hint)
             .children(search)
     }
+}
+
+/// A command in lines of at most `cells` cells, cut as a terminal cuts text:
+/// nothing of it is left out, and nothing added. A character outside ASCII
+/// is taken for two cells wide: none is wider.
+fn in_lines(text: &str, cells: usize) -> Vec<String> {
+    let mut lines = vec![String::new()];
+    let mut used = 0;
+    for c in text.chars() {
+        let width = if c.is_ascii() { 1 } else { 2 };
+        if used > 0 && used + width > cells {
+            lines.push(String::new());
+            used = 0;
+        }
+        lines.last_mut().unwrap().push(c);
+        used += width;
+    }
+    lines
 }
 
 /// A note that floats over the pane, about what the mouse is on.
@@ -1450,6 +1522,18 @@ mod tests {
     use alacritty_terminal::vte::ansi::Processor;
 
     use super::*;
+
+    #[test]
+    fn a_command_in_lines_as_a_terminal_cuts_them() {
+        assert_eq!(in_lines("cargo test", 80), ["cargo test"]);
+        assert_eq!(in_lines("cargo test --workspace", 8), ["cargo te", "st --wor", "kspace"]);
+        // a wide character is not cut in two, and nothing is left out
+        assert_eq!(in_lines("echo 日本語のテキスト", 9), ["echo 日本", "語のテキ", "スト"]);
+        let long = "x".repeat(300);
+        assert_eq!(in_lines(&long, 77).concat(), long);
+        assert_eq!(in_lines(&long, 77).len(), 4);
+        assert_eq!(in_lines("", 8), [""]);
+    }
     use crate::terminal::TermSize;
 
     /// A terminal of 40 by 6 cells that this was printed to.
