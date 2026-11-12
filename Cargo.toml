@@ -39,6 +39,8 @@ flate2 = "1"
 qrcode = { version = "0.14", default-features = false }
 libc = "0.2"
 serde_json = "1"
+# Checking what `lumen update` fetched against the release's SHA256SUMS.
+sha2 = "0.10"
 
 [profile.dev]
 # The grid is drawn every frame: unoptimized, a full screen of text stutters.
