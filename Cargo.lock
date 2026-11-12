@@ -3567,6 +3567,7 @@ dependencies = [
  "futures",
  "gpui-fast",
  "gpui-fast-platform",
+ "gpui-fast-wgpu",
  "image",
  "libc",
  "lumen-link",

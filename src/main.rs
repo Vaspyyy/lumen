@@ -211,6 +211,10 @@ fn main() {
         Ok(spawn) => spawn,
         Err(status) => std::process::exit(status),
     };
+    // Loading the GPU driver and making a device is a good part of the time before the
+    // first frame: it starts now, on a thread of its own, while the config, the fonts and
+    // the window are made. The window takes the device when it opens.
+    gpui_wgpu::prewarm();
     let (config, problem) = Config::load();
     if let Some(problem) = problem {
         eprintln!("lumen: {}: {problem}\nlumen: using the defaults", Config::path().display());
@@ -240,6 +244,7 @@ fn main() {
         });
         pulse::init(cx);
         open_window(spawn, cx);
+        pulse::begin_after_first_frame(cx);
         watch_config(cx);
         cx.activate(true);
     });
