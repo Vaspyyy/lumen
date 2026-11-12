@@ -43,6 +43,13 @@ if [[ $- == *i* ]]; then
             inner=${inner//"$plain"/}
             PS1=$before${inner//"$after"/}$after
         fi
+        # A further line of a command begins with PS2. It is marked as a prompt
+        # (P), so that lumen does not take it for a part of the command. Only
+        # in lumen: the B that ends it is where a command begins to other
+        # terminals.
+        if [[ ${TERM_PROGRAM-} == lumen && -n ${PS2-} && $PS2 != *'133;P'* ]]; then
+            PS2="\\[${esc}]133;P;k=c${bel}\\]${PS2}${after}"
+        fi
     }
 
     # These lines may be read more than once, as when ~/.bashrc is read again:
@@ -52,7 +59,13 @@ if [[ $- == *i* ]]; then
     [[ ${PS0-} == *'133;C'* ]] || PS0='\e]133;C\a'${PS0-}
 
     if [[ $(declare -p PROMPT_COMMAND 2>/dev/null) == 'declare -a'* ]]; then
-        [[ " ${PROMPT_COMMAND[*]} " == *' __lumen_prompt '* ]] || PROMPT_COMMAND+=(__lumen_prompt)
+        # one by one: joined, they are apart by whatever IFS begins with
+        __lumen_there=
+        for __lumen_one in "${PROMPT_COMMAND[@]}"; do
+            [[ $__lumen_one == *__lumen_prompt* ]] && __lumen_there=1
+        done
+        [[ -n $__lumen_there ]] || PROMPT_COMMAND+=(__lumen_prompt)
+        unset __lumen_there __lumen_one
     elif [[ ${PROMPT_COMMAND-} != *__lumen_prompt* ]]; then
         PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND
 }__lumen_prompt"

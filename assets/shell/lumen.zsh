@@ -15,12 +15,29 @@ if [[ -o interactive && -z ${__lumen_marks-} ]]; then
             typeset -g __lumen_ran=
             print -n "\e]133;D;$ended\a"
         fi
+        # A new prompt is on its way (L). One that zsh writes without this is
+        # the open one again: after a resize, or on a cleared screen.
+        print -n '\e]133;L\a'
     }
 
     # A prompt that a theme has just set anew is marked again.
     __lumen_prompt() {
         if [[ $PS1 != *'133;A'* ]]; then
             PS1=$'%{\e]133;A\a%}'$PS1$'%{\e]133;B\a%}'
+        fi
+        # The prompt at the right of the line, and the one a further line of a
+        # command begins with, are marked as prompts (P), so that lumen does
+        # not take them for a part of the command. Only in lumen: the B that
+        # ends them is where a command begins to other terminals.
+        if [[ ${TERM_PROGRAM-} == lumen ]]; then
+            # (one prompt under two names, of which either may count as unset)
+            local right=${RPROMPT-${RPS1-}}
+            if [[ -n $right && $right != *'133;P'* ]]; then
+                RPROMPT=$'%{\e]133;P;k=r\a%}'$right$'%{\e]133;B\a%}'
+            fi
+            if [[ -n ${PS2-} && $PS2 != *'133;P'* ]]; then
+                PS2=$'%{\e]133;P;k=c\a%}'$PS2$'%{\e]133;B\a%}'
+            fi
         fi
     }
 

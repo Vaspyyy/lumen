@@ -130,6 +130,14 @@ draw_bold_text_with_bright_colors = false
 
 Set to `true`, bold text in one of the eight normal colors is drawn in its bright version, as some older terminals do.
 
+## Colors a program sets
+
+A program can change colors while it runs: any of the sixteen and the 256, the text, the cursor and the background. Scripts that switch a terminal to another theme, such as base16-shell, do just that.
+
+lumen follows, in the pane the program runs in. Other panes and tabs keep the theme, and so does lumen's own frame: the tabs and the title bar.
+
+A background that is set this way fills the whole pane, and it is solid, whatever `opacity` says. The colors stay until a program sets them back, or the pane is closed. [Troubleshooting](/docs/troubleshooting/#a-pane-has-other-colors-than-the-theme) has the line that sets them back by hand.
+
 ## A see-through window
 
 How solid the background is, is not a color. It is `opacity` in the [`[window]`](/docs/configuration/#window) table.

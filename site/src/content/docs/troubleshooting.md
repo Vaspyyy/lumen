@@ -67,8 +67,18 @@ The light and the numbers on tabs come from [pulse](/docs/machine/), which has t
 
 - lumen has to find it: on the `PATH` lumen was started with, or in `~/go/bin` or `~/.local/bin`.
 - `enabled` in the `[pulse]` table of the config must not be `false`.
-- lumen looks for pulse when it starts. A pulse installed since then shows in the next lumen you start.
+- lumen looks for pulse every half minute until it finds it. One that was installed just now shows within that time.
 - A pulse that is too old to know `pulse watch` is started and ends at once. lumen tries three times, 20 seconds apart, and then leaves it alone until lumen is started again or the `[pulse]` table changes.
+
+## A pane has other colors than the theme
+
+A program can change a pane's colors while it runs, its background too. If one has ended and left its colors behind, this sets them back to the theme's:
+
+```sh
+printf '\e]104\a\e]110\a\e]111\a\e]112\a'
+```
+
+A new tab or pane has the theme's colors again in any case. See [Colors](/docs/colors/#colors-a-program-sets).
 
 ## `glint --thumbs` draws blocks, not pictures
 

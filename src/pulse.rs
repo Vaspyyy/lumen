@@ -249,6 +249,10 @@ impl Drop for Watch {
     }
 }
 
+/// How long until pulse is looked for again where it was not found: it may
+/// have been installed since.
+const LOOK_AGAIN: Duration = Duration::from_secs(30);
+
 /// After this many starts that led to nothing, pulse is left alone.
 const TRIES: u32 = 3;
 /// The wait before pulse is started again after it ended.
@@ -365,16 +369,27 @@ impl Monitor {
     fn start(&mut self, cx: &mut Context<Self>) {
         let every = self.config.as_ref().map_or(3, |config| config.every);
         self.program = find(std::env::var_os("PATH").as_deref(), dirs::home_dir().as_deref());
-        let spawned = self.program.as_ref().map(|program| {
-            Command::new(program)
-                .args(["watch", "--json", "--every", &every.to_string()])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .spawn()
-        });
-        // no pulse on this machine: nothing to show, and nothing to say about it
-        let Some(Ok(mut child)) = spawned else {
+        let Some(program) = &self.program else {
+            // No pulse on this machine: nothing to show, and nothing to say about it.
+            // It may be installed while lumen runs, so it is looked for again later.
+            self.again = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(LOOK_AGAIN).await;
+                let _ = this.update(cx, |this, cx| {
+                    if this.enabled() && this.watch.is_none() {
+                        this.start(cx);
+                    }
+                });
+            }));
+            return;
+        };
+        let spawned = Command::new(program)
+            .args(["watch", "--json", "--every", &every.to_string()])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn();
+        // a pulse that can't be started is not asked again
+        let Ok(mut child) = spawned else {
             self.failed = TRIES;
             return;
         };

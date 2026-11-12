@@ -44,7 +44,7 @@ pulse looks every three seconds, so "up to" is the most that was seen: a short p
 - pulse on your `PATH`, or in `~/go/bin` or `~/.local/bin`, where lumen looks too.
 - Nothing else. lumen starts one pulse for all its windows, tells it which shells to look at, and stops it when lumen ends.
 
-lumen looks for pulse when it starts. Install pulse later, and it shows in the next lumen you start.
+lumen looks for pulse when it starts, and every half minute from then on until it finds it. Install pulse later, and it shows within about half a minute, in the lumen that is open.
 
 If pulse ends by itself, or says nothing for longer than three of its looks and five seconds, what it last said is taken off the screen. lumen starts it again after 20 seconds. After three starts in a row that led to no reading, it leaves pulse alone.
 

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::search::Match;
-use alacritty_terminal::vte::ansi::CursorShape;
+use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 use gpui::{
     App, BorderStyle, Bounds, BoxShadow, Corners, CursorStyle, DispatchPhase, Element, ElementId, ElementInputHandler,
     Entity, FocusHandle, Font, FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
@@ -214,6 +214,8 @@ struct ImageLayout {
 pub struct Layout {
     hitbox: Hitbox,
     cell: Size<Pixels>,
+    /// The background a program has set for the pane, which fills all of it.
+    ground: Option<Hsla>,
     rects: Vec<(Bounds<Pixels>, Hsla)>,
     /// The marks of the commands, left of the grid.
     pills: Vec<(Bounds<Pixels>, Hsla)>,
@@ -335,12 +337,21 @@ impl Element for TerminalElement {
         let accent = config.accent();
         let cursor;
         let pointer;
+        // What a program has set for the pane at run time: its background (OSC 11),
+        // the color of plain text (OSC 10) and of the cursor (OSC 12).
+        let ground;
+        let ink;
+        let cursor_color;
         {
             let terminal = self.terminal.read(cx);
             let term = terminal.term.lock();
             let content = term.renderable_content();
             let offset = content.display_offset as i32;
             let overrides = content.colors;
+            ground = palette::ground(overrides, colors);
+            ink = palette::ink(overrides, colors).hsla();
+            cursor_color = overrides[NamedColor::Cursor]
+                .map_or_else(|| config.cursor_color(), |rgb| crate::config::Rgb(rgb.r, rgb.g, rgb.b).hsla());
             let selection_bg = colors.selection.background.map(|c| c.hsla());
             let selection_fg = colors.selection.text.map(|c| c.hsla());
             let mut run: Option<Run> = None;
@@ -384,7 +395,9 @@ impl Element for TerminalElement {
                         continue;
                     }
                     // a cell of a prompt or of what was typed at it: its command's lines reach here
-                    if let Some((id, _)) = commands::cell_of(link.uri()) {
+                    if let Some((id, part)) = commands::cell_of(link.uri())
+                        && part != commands::Part::Left
+                    {
                         match marked.last_mut() {
                             Some(last) if last.0 == id => last.2 = row,
                             _ => marked.push((id, row, row)),
@@ -510,11 +523,14 @@ impl Element for TerminalElement {
                     Status::Typed => continue,
                     Status::Running => accent,
                     Status::Ended(_) if command.failed() => colors.normal.red.hsla(),
-                    Status::Ended(_) => colors.primary.foreground.hsla().opacity(if hovered { 0.7 } else { 0.3 }),
+                    Status::Ended(_) => ink.opacity(if hovered { 0.7 } else { 0.3 }),
                 };
                 commands.push((id, first, last, color));
             }
         }
+
+        // what the pane stands on: text drawn "in the background's color" has this one
+        let behind = ground.unwrap_or(colors.primary.background);
 
         let mut rects = Vec::with_capacity(backgrounds.len() + found.len());
         for (row, col, cells, color) in backgrounds.into_iter().chain(found) {
@@ -620,7 +636,7 @@ impl Element for TerminalElement {
         let mut composed = px(0.);
         if let (Some(text), Some((row, col, ..))) = (&self.composing, cursor) {
             let style = RunStyle {
-                fg: colors.primary.foreground.hsla(),
+                fg: ink,
                 bold: false,
                 italic: false,
                 underline: Line::Single,
@@ -631,7 +647,7 @@ impl Element for TerminalElement {
             let line = text_system.shape_line(text.clone().into(), font_size, &[run], None);
             let at = cell_bounds(col, row, 1).origin;
             composed = (line.width / cell_width).ceil() * cell_width;
-            marks.push((Bounds::new(at, size(composed, cell_height)), colors.primary.background.hsla()));
+            marks.push((Bounds::new(at, size(composed, cell_height)), behind.hsla()));
             composing = Some((at, line));
         }
 
@@ -660,7 +676,7 @@ impl Element for TerminalElement {
             if self.focused && since < 1. {
                 window.request_animation_frame();
             }
-            let color = config.cursor_color().opacity(lit);
+            let color = cursor_color.opacity(lit);
             let mut bounds = cell_bounds(col, row, cells);
             bounds.origin.x += composed;
             if config.cursor.smooth {
@@ -671,14 +687,14 @@ impl Element for TerminalElement {
                     window.request_animation_frame();
                 }
             }
-            let ink = colors.cursor.text.unwrap_or(colors.primary.background).hsla().opacity(lit);
+            let on_cursor = colors.cursor.text.unwrap_or(behind).hsla().opacity(lit);
             let block = blocks::shape(c)
                 .filter(|_| shape == CursorShape::Block && cells == 1 && !flags.contains(Flags::HIDDEN))
-                .map(|block| (block, ink.opacity(block.cover)));
+                .map(|block| (block, on_cursor.opacity(block.cover)));
             let shown = c != ' ' && c != '\0' && !flags.contains(Flags::HIDDEN);
             let text = (shape == CursorShape::Block && shown && block.is_none()).then(|| {
                 let style = RunStyle {
-                    fg: ink,
+                    fg: on_cursor,
                     bold: flags.contains(Flags::BOLD),
                     italic: flags.contains(Flags::ITALIC),
                     underline: Line::None,
@@ -694,7 +710,8 @@ impl Element for TerminalElement {
         });
         self.motion.set(motion);
 
-        Layout { hitbox, cell, rects, pills, images, fills, lines, marks, composing, cursor, pointer }
+        let ground = ground.map(|ground| ground.hsla());
+        Layout { hitbox, cell, ground, rects, pills, images, fills, lines, marks, composing, cursor, pointer }
     }
 
     fn paint(
@@ -711,6 +728,9 @@ impl Element for TerminalElement {
 
         window.set_cursor_style(layout.pointer, &layout.hitbox);
 
+        if let Some(ground) = layout.ground {
+            window.paint_quad(fill(bounds, ground));
+        }
         for (rect, color) in &layout.rects {
             window.paint_quad(fill(*rect, *color));
         }

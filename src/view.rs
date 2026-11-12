@@ -92,11 +92,7 @@ impl Seen {
         let log = terminal.commands.lock().unwrap();
         // A shell that marks no commands has none to ask, and all of the scrollback
         // would be searched for one.
-        let printed_by = if !wanted || log.is_empty() {
-            None
-        } else {
-            commands::place_at(term, line).or_else(|| commands::above(term, line, |_| true))
-        };
+        let printed_by = if !wanted || log.is_empty() { None } else { commands::printed(term, line) };
         let folder = printed_by.and_then(|place| log.get(place.id)?.cwd.clone());
         Some(Seen { cells, at, folder })
     }
@@ -517,8 +513,7 @@ impl TerminalView {
                 // in the colors it is drawn in, whichever way they were written
                 let seen = || {
                     let (fg, bg) = palette::drawn(cell.fg, cell.bg, cell.flags, colors);
-                    let (fg, bg) =
-                        (palette::rgb(fg, term.colors(), colors), palette::behind(bg, term.colors(), colors));
+                    let (fg, bg) = (palette::rgb(fg, term.colors(), colors), palette::rgb(bg, term.colors(), colors));
                     palette::apart(fg, bg, cell.flags.contains(Flags::DIM))
                 };
                 cell.hyperlink().as_ref() == Some(&link)

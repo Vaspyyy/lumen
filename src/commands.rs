@@ -38,6 +38,10 @@ pub enum Part {
     Prompt,
     /// What was typed at the prompt.
     Input,
+    /// What is left of a prompt that was written again further down: its
+    /// earlier copy, with what stood typed at it and what the shell printed
+    /// under it. No prompt, nothing typed, and nothing a command printed.
+    Left,
 }
 
 /// The command a cell belongs to and the part of it, if its link is one of
@@ -47,6 +51,7 @@ pub fn cell_of(uri: &str) -> Option<(u32, Part)> {
     let part = match part {
         "p" => Part::Prompt,
         "i" => Part::Input,
+        "x" => Part::Left,
         _ => return None,
     };
     Some((id.parse().ok()?, part))
@@ -67,6 +72,10 @@ pub enum Mark {
     /// What follows is to begin on a line of its own (`L`): a new prompt is
     /// on its way.
     FreshLine,
+    /// A prompt beside or within what is typed (`P`): the one at the right
+    /// of the line, or the one a further line of the command begins with.
+    /// What is typed goes on after the next `B`.
+    Aside,
     /// Not a mark of a command: a program has something to tell the user.
     Notify(Note),
 }
@@ -132,6 +141,12 @@ impl Mark {
             },
             "D" => Mark::End { exit: fields.next().and_then(|field| field.parse().ok()) },
             "L" => Mark::FreshLine,
+            // a prompt by its kind: right (`r`), continuation (`c`) and secondary (`s`)
+            // ones stand where a command is typed, any other begins one
+            "P" => match fields.find_map(|field| field.strip_prefix("k=")) {
+                Some("r" | "c" | "s") => Mark::Aside,
+                _ => Mark::Prompt,
+            },
             _ => return None,
         })
     }
@@ -366,6 +381,12 @@ pub struct Log {
     /// The shell asked for a line of its own since the last prompt began:
     /// the prompt that comes is a new one.
     fresh: bool,
+    /// The prompt that is open was asked a line of its own for. A shell that
+    /// does this says when a prompt is new, so one it writes without asking
+    /// is the open one, written again.
+    announced: bool,
+    /// A prompt beside what is typed is being written: the next `B` ends it.
+    aside: bool,
     /// The command that ran when it did. How it ended may still be said.
     over: Option<u32>,
     /// The shell's process, whose folder a command starts in.
@@ -484,6 +505,7 @@ impl Log {
                     term.linefeed();
                 }
                 self.fresh = true;
+                self.aside = false;
                 // A prompt is on its way, so what ran is over. bash says how it ended
                 // in the prompt itself. If the prompt doesn't say it (a theme has set it
                 // anew, or it is the first one of a shell inside the command), the
@@ -504,39 +526,69 @@ impl Log {
                 let typing = matches!(self.phase, Phase::Prompt | Phase::Input);
                 let before = self.current.filter(|_| typing).map(|id| typed_before(term, id)).unwrap_or_default();
                 remark(term, &before, None);
-                // A prompt that is written again (after a resize, after a completion) is
-                // still the same prompt. It is a new one if the shell asked for a line of
-                // its own before it, or if it comes below the lines of the one that was
-                // open: an empty line was sent off, or the screen was cleared and what
-                // stood on it is kept above.
+                // A prompt that is written again (after a resize, after a completion, on
+                // a cleared screen) is still the same prompt. A shell that asks for a
+                // line of its own before every new prompt has said so: without the
+                // asking, this is the open one again. Of a shell that doesn't ask, a
+                // prompt is a new one if it comes below the lines of the one that was
+                // open (an empty line was sent off), unless those were just moved off
+                // a cleared screen.
                 let line = term.grid().cursor.point.line;
-                let open = typing && !self.fresh;
-                let again =
-                    open && self.current.is_some_and(|id| owner(term, line) == Some(id) || !follows(term, line, id));
-                self.fresh = false;
+                let fresh = std::mem::take(&mut self.fresh);
+                let open = typing && !fresh;
+                let again = open
+                    && self.current.is_some_and(|id| {
+                        self.announced
+                            || owner(term, line) == Some(id)
+                            || !follows(term, line, id)
+                            || cleared(term, line, id)
+                    });
                 self.over = None;
+                self.aside = false;
                 let id = match self.current {
-                    Some(id) if again => id,
-                    _ => self.open(),
+                    Some(id) if again => {
+                        // what is left of it further up is an earlier copy, and no command
+                        forget_above(term, line, id, None);
+                        id
+                    },
+                    _ => {
+                        self.announced = fresh;
+                        self.open()
+                    },
                 };
                 self.phase = Phase::Prompt;
                 remark(term, &before, Some(id));
                 tag(term, Some((id, Part::Prompt)));
             },
+            Mark::Aside => {
+                if let (Some(id), Phase::Prompt | Phase::Input) = (self.current, self.phase) {
+                    self.aside = true;
+                    tag(term, Some((id, Part::Prompt)));
+                }
+            },
             Mark::Input => {
                 if let (Some(id), Phase::Prompt | Phase::Input) = (self.current, self.phase) {
                     self.phase = Phase::Input;
-                    // What stands before this mark on its line is the prompt. Written again
-                    // while a command is being typed (the last line of a prompt of several),
-                    // it was marked as typed.
-                    let before = typed_before(term, id);
-                    remark(term, &before, Some(id));
+                    // the end of a prompt beside what is typed: typing goes on
+                    if !std::mem::take(&mut self.aside) {
+                        // What stands before this mark on its line is the prompt. Written
+                        // again while a command is being typed (the last line of a prompt
+                        // of several), it was marked as typed.
+                        let before = typed_before(term, id);
+                        remark(term, &before, Some(id));
+                        // Nothing is typed above the line a prompt ends on: what is marked
+                        // so there is left of an earlier copy, on lines the terminal has
+                        // wrapped anew.
+                        let line = term.grid().cursor.point.line;
+                        forget_above(term, line, id, Some(Part::Input));
+                    }
                     tag(term, Some((id, Part::Input)));
                 }
             },
             Mark::Output { command } => {
                 tag(term, None);
                 self.over = None;
+                self.aside = false;
                 let id = match (self.current, self.phase) {
                     (Some(id), Phase::Prompt | Phase::Input) => id,
                     (_, Phase::Running) => {
@@ -602,13 +654,22 @@ pub fn advance<L: EventListener>(
     parser.advance(term, &bytes[done..]);
 }
 
+/// The link that marks a cell as this part of command `id`.
+fn link_of(id: u32, part: Part) -> String {
+    let part = match part {
+        Part::Prompt => 'p',
+        Part::Input => 'i',
+        Part::Left => 'x',
+    };
+    format!("{SCHEME}{id}:{part}")
+}
+
 /// Makes what is written from here on cells of this command's own lines, or
 /// plain cells again.
 fn tag<L: EventListener>(term: &mut Term<L>, cells: Option<(u32, Part)>) {
     match cells {
         Some((id, part)) => {
-            let part = if part == Part::Prompt { 'p' } else { 'i' };
-            let uri = format!("{SCHEME}{id}:{part}");
+            let uri = link_of(id, part);
             term.set_hyperlink(Some(Hyperlink { id: Some(uri.clone()), uri }));
         },
         None => {
@@ -627,7 +688,7 @@ fn tag<L: EventListener>(term: &mut Term<L>, cells: Option<(u32, Part)>) {
 fn typed_before<L>(term: &Term<L>, id: u32) -> Vec<Column> {
     let cursor = &term.grid().cursor;
     let end = cursor.point.column.0 + usize::from(cursor.input_needs_wrap);
-    let typed = format!("{SCHEME}{id}:i");
+    let typed = link_of(id, Part::Input);
     let row = &term.grid()[cursor.point.line];
     (0..end).map(Column).filter(|&column| row[column].hyperlink().is_some_and(|link| link.uri() == typed)).collect()
 }
@@ -636,7 +697,7 @@ fn typed_before<L>(term: &Term<L>, id: u32) -> Vec<Column> {
 /// `id`, or cells of no command.
 fn remark<L>(term: &mut Term<L>, columns: &[Column], id: Option<u32>) {
     let link = id.map(|id| {
-        let uri = format!("{SCHEME}{id}:p");
+        let uri = link_of(id, Part::Prompt);
         alacritty_terminal::term::cell::Hyperlink::new(Some(uri.clone()), uri)
     });
     let line = term.grid().cursor.point.line;
@@ -646,12 +707,20 @@ fn remark<L>(term: &mut Term<L>, columns: &[Column], id: Option<u32>) {
 }
 
 /// The command a line belongs to as part of its prompt or of what was typed:
-/// the number in the first mark on it.
+/// the number in the first mark of one of the two on it.
 pub fn owner<L>(term: &Term<L>, line: Line) -> Option<u32> {
-    if line < term.topmost_line() || line > term.bottommost_line() {
-        return None;
-    }
-    term.grid()[line].into_iter().find_map(|cell| cell_of(cell.hyperlink()?.uri())).map(|(id, _)| id)
+    marks_on(term, line).find(|&(_, part)| part != Part::Left).map(|(id, _)| id)
+}
+
+/// Whether something on `line` is left of a prompt that was written again.
+fn left_over<L>(term: &Term<L>, line: Line) -> bool {
+    marks_on(term, line).any(|(_, part)| part == Part::Left)
+}
+
+/// The marks on the cells of a line, from left to right.
+fn marks_on<L>(term: &Term<L>, line: Line) -> impl Iterator<Item = (u32, Part)> + '_ {
+    let within = line >= term.topmost_line() && line <= term.bottommost_line();
+    within.then(|| &term.grid()[line]).into_iter().flatten().filter_map(|cell| cell_of(cell.hyperlink()?.uri()))
 }
 
 /// Whether `line` comes below the lines of command `id`: what stands right
@@ -669,6 +738,45 @@ fn follows<L>(term: &Term<L>, line: Line, id: u32) -> bool {
         }
     }
     false
+}
+
+/// Whether the lines of command `id` were just moved off a cleared screen:
+/// `line` is the first one on the screen, and they stand right above it,
+/// where what was on a screen is kept when it is cleared.
+fn cleared<L>(term: &Term<L>, line: Line, id: u32) -> bool {
+    line == Line(0) && term.screen_lines() > 1 && owner(term, Line(-1)) == Some(id)
+}
+
+/// Marks as left over what is marked for command `id` on the lines right
+/// above `line`: all of it, or only what is marked as this `part`. They are
+/// the lines of an earlier copy of its prompt, with what stood typed at it
+/// and what the shell printed below it (a list of completions).
+fn forget_above<L>(term: &mut Term<L>, line: Line, id: u32, part: Option<Part>) {
+    let top = term.topmost_line();
+    let columns = term.columns();
+    let uri = link_of(id, Part::Left);
+    let left = alacritty_terminal::term::cell::Hyperlink::new(Some(uri.clone()), uri);
+    let mut above = line - 1;
+    // a prompt may begin with an empty line or two
+    let mut empty = 0;
+    while above >= top {
+        match owner(term, above) {
+            Some(other) if other == id => {
+                empty = 0;
+                let row = &mut term.grid_mut()[above];
+                for column in (0..columns).map(Column) {
+                    let marked = row[column].hyperlink().and_then(|link| cell_of(link.uri()));
+                    let wanted = |of: Part| of != Part::Left && part.is_none_or(|part| part == of);
+                    if marked.is_some_and(|(other, of)| other == id && wanted(of)) {
+                        row[column].set_hyperlink(Some(left.clone()));
+                    }
+                }
+            },
+            None if empty < 2 && term.grid()[above].is_clear() => empty += 1,
+            _ => break,
+        }
+        above -= 1;
+    }
 }
 
 /// The first and the last of the lines around `line` that are the command's
@@ -745,8 +853,24 @@ pub fn place_at<L>(term: &Term<L>, line: Line) -> Option<Place> {
     Some(Place { id, first, last })
 }
 
-/// The nearest command above `line` that `wanted` says yes to: the one that
-/// printed `line`, if `line` is output.
+/// The command that printed `line`, or whose own line it is. None for what
+/// is left of a prompt that was written again: no command printed that.
+pub fn printed<L>(term: &Term<L>, line: Line) -> Option<Place> {
+    let top = term.topmost_line();
+    let mut line = line;
+    while line >= top {
+        if let Some(place) = place_at(term, line) {
+            return Some(place);
+        }
+        if left_over(term, line) {
+            return None;
+        }
+        line -= 1;
+    }
+    None
+}
+
+/// The nearest command above `line` that `wanted` says yes to.
 pub fn above<L>(term: &Term<L>, line: Line, mut wanted: impl FnMut(u32) -> bool) -> Option<Place> {
     let top = term.topmost_line();
     let mut line = line - 1;
@@ -775,10 +899,14 @@ pub fn below<L>(term: &Term<L>, line: Line, mut wanted: impl FnMut(u32) -> bool)
 }
 
 /// The lines a command printed: from below its own lines to above the next
-/// prompt, without the empty lines at the end. None if it printed nothing.
+/// prompt, or to above what is left of an earlier copy of that prompt,
+/// without the empty lines at the end. None if it printed nothing.
 pub fn output<L>(term: &Term<L>, place: Place) -> Option<(Line, Line)> {
-    let start = place.last + 1;
+    let start: Line = place.last + 1;
     let mut end = below(term, place.last, |_| true).map_or(term.bottommost_line(), |next| next.first - 1);
+    if let Some(left) = (start.0..=end.0).map(Line).find(|&line| left_over(term, line)) {
+        end = left - 1;
+    }
     while end >= start && term.grid()[end].is_clear() {
         end -= 1;
     }
@@ -818,6 +946,13 @@ mod tests {
         assert_eq!(marks(&[b"\x1b]133;D\x07"]), [(8, Mark::End { exit: None })]);
         assert_eq!(marks(&[b"\x1b]133;L\x07"]), [(8, Mark::FreshLine)]);
         assert_eq!(marks(&[b"\x1b]133;D;130;aid=7\x07"]), [(18, Mark::End { exit: Some(130) })]);
+    }
+
+    #[test]
+    fn a_prompt_says_its_kind() {
+        let found = marks(&[b"\x1b]133;P;k=r\x07\x1b]133;P;k=c\x07\x1b]133;P;k=s\x07\x1b]133;P;k=i\x07\x1b]133;P\x07"]);
+        let found: Vec<Mark> = found.into_iter().map(|(_, mark)| mark).collect();
+        assert_eq!(found, [Mark::Aside, Mark::Aside, Mark::Aside, Mark::Prompt, Mark::Prompt]);
     }
 
     #[test]
@@ -888,6 +1023,12 @@ mod tests {
         fn run(&mut self, command: &str, output: &str, exit: i32) -> &mut Screen {
             self.print("\x1b]133;A\x07~> \x1b]133;B\x07").print(command).print("\r\n\x1b]133;C\x07");
             self.print(output).print(&format!("\x1b]133;D;{exit}\x07"))
+        }
+
+        /// The window is made this many cells wide.
+        fn resize(&mut self, cols: usize) -> &mut Screen {
+            self.term.resize(TermSize { cols, rows: 8, cell_width: 8., cell_height: 16. });
+            self
         }
 
         fn line(&self, line: i32) -> String {
@@ -990,27 +1131,153 @@ mod tests {
         screen.print("\r\x1b[K\r").print(prompt).print("ls");
         assert_eq!(screen.places(), [(0, 0, 0), (1, 1, 1)]);
         // The screen is cleared. What stood on it is kept above, the prompt with
-        // it: so the one bash writes on the empty screen is a new one.
+        // it. bash asked for no line of its own, so the prompt it writes on the
+        // empty screen is the open one, and the copy above is a prompt no longer.
         screen.print("\x1b[H\x1b[2J").print(prompt).print("ls");
-        assert_eq!(screen.places(), [(0, -2, -2), (1, -1, -1), (2, 0, 0)]);
-        assert_eq!(screen.line(0), "$ ls");
+        assert_eq!(screen.places(), [(0, -2, -2), (1, 0, 0)]);
+        assert_eq!((screen.line(-1), screen.line(0)), ("$ ls".to_string(), "$ ls".to_string()));
         // an empty line sent off, and Ctrl+C at the prompt: a new prompt each time
         screen.print("\x15\r\n\x1b]133;L\x07").print(prompt);
         screen.print("ls^C\r\n\x1b]133;L\x07\x1b]133;D;130\x07\x1b]133;A\x07$ \x1b]133;B\x07");
-        assert_eq!(screen.places()[2..], [(2, 0, 0), (3, 1, 1), (4, 2, 2)]);
+        assert_eq!(screen.places()[1..], [(1, 0, 0), (2, 1, 1), (3, 2, 2)]);
         // none of that ended a command
         assert_eq!(ended(&screen), (1, 0));
         screen.print("ls\r\n\x1b]133;C\x07");
-        assert_eq!(screen.command(4).text.as_deref(), Some("ls"));
-        assert_eq!(screen.command(2).status(), Status::Typed);
+        assert_eq!(screen.command(3).text.as_deref(), Some("ls"));
+        assert_eq!(screen.command(1).status(), Status::Typed);
         // the command is over when bash asks for the prompt's line, and the prompt says how it ended
         screen.print("ls: no such thing\r\n\x1b]133;L\x07");
         assert!(screen.log.lock().unwrap().running().is_none());
         assert_eq!(ended(&screen), (1, 0));
         screen.print("\x1b]133;D;2\x07\x1b]133;A\x07$ \x1b]133;B\x07");
-        assert_eq!(screen.command(4).status(), Status::Ended(Some(2)));
-        assert!(!screen.command(4).left);
+        assert_eq!(screen.command(3).status(), Status::Ended(Some(2)));
+        assert!(!screen.command(3).left);
         assert_eq!(ended(&screen), (2, 1));
+    }
+
+    /// bash 5.3 with a list of completions, as captured.
+    #[test]
+    fn a_list_of_completions_under_a_prompt() {
+        let mut screen = Screen::new();
+        let prompt = "\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07";
+        screen.print("\x1b]133;L\x07\x1b]133;A\x07$ \x1b]133;B\x07ls foo");
+        // the list is printed below the prompt, and the prompt written again below the list
+        screen.print("\r\nfoo1    foo2    foobar\r\n").print(prompt).print("ls foo");
+        // the prompt is where it was written last: its copy above and the list are no command
+        assert_eq!(screen.places(), [(0, 2, 2)]);
+        assert_eq!((owner(&screen.term, Line(0)), owner(&screen.term, Line(1))), (None, None));
+        assert_eq!(screen.line(0), "$ ls foo");
+        screen.print("bar\r\n\x1b]133;C\x07");
+        assert_eq!(screen.command(0).text.as_deref(), Some("ls foobar"));
+        // the list belongs to nothing that ran
+        assert_eq!(above(&screen.term, Line(2), |_| true), None);
+    }
+
+    #[test]
+    fn what_is_left_of_a_prompt_is_not_what_the_command_before_printed() {
+        let mut screen = Screen::new();
+        let prompt = "\x1b]133;L\x07\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07";
+        screen.print(prompt).print("seq 2\r\n\x1b]133;C\x071\r\n2\r\n").print(prompt).print("ls foo");
+        // a list of completions, and the prompt again below it
+        let again = "\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07";
+        screen.print("\r\nfoo1    foo2\r\n").print(again).print("ls foo");
+        assert_eq!(screen.places(), [(0, 0, 0), (1, 5, 5)]);
+        let first = place_at(&screen.term, Line(0)).unwrap();
+        assert_eq!(text(&screen.term, output(&screen.term, first).unwrap()), "1\n2");
+        // the output was printed by the command, the earlier prompt and the list by none
+        assert_eq!(printed(&screen.term, Line(2)).map(|place| place.id), Some(0));
+        assert_eq!(printed(&screen.term, Line(3)), None);
+        assert_eq!(printed(&screen.term, Line(4)), None);
+        assert_eq!(printed(&screen.term, Line(5)).map(|place| place.id), Some(1));
+        // going from command to command passes over it
+        assert_eq!(above(&screen.term, Line(5), |_| true).map(|place| place.id), Some(0));
+        // the same with a screen that was cleared: the prompt above it is no output
+        let mut screen = Screen::new();
+        screen.print(prompt).print("seq 2\r\n\x1b]133;C\x071\r\n2\r\n").print(prompt).print("ls");
+        screen.print("\x1b[H\x1b[2J").print(again).print("ls");
+        assert_eq!(screen.places(), [(0, -4, -4), (1, 0, 0)]);
+        let first = place_at(&screen.term, Line(-4)).unwrap();
+        assert_eq!(text(&screen.term, output(&screen.term, first).unwrap()), "1\n2");
+    }
+
+    /// bash 5.3 in a window that is made narrower, as captured.
+    #[test]
+    fn a_prompt_in_a_window_made_narrower() {
+        let mut screen = Screen::new();
+        let prompt = "\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07";
+        let typed = "echo aaaaaaaaaaaaaaaaaaaa";
+        screen.print("\x1b]133;L\x07\x1b]133;A\x07$ \x1b]133;B\x07").print(typed);
+        // The terminal wraps the line anew, into two. bash knows of one: it erases
+        // the one the cursor is on, and writes prompt and command again from there.
+        screen.resize(15).print("\r\x1b[K\r").print(prompt).print(typed);
+        assert_eq!(screen.line(-1), "$ echo aaaaaaaa");
+        assert_eq!(screen.line(0), "$ echo aaaaaaaa");
+        // what is left of the first copy is no prompt, and nothing typed
+        assert_eq!(owner(&screen.term, Line(-1)), None);
+        assert_eq!(screen.places(), [(0, 0, 1)]);
+        screen.print("\r\n\x1b]133;C\x07");
+        assert_eq!(screen.command(0).text.as_deref(), Some(typed));
+        // a prompt of two lines, of which bash writes only the last one again
+        let mut screen = Screen::new();
+        screen.print("\x1b]133;L\x07\x1b]133;A\x07~/code\r\r\n$ \x1b]133;B\x07").print(typed);
+        screen.resize(15).print("\r\x1b[K\r$ \x1b]133;B\x07").print(typed).print("\r\n\x1b]133;C\x07");
+        assert_eq!(screen.command(0).text.as_deref(), Some(typed));
+        // its first line, what is left of the second one, and the second one as it is now
+        assert_eq!(screen.places(), [(0, -1, 2)]);
+    }
+
+    /// zsh 5.9 with a prompt at the right, as captured.
+    #[test]
+    fn a_prompt_at_the_right_of_the_line() {
+        let mut screen = Screen::new();
+        screen.print("\x1b]133;L\x07\r\x1b[J\x1b]133;A\x07% \x1b]133;B\x07\x1b[K");
+        screen.print("\x1b[20C\x1b]133;P;k=r\x07[right]\x1b]133;B\x07\x1b[27D").print("ls");
+        assert_eq!(screen.line(0), "% ls                  [right]");
+        // a command too long for zsh to name is read from the screen: without the prompt beside it
+        screen.print("\r\r\n\x1b]133;C\x07");
+        assert_eq!(screen.command(0).text.as_deref(), Some("ls"));
+        // the right prompt is on a line of its own once the window is narrower, and still the command's
+        screen.print("a\r\n\x1b]133;D;0\x07").resize(20);
+        assert_eq!((screen.line(-1), screen.line(0)), ("% ls".to_string(), "  [right]".to_string()));
+        assert_eq!(screen.places(), [(0, -1, 0)]);
+        let first = place_at(&screen.term, Line(0)).unwrap();
+        assert_eq!(text(&screen.term, output(&screen.term, first).unwrap()), "a");
+    }
+
+    #[test]
+    fn a_command_of_several_lines_with_a_prompt_on_each() {
+        let mut screen = Screen::new();
+        // bash, whose further lines begin with PS2
+        let more = "\x1b]133;P;k=c\x07> \x1b]133;B\x07";
+        screen.print("\x1b]133;L\x07\x1b]133;A\x07$ \x1b]133;B\x07for x in 1 2\r\n");
+        screen.print(more).print("do echo $x\r\n").print(more);
+        // the line that is open is written again, as after a resize
+        screen.print("\r\x1b[K\r").print(more).print("done\r\n\x1b]133;C\x07");
+        assert_eq!(screen.command(0).text.as_deref(), Some("for x in 1 2\ndo echo $x\ndone"));
+        assert_eq!(screen.places(), [(0, 0, 2)]);
+        // a prompt of that kind with no prompt open says nothing
+        let mut screen = Screen::new();
+        screen.print(more).print("x");
+        assert_eq!(screen.places(), []);
+    }
+
+    /// fish 4.9, which asks for no line of its own before a prompt, as captured.
+    #[test]
+    fn a_shell_that_does_not_say_when_a_prompt_is_new() {
+        let mut screen = Screen::new();
+        let prompt = "\x1b]133;A\x07> \x1b]133;B\x07";
+        screen.print(prompt).print("echo abc");
+        // the screen is cleared: what stood on it is kept above, and the prompt is written again
+        screen.print("\x1b[H\x1b[2J").print(prompt).print("echo abc");
+        assert_eq!(screen.places(), [(0, 0, 0)]);
+        assert_eq!(screen.line(-1), "> echo abc");
+        // an empty line sent off is known by where the next prompt stands
+        screen.print("\x15\r\n").print(prompt);
+        assert_eq!(screen.places(), [(0, 0, 0), (1, 1, 1)]);
+        // a command, and the screen cleared by one: the prompt after it is a new one
+        screen.print("clear\r\n\x1b]133;C\x07\x1b[H\x1b[2J\x1b]133;D;0\x07").print(prompt);
+        assert_eq!(screen.places().last(), Some(&(2, 0, 0)));
+        assert_eq!(screen.command(1).text.as_deref(), Some("clear"));
     }
 
     #[test]
@@ -1074,10 +1341,10 @@ mod tests {
         screen.print("\x1b]133;L\x07@\x1b]133;A\x07$ \x1b]133;B\x07true\r\n\x1b]133;C\x07");
         screen.print("\x1b]133;L\x07@\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07ls");
         screen.print("\x1b[H\x1b[2J@\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07ls");
-        // the prompt on the cleared screen is a new one, as it is without the mode
-        assert_eq!(screen.places(), [(0, -2, -2), (1, -1, -1), (2, 0, 0)]);
+        // the prompt on the cleared screen is the open one, as it is without the mode
+        assert_eq!(screen.places(), [(0, -2, -2), (1, 0, 0)]);
         screen.print("\r\n\x1b]133;C\x07");
-        assert_eq!(screen.command(2).text.as_deref(), Some("ls"));
+        assert_eq!(screen.command(1).text.as_deref(), Some("ls"));
     }
 
     #[test]
@@ -1362,6 +1629,7 @@ mod tests {
     fn links_of_marks() {
         assert_eq!(cell_of("lumen-mark:7:p"), Some((7, Part::Prompt)));
         assert_eq!(cell_of("lumen-mark:12:i"), Some((12, Part::Input)));
+        assert_eq!(cell_of("lumen-mark:3:x"), Some((3, Part::Left)));
         assert_eq!(cell_of("lumen-mark:7"), None);
         assert_eq!(cell_of("lumen-mark:x:p"), None);
         assert_eq!(cell_of("lumen-image:7:0:0"), None);

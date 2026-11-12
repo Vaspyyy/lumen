@@ -76,15 +76,22 @@ pub fn drawn(fg: Color, bg: Color, flags: Flags, colors: &Colors) -> (Color, Col
 }
 
 /// Whether a cell's background is the pane's own. Nothing is painted for
-/// it, so what shows there is the theme's background, and not a color a
-/// program has set for it since (OSC 11).
+/// such a cell: what shows there is what the pane stands on ([`ground`]).
 pub fn bare(bg: Color) -> bool {
     bg == Color::Named(NamedColor::Background)
 }
 
-/// The color that is on the screen behind a cell's text.
-pub fn behind(bg: Color, overrides: &Overrides, colors: &Colors) -> Rgb {
-    if bare(bg) { colors.primary.background } else { rgb(bg, overrides, colors) }
+/// The background a program has set for the whole pane (OSC 11), where it
+/// is not the theme's. The pane is filled with it, under everything else.
+pub fn ground(overrides: &Overrides, colors: &Colors) -> Option<Rgb> {
+    let set = overrides[NamedColor::Background].map(|rgb| Rgb(rgb.r, rgb.g, rgb.b));
+    set.filter(|&set| set != colors.primary.background)
+}
+
+/// The color of text nothing else is said about: the theme's, or the one a
+/// program has set (OSC 10).
+pub fn ink(overrides: &Overrides, colors: &Colors) -> Rgb {
+    rgb(Color::Named(NamedColor::Foreground), overrides, colors)
 }
 
 /// Whether text in one color can be told from the color behind it. Two
@@ -124,12 +131,30 @@ mod tests {
     }
 
     #[test]
+    fn what_a_program_sets_for_the_whole_pane() {
+        let colors = Colors::default();
+        let mut overrides = Overrides::default();
+        assert_eq!(ground(&overrides, &colors), None);
+        assert_eq!(ink(&overrides, &colors), colors.primary.foreground);
+        // a light theme, set from inside the terminal: OSC 11 and OSC 10
+        overrides[NamedColor::Background] = Some(alacritty_terminal::vte::ansi::Rgb { r: 250, g: 244, b: 237 });
+        overrides[NamedColor::Foreground] = Some(alacritty_terminal::vte::ansi::Rgb { r: 87, g: 82, b: 121 });
+        assert_eq!(ground(&overrides, &colors), Some(Rgb(250, 244, 237)));
+        assert_eq!(ink(&overrides, &colors), Rgb(87, 82, 121));
+        // the theme's own background, set again, is nothing to paint
+        let theme = colors.primary.background;
+        overrides[NamedColor::Background] =
+            Some(alacritty_terminal::vte::ansi::Rgb { r: theme.0, g: theme.1, b: theme.2 });
+        assert_eq!(ground(&overrides, &colors), None);
+    }
+
+    #[test]
     fn text_that_is_not_seen_on_its_background() {
         let colors = Colors::default();
         let overrides = Overrides::default();
         let seen = |fg: Color, bg: Color, flags: Flags| {
             let (fg, bg) = drawn(fg, bg, flags, &colors);
-            apart(rgb(fg, &overrides, &colors), super::behind(bg, &overrides, &colors), flags.contains(Flags::DIM))
+            apart(rgb(fg, &overrides, &colors), rgb(bg, &overrides, &colors), flags.contains(Flags::DIM))
         };
         let (text, behind) = (Color::Named(NamedColor::Foreground), Color::Named(NamedColor::Background));
         assert!(seen(text, behind, Flags::empty()));
@@ -148,20 +173,20 @@ mod tests {
         assert!(!seen(like(0), behind, Flags::empty()));
         assert!(!seen(like(9), behind, Flags::empty()));
         assert!(seen(like(60), behind, Flags::empty()));
-        // A background a program has set since is not painted: the theme's is still
-        // what is behind the text, so text in the theme's is not seen, and text in
-        // the one that was set is.
+        // A background a program has set since is what the pane is filled with: text
+        // in that color is not seen on it, and text in the theme's is.
+        let white = alacritty_terminal::vte::ansi::Rgb { r: 255, g: 255, b: 255 };
         let mut changed = Overrides::default();
-        changed[NamedColor::Background] = Some(alacritty_terminal::vte::ansi::Rgb { r: 255, g: 255, b: 255 });
-        changed[1] = Some(alacritty_terminal::vte::ansi::Rgb { r: ground.0, g: ground.1, b: ground.2 });
-        let white = Color::Spec(alacritty_terminal::vte::ansi::Rgb { r: 255, g: 255, b: 255 });
+        changed[NamedColor::Background] = Some(white);
+        changed[1] = Some(white);
         let on = |fg: Color, bg: Color, flags: Flags| {
             let (fg, bg) = drawn(fg, bg, flags, &colors);
-            apart(rgb(fg, &changed, &colors), super::behind(bg, &changed, &colors), false)
+            apart(rgb(fg, &changed, &colors), rgb(bg, &changed, &colors), false)
         };
-        assert!(!on(like(0), behind, Flags::empty()));
-        assert!(on(white, behind, Flags::empty()));
-        // inverse text is drawn in the color that was set, on a background that is painted
+        let white = Color::Spec(white);
+        assert!(on(like(0), behind, Flags::empty()));
+        assert!(!on(white, behind, Flags::empty()));
+        // inverse text is drawn in the color that was set, on a background of its own
         assert!(seen(white, behind, Flags::INVERSE));
         assert!(!on(white, behind, Flags::INVERSE));
         assert!(on(like(60), behind, Flags::INVERSE));

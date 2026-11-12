@@ -23,6 +23,7 @@ The better way to find out what a terminal can do is to ask it. lumen answers th
 | | |
 | --- | --- |
 | Colors | The 16 colors of the theme, the 256 numbered ones, and true color |
+| Setting colors | A program can set colors anew for its pane: the 256 numbered ones (OSC 4), the text (OSC 10), the background (OSC 11) and the cursor (OSC 12). OSC 104, 110, 111 and 112 set them back. The background fills the whole pane |
 | Text styles | Bold, italic, dim, inverse, hidden, strikethrough; straight and curly underlines, in a color of their own. A double underline is drawn as a thicker line, dotted and dashed ones as a straight one |
 | Wide characters | Characters that take two cells, such as CJK and most emoji |
 | Links | OSC 8. See [Files and links](/docs/files-and-links/) |
@@ -75,13 +76,16 @@ A shell tells lumen where its commands are with the marks of OSC 133, each as `E
 | `C` | The command was sent off, its output begins |
 | `D` | The command has ended. `D;0` gives its exit status |
 | `L` | What follows begins on a line of its own: if the cursor is not at the start of a line, lumen begins a new one |
+| `P` | A prompt begins here, of the kind `k=` names. `P` and `P;k=i` say what `A` says. `P;k=r`, `P;k=c` and `P;k=s` begin a prompt beside what is typed: at the right of the line, or before a further line of the command |
 
 Anything after a further `;` is left alone, with one exception: `C;cmdline_url=TEXT` gives the command's text, percent-encoded, as fish sends it. Without it, lumen reads the text from the screen, between `B` and `C`.
 
 `B` can be left out. What was written before a `B` on its line is not part of what was typed.
 
 - **`L` is for a shell that writes its prompt where the output stopped**, as bash does. Send it before the prompt and before anything else the shell writes on the prompt's line. `A` itself moves nothing. A command that runs when an `L` comes is over, and a `D` that follows before the next `A` or `C` says how it ended.
-- **An `A` while a prompt is open** is that prompt written again, as after a resize: it stays the same command. That holds on a line that is already the open prompt's, and anywhere else that is not below it. It is a new prompt when it comes below the lines of the open one, with at most two empty lines between, or after an `L`.
+- **An `A` while a prompt is open** is that prompt written again, as after a resize or under a list of completions: it stays the same command. An `A` after an `L` is always a new prompt. If the open prompt came after an `L`, the shell is one that says when a prompt is new, and every `A` without an `L` is the open prompt again. Of a shell that sends no `L`, an `A` is the open prompt again on a line that is already that prompt's, anywhere else that is not below it, and on the first line of a screen that was just cleared. It is a new prompt when it comes below the lines of the open one, with at most two empty lines between.
+- **What is left of a prompt that was written again** belongs to no command: the lines of its earlier copy right above it, with what stood typed there and what the shell printed under it. They are no prompt, and no output of the command before.
+- **A prompt of the kind `r`, `c` or `s`** is no part of the command. What is written from the `P` to the next `B` is not read as typed, and what is typed goes on after that `B`. Where no prompt is open, such a `P` says nothing. Send these only where `TERM_PROGRAM` is `lumen`: to a terminal that doesn't know them, the `B` that ends one is where the command begins.
 - **A `D` where no command runs is ignored**, unless it is the one that follows an `L`. So a shell may say it with every prompt it writes.
 - **An `A` or a `C` while a command runs**, with no `D` before it, is taken for a shell inside that command: the command is no longer followed.
 - On the alternate screen the marks are ignored.
