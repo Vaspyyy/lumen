@@ -949,7 +949,10 @@ impl Prewarmed {
         compositor_gpu: Option<CompositorGpuHint>,
     ) -> anyhow::Result<(WgpuContext, wgpu::Surface<'static>)> {
         let info = self.adapter.get_info();
+        // ZED_DEVICE_ID outranks the compositor's GPU, as in `sort_adapters`
+        let chosen = WgpuContext::device_id_filter() == Some(info.device) && info.device != 0;
         if let Some(hint) = compositor_gpu
+            && !chosen
             && (info.vendor, info.device) != (hint.vendor_id, hint.device_id)
         {
             anyhow::bail!("the compositor draws on another GPU than {}", info.name);
