@@ -107,6 +107,8 @@ pub struct Terminal {
     pub size: TermSize,
     title: Option<String>,
     shell_pid: u32,
+    /// The environment of the launch it was started for, if not lumen's own.
+    pub env: Option<Env>,
     pub exited: bool,
     _events: Task<()>,
 }
@@ -119,13 +121,42 @@ pub struct Spawn {
     pub cwd: Option<PathBuf>,
     /// A program and its arguments, instead of the shell.
     pub command: Option<Vec<String>>,
-    /// The environment of the launch it is for, laid over lumen's own: see [`crate::instance`].
-    /// None for lumen's own environment.
+    /// The environment of the launch it is for, in place of lumen's own: see
+    /// [`crate::instance`]. None for lumen's own environment.
     pub env: Option<Env>,
 }
 
 /// An environment, sorted by name. Shared: every terminal of a window gets the same one.
 pub type Env = std::sync::Arc<Vec<(String, String)>>;
+
+/// What the PTY sets in a terminal's environment itself, whatever lumen's or the launch's
+/// has: lumen's own variables, and what alacritty_terminal adds.
+const SET_HERE: &[&str] =
+    &["TERM", "COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "USER", "HOME", "WINDOWID", "ALACRITTY_WINDOW_ID"];
+
+/// The program a terminal runs. For a launch's terminal, its shell is the launch's
+/// `$SHELL`, not lumen's (a daemon has the one systemd gave it), and what lumen's own
+/// environment has that the launch's doesn't is taken out with `env -u`: the PTY can only
+/// add to the environment it inherits from lumen.
+fn program(spawn: &Spawn, config: &Config, ours: impl Iterator<Item = String>) -> Option<Shell> {
+    let (program, args) = match &spawn.command {
+        Some(argv) if !argv.is_empty() => (Some(argv[0].clone()), argv[1..].to_vec()),
+        _ => (config.shell.clone(), Vec::new()),
+    };
+    let Some(env) = &spawn.env else { return program.map(|program| Shell::new(program, args)) };
+    let theirs = |name: &str| env.iter().find(|(key, _)| key == name).map(|(_, value)| value);
+    let program = program.or_else(|| theirs("SHELL").filter(|shell| !shell.is_empty()).cloned());
+    let unset: Vec<String> = ours.filter(|name| theirs(name).is_none() && !SET_HERE.contains(&name.as_str())).collect();
+    if unset.is_empty() {
+        return program.map(|program| Shell::new(program, args));
+    }
+    let program = program.or_else(|| std::env::var("SHELL").ok()).unwrap_or_else(|| "/bin/sh".into());
+    let mut wrapped: Vec<String> = unset.into_iter().flat_map(|name| ["-u".to_string(), name]).collect();
+    wrapped.push("--".into());
+    wrapped.push(program);
+    wrapped.extend(args);
+    Some(Shell::new("/usr/bin/env".into(), wrapped))
+}
 
 /// A terminal whose program is running, before it is an entity.
 pub struct Started {
@@ -135,6 +166,7 @@ pub struct Started {
     io: Sender,
     size: TermSize,
     shell_pid: u32,
+    env: Option<Env>,
     events: UnboundedReceiver<TermEvent>,
 }
 
@@ -145,10 +177,8 @@ impl Terminal {
     /// the pane is first drawn, but a program that prints before that has
     /// its output laid out for this size.
     pub fn start(spawn: Spawn, config: &Config, size: TermSize) -> std::io::Result<Started> {
-        let shell = match spawn.command {
-            Some(mut argv) if !argv.is_empty() => Some(Shell::new(argv.remove(0), argv)),
-            _ => config.shell.clone().map(|program| Shell::new(program, Vec::new())),
-        };
+        let shell = program(&spawn, config, std::env::vars_os().filter_map(|(name, _)| name.into_string().ok()));
+        let launch_env = spawn.env.clone();
         let mut env: HashMap<String, String> = spawn.env.iter().flat_map(|env| env.iter().cloned()).collect();
         env.insert("TERM".into(), "xterm-256color".into());
         env.insert("COLORTERM".into(), "truecolor".into());
@@ -167,11 +197,11 @@ impl Terminal {
         let io_loop = IoLoop::new(term.clone(), listener, pty, images.clone(), commands.clone(), cell)?;
         let io = io_loop.sender();
         io_loop.spawn();
-        Ok(Started { term, images, commands, io, size, shell_pid, events: rx })
+        Ok(Started { term, images, commands, io, size, shell_pid, env: launch_env, events: rx })
     }
 
     pub fn new(started: Started, cx: &mut Context<Self>) -> Self {
-        let Started { term, images, commands, io, size, shell_pid, events: mut rx } = started;
+        let Started { term, images, commands, io, size, shell_pid, env, events: mut rx } = started;
         let events = cx.spawn(async move |this, cx| {
             while let Some(first) = rx.next().await {
                 // output arrives in bursts: take what is there, redraw once
@@ -199,6 +229,7 @@ impl Terminal {
             size,
             title: None,
             shell_pid,
+            env,
             exited: false,
             _events: events,
         }
@@ -380,5 +411,43 @@ fn term_options(config: &Config) -> TermConfig {
 impl Drop for Terminal {
     fn drop(&mut self) {
         self.io.send(Msg::Shutdown);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ours() -> impl Iterator<Item = String> {
+        ["PATH", "HOME", "INVOCATION_ID", "TERM", "VIRTUAL_ENV"].into_iter().map(String::from)
+    }
+
+    fn env(vars: &[(&str, &str)]) -> Option<Env> {
+        Some(Env::new(vars.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect()))
+    }
+
+    #[test]
+    fn lumens_own_terminals_run_as_asked() {
+        let config = Config::default();
+        assert_eq!(program(&Spawn::default(), &config, ours()), None);
+        let spawn = Spawn { command: Some(vec!["htop".into(), "-d".into(), "5".into()]), ..Default::default() };
+        assert_eq!(program(&spawn, &config, ours()), Some(Shell::new("htop".into(), vec!["-d".into(), "5".into()])));
+    }
+
+    #[test]
+    fn a_launch_gets_its_own_shell_and_nothing_of_lumens_environment() {
+        let config = Config::default();
+        let spawn = Spawn { env: env(&[("PATH", "/bin"), ("SHELL", "/usr/bin/fish")]), ..Default::default() };
+        let unset = |names: &[&str], program: &str| {
+            let mut args: Vec<String> = names.iter().flat_map(|name| ["-u".to_string(), name.to_string()]).collect();
+            args.extend(["--".to_string(), program.to_string()]);
+            Some(Shell::new("/usr/bin/env".into(), args))
+        };
+        // HOME and TERM are set by the PTY itself; the rest of lumen's own is taken out
+        assert_eq!(program(&spawn, &config, ours()), unset(&["INVOCATION_ID", "VIRTUAL_ENV"], "/usr/bin/fish"));
+        // nothing to take out: the launch's shell, as it is
+        let spawn = Spawn { env: env(&[("PATH", "/bin"), ("SHELL", "/usr/bin/fish")]), ..Default::default() };
+        let only = ["PATH".to_string()].into_iter();
+        assert_eq!(program(&spawn, &config, only), Some(Shell::new("/usr/bin/fish".into(), Vec::new())));
     }
 }

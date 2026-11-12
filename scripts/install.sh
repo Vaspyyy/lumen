@@ -9,7 +9,8 @@ cargo install --path . --locked
 program=${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin/lumen
 data=${XDG_DATA_HOME:-$HOME/.local/share}
 install -Dm644 packaging/lumen.desktop "$data/applications/lumen.desktop"
-if [ "${LUMEN_DAEMON:-1}" != 0 ]; then
+# without systemd for this user (over SSH, say) there is nothing to turn it on with
+if [ "${LUMEN_DAEMON:-1}" != 0 ] && command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
     units=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
     # a service you turned off stays off
     off=
@@ -17,12 +18,13 @@ if [ "${LUMEN_DAEMON:-1}" != 0 ]; then
         off=1
     fi
     mkdir -p "$units"
-    sed "s|^ExecStart=/usr/bin/lumen |ExecStart=\"$program\" |" packaging/lumen.service >"$units/lumen.service"
-    if command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
-        systemctl --user daemon-reload
-        # a daemon from before makes way for the new program by itself, when it has no window open
-        [ -n "$off" ] || systemctl --user enable --now lumen.service
-    fi
+    LUMEN_EXEC=$program awk '
+        /^ExecStart=\/usr\/bin\/lumen / { sub(/^ExecStart=\/usr\/bin\/lumen/, ""); print "ExecStart=\"" ENVIRON["LUMEN_EXEC"] "\"" $0; next }
+        { print }
+    ' packaging/lumen.service >"$units/lumen.service"
+    systemctl --user daemon-reload || true
+    # a daemon from before makes way for the new program by itself, once it has no window open
+    [ -n "$off" ] || systemctl --user enable --now lumen.service || echo "the service could not be started: systemctl --user status lumen says why"
 fi
 for size in 32 48 64 128 256 512; do
     install -Dm644 "assets/icon/lumen-$size.png" "$data/icons/hicolor/${size}x${size}/apps/lumen.png"

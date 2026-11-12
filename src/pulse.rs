@@ -326,6 +326,21 @@ pub fn begin_after_first_frame(cx: &mut App) {
     .detach();
 }
 
+/// Stops pulse until the next window's first frame: the daemon's last window has closed,
+/// and a lumen that waits looks at nothing.
+pub fn pause(cx: &mut App) {
+    let Some(Pulse(monitor)) = cx.try_global::<Pulse>() else { return };
+    monitor.clone().update(cx, |monitor, cx| {
+        monitor.ready = false;
+        monitor.failed = 0;
+        monitor.again = None;
+        monitor.watch = None;
+        monitor.reading = None;
+        monitor.uses.clear();
+        cx.notify();
+    });
+}
+
 /// Lets pulse start, the first time it is called.
 fn begin(cx: &mut App) {
     let Some(Pulse(monitor)) = cx.try_global::<Pulse>() else { return };

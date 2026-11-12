@@ -627,10 +627,14 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Where a terminal opened from here starts: the folder of the active pane.
+    /// Where a terminal opened from here starts: the folder of the active pane, with its
+    /// environment.
     fn spawn_here(&self, cx: &App) -> Spawn {
-        let cwd = self.tabs.get(self.active).and_then(|tab| tab.active.read(cx).terminal.read(cx).cwd());
-        Spawn { cwd, command: None, env: self.env.clone() }
+        let Some(tab) = self.tabs.get(self.active) else {
+            return Spawn { cwd: None, command: None, env: self.env.clone() };
+        };
+        let terminal = tab.active.read(cx).terminal.read(cx);
+        Spawn { cwd: terminal.cwd(), command: None, env: terminal.env.clone() }
     }
 
     /// What `Ctrl+Shift+N` opens from here: a window in the folder this one was opened in,

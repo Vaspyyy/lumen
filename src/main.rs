@@ -183,9 +183,25 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Started, i32> {
     Ok(Started { spawn, how })
 }
 
+/// Why a window wasn't opened.
+pub enum Unopened {
+    /// The window itself: the display or the GPU.
+    Window(String),
+    /// Its terminal: the program or the folder.
+    Shell(String),
+}
+
+impl std::fmt::Display for Unopened {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Unopened::Window(why) | Unopened::Shell(why) => f.write_str(why),
+        }
+    }
+}
+
 /// Opens a window with a terminal: the first one of a lumen, `Ctrl+Shift+N`, or one a
 /// launch asked for.
-pub fn open_window(spawn: Spawn, cx: &mut App) -> Result<WindowHandle<Workspace>, String> {
+pub fn open_window(spawn: Spawn, cx: &mut App) -> Result<WindowHandle<Workspace>, Unopened> {
     let config = cx.global::<Config>().clone();
     // room for the configured grid at a typical cell size; the grid follows the window from then on
     let bounds = Bounds::centered(
@@ -216,10 +232,10 @@ pub fn open_window(spawn: Spawn, cx: &mut App) -> Result<WindowHandle<Workspace>
             })
         }
     });
-    let window = opened.map_err(|e| format!("can't open a window: {e}"))?;
+    let window = opened.map_err(|e| Unopened::Window(format!("can't open a window: {e}")))?;
     if let Some(e) = failed.take() {
         let _ = window.update(cx, |_, window, _| window.remove_window());
-        return Err(format!("can't start the shell: {e}"));
+        return Err(Unopened::Shell(format!("can't start the shell: {e}")));
     }
     instance::note_active(window.into(), cx);
     pulse::begin_after_first_frame(cx);
@@ -307,10 +323,7 @@ fn main() {
                 return;
             }
             if daemon {
-                // back to waiting: off the display, which may end with its session, and with
-                // a GPU started for the next window
-                cx.request_windowing(WindowingRequest::Headless).detach();
-                gpui_wgpu::prewarm();
+                instance::wait_without_window(cx);
             } else {
                 cx.quit();
             }

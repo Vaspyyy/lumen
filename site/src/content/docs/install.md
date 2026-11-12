@@ -55,7 +55,7 @@ One command for every system with a C library as new as the one in Ubuntu 22.04 
 curl -fsSL https://vaspyyy.github.io/lumen/install.sh | sh
 ```
 
-This needs no root. The script fetches the newest release, checks that it arrived whole against the checksum in the release, and puts the program into `~/.local/bin` and the launcher entry and the icons into `~/.local/share`. It also installs the [daemon](#the-daemon)'s service into `~/.config/systemd/user` and turns it on; `LUMEN_DAEMON=0` in front of `sh` leaves it out. If you like to know what you run, [read it first](https://github.com/Vaspyyy/lumen/blob/main/packaging/install.sh): it is about 300 lines.
+This needs no root. The script fetches the newest release, checks that it arrived whole against the checksum in the release, and puts the program into `~/.local/bin` and the launcher entry and the icons into `~/.local/share`. Where systemd runs for your user, it also installs the [daemon](#the-daemon)'s service into `~/.config/systemd/user` and turns it on; `LUMEN_DAEMON=0` in front of `sh` leaves it out. If you like to know what you run, [read it first](https://github.com/Vaspyyy/lumen/blob/main/packaging/install.sh): it is about 300 lines.
 
 lumen needs a few libraries that a desktop has anyway:
 
@@ -110,7 +110,7 @@ Started again while it runs, lumen opens a new tab in the window you used last. 
 systemctl --user enable --now lumen
 ```
 
-`systemctl --user disable --now lumen` turns it off again. [Opening lumen again](/docs/launching/#the-daemon-a-quick-first-window) says what it costs and how it behaves.
+`systemctl --user disable --now lumen` turns it off again, and closes the windows it has open. [Opening lumen again](/docs/launching/#the-daemon-a-quick-first-window) says what it costs and how it behaves.
 
 ## Update
 
@@ -128,6 +128,8 @@ A lumen that is running keeps running the old version until you close its window
 | `pacman` | `sudo pacman -R lumen-terminal` |
 | The script | `curl -fsSL https://vaspyyy.github.io/lumen/install.sh \| sh -s -- --uninstall`. This stops the daemon and removes its service too |
 | A build from source | see [Remove a build from source](#remove-a-build-from-source) |
+
+If you turned the [daemon](#the-daemon) on for a package, turn it off before you remove the package: `systemctl --user disable --now lumen`. The install script's `--uninstall` does that itself.
 
 Your settings are in `~/.config/lumen`. Remove that folder too if you want nothing left.
 
@@ -183,7 +185,7 @@ The script does two things:
 
 1. It builds lumen and puts the program into Cargo's bin folder, `~/.cargo/bin`. rustup adds that folder to your `PATH`.
 2. It adds the launcher entry and the icons to `~/.local/share`, so lumen shows up in your desktop's application menu.
-3. It installs the [daemon](#the-daemon)'s service into `~/.config/systemd/user` and turns it on, unless `LUMEN_DAEMON=0` is in front of it.
+3. Where systemd runs for your user, it installs the [daemon](#the-daemon)'s service into `~/.config/systemd/user` and turns it on, unless `LUMEN_DAEMON=0` is in front of it.
 
 To update, get the newest source with `git pull` and run the script again.
 
@@ -200,9 +202,12 @@ Nothing is copied anywhere. The first build takes the longest.
 ### Remove a build from source
 
 ```sh
-systemctl --user disable --now lumen
-rm ~/.config/systemd/user/lumen.service
 cargo uninstall lumen
 rm ~/.local/share/applications/lumen.desktop
 rm ~/.local/share/icons/hicolor/*/apps/lumen.png
+systemctl --user disable lumen
+rm ~/.config/systemd/user/lumen.service
+systemctl --user stop lumen
 ```
+
+The last line ends the daemon and closes its windows, so it comes last.

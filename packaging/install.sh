@@ -115,15 +115,14 @@ uninstall() {
             other=1
         fi
     fi
+    stop_daemon=
     if [ -e "$unit" ]; then
         if our_unit "$unit"; then
             if user_systemd; then
-                systemctl --user disable --now lumen.service >/dev/null 2>&1 || true
+                systemctl --user disable lumen.service >/dev/null 2>&1 || true
+                stop_daemon=1
             fi
             rm -f -- "$unit"
-            if user_systemd; then
-                systemctl --user daemon-reload || true
-            fi
             found=1
         else
             say "$unit belongs to another program of the same name. It stays."
@@ -135,6 +134,11 @@ uninstall() {
         say "lumen is removed. Your settings are still in ${XDG_CONFIG_HOME:-$HOME/.config}/lumen."
     elif [ -z "$other" ]; then
         say "There is no lumen in $bin_dir. If it went into another folder, name it with LUMEN_BIN_DIR."
+    fi
+    # last: this may run in one of the daemon's windows, which closes with it
+    if [ -n "$stop_daemon" ]; then
+        systemctl --user daemon-reload || true
+        systemctl --user stop lumen.service >/dev/null 2>&1 || true
     fi
 }
 
@@ -267,8 +271,14 @@ install_daemon() {
         say "$unit belongs to another program of the same name. It stays, and lumen has no service."
         return 0
     fi
+    # Without systemd for this user (over SSH, say) the service couldn't be turned
+    # on: it is left for an install that can.
+    if ! user_systemd; then
+        say "systemd doesn't run for this user here, so lumen gets no service that starts it at login."
+        return 0
+    fi
     off=
-    if [ -e "$unit" ] && user_systemd && [ "$(systemctl --user is-enabled lumen.service 2>/dev/null)" = disabled ]; then
+    if [ -e "$unit" ] && [ "$(systemctl --user is-enabled lumen.service 2>/dev/null)" = disabled ]; then
         off=1
     fi
     mkdir -p -- "$unit_dir"
@@ -276,17 +286,13 @@ install_daemon() {
         /^ExecStart=\/usr\/bin\/lumen / { sub(/^ExecStart=\/usr\/bin\/lumen/, ""); print "ExecStart=" ENVIRON["LUMEN_EXEC"] $0; next }
         { print }
     ' "$1/lumen.service" >"$unit"
-    if ! user_systemd; then
-        say "systemd doesn't run for this user, so the service is not started: $unit"
-        return 0
-    fi
     systemctl --user daemon-reload || true
     if [ -n "$off" ]; then
         say "The service stays off, as you set it: systemctl --user enable --now lumen turns it on."
         return 0
     fi
     # Started if it doesn't run. One that runs from before an update makes way
-    # for the new program by itself, when it has no window open.
+    # for the new program by itself, within seconds once it has no window open.
     if systemctl --user enable --now lumen.service >/dev/null 2>&1; then
         say "lumen now waits in the background from login on, so that windows open at once."
     else

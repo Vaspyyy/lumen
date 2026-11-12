@@ -16,6 +16,12 @@ ExecStart=/usr/bin/lumen --daemon
 # one takes its place.
 Restart=always
 RestartSec=1
+# What runs in its terminals is the user's, not the service's: a tmux server or
+# a job started with nohup outlives the daemon, as it outlives any terminal.
+# Stopping the service ends only lumen; its terminals close with it.
+KillMode=process
+# A program in a tab that runs out of memory is that program's end, not lumen's.
+OOMPolicy=continue
 
 [Install]
 WantedBy=default.target

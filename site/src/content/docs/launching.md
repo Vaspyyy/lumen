@@ -36,7 +36,7 @@ A window of the lumen that runs opens at once too, it only skips the wait for th
 
 The lumen that runs leaves a launch to start on its own when:
 
-- **It is another version.** After an update, the lumen that still runs from before keeps its windows, and a launch starts the new version beside it. Once you close the old one's windows, the next launch finds the new one.
+- **It is another version.** After an update, the lumen that still runs from before keeps its windows, and a launch starts the new version beside it. Once the old one has ended, the new one takes over, and the next launch opens a tab there.
 - **It runs on another display**, such as a desktop session of the same user on another seat.
 - **`launch = "process"`** is set.
 
@@ -59,7 +59,7 @@ When the daemon's last window closes, it doesn't end. It lets go of the display 
 
 The daemon is started by systemd, as a service of your user:
 
-- **The install script** ([Install](/docs/install/#any-other-distribution)) and **`scripts/install.sh`** install the service and turn it on. With `LUMEN_DAEMON=0` in front of the command they leave it out. A service you turned off stays off when you install an update.
+- **The install script** ([Install](/docs/install/#any-other-distribution)) and **`scripts/install.sh`** install the service and turn it on, where systemd runs for your user. With `LUMEN_DAEMON=0` in front of the command they leave it out. A service you turned off stays off when you install an update.
 - **The packages** install the service, but leave it off, as packages do. Turn it on with:
 
 ```sh
@@ -72,15 +72,17 @@ To turn it off again:
 systemctl --user disable --now lumen
 ```
 
+That ends the daemon, and with it the windows it has open, the one you typed this in too if it is one of them. What you started from its terminals and that outlives a terminal, such as a tmux server or a job started with `nohup`, keeps running: it is yours, not the service's.
+
 Without systemd, start `lumen --daemon` from your desktop's or compositor's autostart. It needs no display when it starts: each launch tells it which one to open its window on.
 
 ### What it costs
 
-While it waits, the daemon uses about 25 MB of memory of its own and 20 MB on the graphics card. The rest of what tools show for it, about 130 MB, is the graphics driver's libraries, which every program that draws with the GPU shares. It uses no processor time.
+While it waits, the daemon uses about 25 MB of memory of its own and 20 MB on the graphics card. The rest of what tools show for it, about 130 MB, is the graphics driver's libraries, which every program that draws with the GPU shares. It does next to no work: every five seconds it looks whether lumen was updated.
 
 ### After an update
 
-A daemon from before an update makes way for the new version by itself: when a launch of the new version reaches it and it has no window open, it ends, and systemd starts the new program in its place. That one launch starts a lumen of its own, and the ones after it find a lumen that runs the new version. A daemon with windows open keeps them, and makes way once they are closed.
+A daemon from before an update makes way for the new version by itself: within a few seconds of the update, if it has no window open, it ends, and systemd starts the new program in its place. A daemon with windows open keeps them, and makes way a few seconds after you close the last one. Until then, a launch of the new version starts a lumen of its own.
 
 ## Focus
 

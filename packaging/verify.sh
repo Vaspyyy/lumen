@@ -173,6 +173,9 @@ case $kind in
         }
         cat /tmp/out
         grep -q "doesn't seem to have libvulkan.so.1 libEGL.so.1 libwayland-client.so.0" /tmp/out || fail "install.sh did not name what is loaded later"
+        # no systemd runs for the user here: there is no service to turn on, and none is written
+        grep -q "gets no service" /tmp/out || fail "install.sh did not say that there is no service"
+        [ ! -e "$home/.config/systemd/user/lumen.service" ] || fail "install.sh wrote a service that nothing can turn on"
         as_tester "" --uninstall
 
         # The fonts first, and only ones that GPUI doesn't know by name: it ends
@@ -183,6 +186,11 @@ case $kind in
             xvfb xauth mesa-vulkan-drivers libgl1-mesa-dri libegl-mesa0 fontconfig
         known=$(fc-list : family | tr ',' '\n' | grep -x -E 'Lilex|IBM Plex Sans|Helvetica|Segoe UI|Ubuntu|Adwaita Sans|Cantarell|Noto Sans|DejaVu Sans|Arial' | sort -u | tr '\n' ' ') || true
         [ -z "$known" ] || fail "this system has $known: the start without a font GPUI knows by name can't be tried here"
+
+        # From here on a stand-in says that systemd runs for the user, so that the
+        # service is written as on a desktop.
+        printf '#!/bin/sh\nexit 0\n' >/usr/local/bin/systemctl
+        chmod 755 /usr/local/bin/systemctl
 
         step "fetched"
         as_tester "$fetched" >/tmp/out 2>&1 || {
