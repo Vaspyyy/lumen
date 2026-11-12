@@ -517,7 +517,8 @@ impl TerminalView {
                 // in the colors it is drawn in, whichever way they were written
                 let seen = || {
                     let (fg, bg) = palette::drawn(cell.fg, cell.bg, cell.flags, colors);
-                    let (fg, bg) = (palette::rgb(fg, term.colors(), colors), palette::rgb(bg, term.colors(), colors));
+                    let (fg, bg) =
+                        (palette::rgb(fg, term.colors(), colors), palette::behind(bg, term.colors(), colors));
                     palette::apart(fg, bg, cell.flags.contains(Flags::DIM))
                 };
                 cell.hyperlink().as_ref() == Some(&link)

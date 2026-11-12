@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::search::Match;
-use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
+use alacritty_terminal::vte::ansi::CursorShape;
 use gpui::{
     App, BorderStyle, Bounds, BoxShadow, Corners, CursorStyle, DispatchPhase, Element, ElementId, ElementInputHandler,
     Entity, FocusHandle, Font, FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
@@ -404,7 +404,7 @@ impl Element for TerminalElement {
                 if flags.contains(Flags::DIM) {
                     fg_color.a *= 0.6;
                 }
-                let default_bg = bg == Color::Named(NamedColor::Background);
+                let default_bg = palette::bare(bg);
                 if on_match.as_ref().is_some_and(|m| m.contains(&indexed.point)) {
                     // the match the search is on: lit like the lamp, with the text dark on it
                     push_background(&mut backgrounds, row, col, width, accent);

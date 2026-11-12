@@ -75,6 +75,18 @@ pub fn drawn(fg: Color, bg: Color, flags: Flags, colors: &Colors) -> (Color, Col
     if flags.contains(Flags::INVERSE) { (bg, fg) } else { (fg, bg) }
 }
 
+/// Whether a cell's background is the pane's own. Nothing is painted for
+/// it, so what shows there is the theme's background, and not a color a
+/// program has set for it since (OSC 11).
+pub fn bare(bg: Color) -> bool {
+    bg == Color::Named(NamedColor::Background)
+}
+
+/// The color that is on the screen behind a cell's text.
+pub fn behind(bg: Color, overrides: &Overrides, colors: &Colors) -> Rgb {
+    if bare(bg) { colors.primary.background } else { rgb(bg, overrides, colors) }
+}
+
 /// Whether text in one color can be told from the color behind it. Two
 /// colors that differ less than this are the same to anyone who is not
 /// looking for a difference. `dim` text is drawn partly see-through.
@@ -117,7 +129,7 @@ mod tests {
         let overrides = Overrides::default();
         let seen = |fg: Color, bg: Color, flags: Flags| {
             let (fg, bg) = drawn(fg, bg, flags, &colors);
-            apart(rgb(fg, &overrides, &colors), rgb(bg, &overrides, &colors), flags.contains(Flags::DIM))
+            apart(rgb(fg, &overrides, &colors), super::behind(bg, &overrides, &colors), flags.contains(Flags::DIM))
         };
         let (text, behind) = (Color::Named(NamedColor::Foreground), Color::Named(NamedColor::Background));
         assert!(seen(text, behind, Flags::empty()));
@@ -136,10 +148,25 @@ mod tests {
         assert!(!seen(like(0), behind, Flags::empty()));
         assert!(!seen(like(9), behind, Flags::empty()));
         assert!(seen(like(60), behind, Flags::empty()));
-        // and one a program has changed since
+        // A background a program has set since is not painted: the theme's is still
+        // what is behind the text, so text in the theme's is not seen, and text in
+        // the one that was set is.
         let mut changed = Overrides::default();
-        changed[NamedColor::Background] = Some(alacritty_terminal::vte::ansi::Rgb { r: 200, g: 10, b: 10 });
-        let red = Color::Spec(alacritty_terminal::vte::ansi::Rgb { r: 200, g: 10, b: 10 });
-        assert!(!apart(rgb(red, &changed, &colors), rgb(behind, &changed, &colors), false));
+        changed[NamedColor::Background] = Some(alacritty_terminal::vte::ansi::Rgb { r: 255, g: 255, b: 255 });
+        changed[1] = Some(alacritty_terminal::vte::ansi::Rgb { r: ground.0, g: ground.1, b: ground.2 });
+        let white = Color::Spec(alacritty_terminal::vte::ansi::Rgb { r: 255, g: 255, b: 255 });
+        let on = |fg: Color, bg: Color, flags: Flags| {
+            let (fg, bg) = drawn(fg, bg, flags, &colors);
+            apart(rgb(fg, &changed, &colors), super::behind(bg, &changed, &colors), false)
+        };
+        assert!(!on(like(0), behind, Flags::empty()));
+        assert!(on(white, behind, Flags::empty()));
+        // inverse text is drawn in the color that was set, on a background that is painted
+        assert!(seen(white, behind, Flags::INVERSE));
+        assert!(!on(white, behind, Flags::INVERSE));
+        assert!(on(like(60), behind, Flags::INVERSE));
+        // and a color of the palette a program has changed (the red, above) is drawn as it was changed
+        assert!(!on(Color::Indexed(1), behind, Flags::empty()));
+        assert!(!on(Color::Named(NamedColor::Red), behind, Flags::empty()));
     }
 }
