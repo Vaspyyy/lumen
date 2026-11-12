@@ -9,8 +9,9 @@ repository = "https://github.com/Vaspyyy/lumen"
 [workspace]
 members = [".", "crates/lumen-link", "crates/lumen-mobile"]
 default-members = ["."]
-# a copy of a crate lumen changes, not a part of lumen: see vendor/README.md
-exclude = ["vendor"]
+# The copies in vendor/ are not part of lumen (see vendor/README.md). They keep out of
+# this workspace with a [workspace] table of their own: with "." among the members,
+# Cargo would take them in whatever an exclude here said.
 
 [dependencies]
 # What a PC and a phone say to each other: pairing, the terminals a PC keeps.
