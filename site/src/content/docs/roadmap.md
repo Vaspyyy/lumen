@@ -35,7 +35,7 @@ The second half is about places in code. Tools such as crux, seek and recap prin
 
 **Done**, in [0.5.0](/releases/0.5.0/).
 
-pulse, a tool of the family that is not public yet, knows what the machine is busy with. lumen shows that where you work: a light in the title bar when the machine is busy, what each tab costs beside its name, and a notification when a long run in another tab is over. See [The machine](/docs/machine/).
+[pulse](https://github.com/Vaspyyy/pulse), a tool of the family, knows what the machine is busy with. lumen shows that where you work: a light in the title bar when the machine is busy, what each tab costs beside its name, and a notification when a long run in another tab is over. See [The machine](/docs/machine/).
 
 ## 5. What a command really cost
 

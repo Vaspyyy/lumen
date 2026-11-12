@@ -36,6 +36,6 @@ lumen is new, and it says so. It is a terminal you can use every day, and the fi
 
 ## The tools it is made for
 
-lumen is the home of a family of command line tools: [glint](https://github.com/Vaspyyy/glint) (a modern `ls`), [crux](https://github.com/Vaspyyy/crux) (builds and tests, reduced to the verdict), [seek](https://github.com/Vaspyyy/seek) (a code search that knows functions) and [recap](https://github.com/Vaspyyy/recap) (a git diff by function).
+lumen is the home of a family of command line tools: [glint](https://github.com/Vaspyyy/glint) (a modern `ls`), [crux](https://github.com/Vaspyyy/crux) (builds and tests, reduced to the verdict), [seek](https://github.com/Vaspyyy/seek) (a code search that knows functions), [recap](https://github.com/Vaspyyy/recap) (a git diff by function) and [pulse](https://github.com/Vaspyyy/pulse) (what the machine is busy with).
 
 Those tools print ordinary terminal output that works in any terminal. lumen understands more of it than other terminals do. Nothing in them depends on lumen, and lumen is a good terminal without them. See [The tools](/docs/tools/).

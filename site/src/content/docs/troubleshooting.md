@@ -63,7 +63,7 @@ If it opens in the wrong program, say which editor you want: [`[editor]`](/docs/
 
 ## There is no light in the title bar
 
-The light and the numbers on tabs come from [pulse](/docs/machine/), which is not public yet. Where it is installed and nothing shows:
+The light and the numbers on tabs come from [pulse](/docs/machine/), which has to be installed: `go install github.com/Vaspyyy/pulse@latest`. Where it is installed and nothing shows:
 
 - lumen has to find it: on the `PATH` lumen was started with, or in `~/go/bin` or `~/.local/bin`.
 - `enabled` in the `[pulse]` table of the config must not be `false`.

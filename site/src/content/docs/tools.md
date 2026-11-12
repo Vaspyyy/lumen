@@ -37,7 +37,7 @@ With lumen:
 
 ## pulse
 
-pulse says what the machine is busy with: how much of the CPU, the memory and the graphics card is in use, by what, and whether it is too busy for a measurement to mean anything. It is not public yet.
+[pulse](https://github.com/Vaspyyy/pulse) says what the machine is busy with: how much of the CPU, the memory and the graphics card is in use, by what, and whether it is too busy for a measurement to mean anything.
 
 With lumen:
 
@@ -48,6 +48,10 @@ With lumen:
 - **A long `pulse run` tells you when it is over**, if you are in another tab by then. See [Commands](/docs/commands/#when-a-program-has-something-to-tell).
 
 See [The machine](/docs/machine/).
+
+```sh
+go install github.com/Vaspyyy/pulse@latest
+```
 
 ## What the tools don't do
 

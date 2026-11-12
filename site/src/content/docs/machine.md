@@ -7,7 +7,7 @@ A build is slow, the fans are loud, a game stutters: something is using the mach
 
 ![lumen with three tabs. The first reads "cargo build" and shows 5.6 and 4.1G beside its name, the second shows 0.4 and 1.4G. A light at the right of the title bar is lit, and a note under it reads "busy: cpu at 13.2 of 16 cores, most from cargo build (5.6 cores)"](/shots/machine.png)
 
-pulse is not public yet. Without it, nothing on this page is shown, and nothing else in lumen is missing.
+pulse is [on GitHub](https://github.com/Vaspyyy/pulse), and `go install github.com/Vaspyyy/pulse@latest` installs it. Without it, nothing on this page is shown, and nothing else in lumen is missing.
 
 ## The light in the title bar
 
