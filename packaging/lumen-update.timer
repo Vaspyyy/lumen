@@ -1,0 +1,15 @@
+# Starts lumen-update.service once a day, and after a day the computer was off.
+#
+#   systemctl --user enable --now lumen-update.timer
+
+[Unit]
+Description=Update lumen and its tools once a day
+Documentation=https://vaspyyy.github.io/lumen/docs/install/#updates
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

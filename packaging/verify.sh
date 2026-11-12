@@ -39,7 +39,7 @@ apt_lists() {
 # bring along. Asked before anything else is installed, so that nothing but
 # the package's own dependencies can have brought it.
 arrived() {
-    for file in /usr/bin/lumen /usr/share/applications/lumen.desktop /usr/lib/systemd/user/lumen.service /usr/share/icons/hicolor/256x256/apps/lumen.png; do
+    for file in /usr/bin/lumen /usr/share/applications/lumen.desktop /usr/lib/systemd/user/lumen.service /usr/lib/systemd/user/lumen-update.timer /usr/share/icons/hicolor/256x256/apps/lumen.png; do
         [ -f "$file" ] || fail "$file is missing"
     done
     lumen --version || fail "lumen doesn't start: a library it is linked against is not among the package's dependencies"
@@ -55,7 +55,7 @@ arrived() {
 }
 
 gone() {
-    for file in /usr/bin/lumen /usr/share/applications/lumen.desktop /usr/lib/systemd/user/lumen.service /usr/share/icons/hicolor/256x256/apps/lumen.png; do
+    for file in /usr/bin/lumen /usr/share/applications/lumen.desktop /usr/lib/systemd/user/lumen.service /usr/lib/systemd/user/lumen-update.timer /usr/share/icons/hicolor/256x256/apps/lumen.png; do
         [ ! -e "$file" ] || fail "$file is still there after the package was removed"
     done
 }
@@ -175,7 +175,7 @@ case $kind in
         grep -q "doesn't seem to have libvulkan.so.1 libEGL.so.1 libwayland-client.so.0" /tmp/out || fail "install.sh did not name what is loaded later"
         # no systemd runs for the user here: there is no service to turn on, and none is written
         grep -q "gets no service" /tmp/out || fail "install.sh did not say that there is no service"
-        [ ! -e "$home/.config/systemd/user/lumen.service" ] || fail "install.sh wrote a service that nothing can turn on"
+        [ ! -e "$home/.config/systemd/user/lumen.service" ] && [ ! -e "$home/.config/systemd/user/lumen-update.timer" ] || fail "install.sh wrote a service that nothing can turn on"
         as_tester "" --uninstall
 
         # The fonts first, and only ones that GPUI doesn't know by name: it ends
@@ -204,6 +204,8 @@ case $kind in
         grep -qx "Exec=$home/.local/bin/lumen" "$home/.local/share/applications/lumen.desktop" || fail "the launcher entry doesn't name the program by its path"
         grep -qx "Exec=$home/.local/bin/lumen --new-window" "$home/.local/share/applications/lumen.desktop" || fail "the launcher entry's New Window lost its flag"
         grep -qx "ExecStart=$home/.local/bin/lumen --daemon" "$home/.config/systemd/user/lumen.service" || fail "the service doesn't name the program by its path"
+        grep -qx "ExecStart=$home/.local/bin/lumen update --notify" "$home/.config/systemd/user/lumen-update.service" || fail "the update's service doesn't name the program by its path"
+        [ -f "$home/.config/systemd/user/lumen-update.timer" ] || fail "the update's timer is missing"
         [ -f "$home/.local/share/icons/hicolor/256x256/apps/lumen.png" ] || fail "the icons are missing"
         [ "$(stat -c %U "$home/.local/bin/lumen")" = tester ] || fail "the program doesn't belong to the user"
         [ "$(ls -A "$home/.local/bin")" = lumen ] || fail "something is left next to the program: $(ls -A "$home/.local/bin")"
@@ -234,7 +236,9 @@ case $kind in
         step "removed"
         as_tester "" --uninstall
         [ ! -e "$home/.local/bin/lumen" ] && [ ! -e "$home/.local/share/applications/lumen.desktop" ] || fail "something is left after --uninstall"
-        [ ! -e "$home/.config/systemd/user/lumen.service" ] || fail "the service is left after --uninstall"
+        for unit in lumen.service lumen-update.service lumen-update.timer; do
+            [ ! -e "$home/.config/systemd/user/$unit" ] || fail "$unit is left after --uninstall"
+        done
 
         step "another program called lumen is neither written over nor removed"
         su tester -c "printf '#!/bin/sh\necho another lumen\n' > $home/.local/bin/lumen && chmod +x $home/.local/bin/lumen"

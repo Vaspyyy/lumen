@@ -1,7 +1,8 @@
 #!/bin/sh
 # Installs lumen for one user, without root: the program into ~/.local/bin,
-# the launcher entry and the icons into ~/.local/share, and a systemd user
-# service that keeps lumen waiting from login on, so that windows open at once.
+# the launcher entry and the icons into ~/.local/share, a systemd user service
+# that keeps lumen waiting from login on, so that windows open at once, and a
+# timer that updates lumen and its tools once a day.
 #
 #   curl -fsSL https://vaspyyy.github.io/lumen/install.sh | sh
 #
@@ -12,7 +13,8 @@
 #   curl -fsSL https://vaspyyy.github.io/lumen/install.sh | sh -s -- --uninstall
 #
 # LUMEN_VERSION=0.2.2 picks a version, LUMEN_BIN_DIR another folder for the
-# program, LUMEN_DAEMON=0 leaves the service out.
+# program, LUMEN_DAEMON=0 leaves the service out, LUMEN_AUTO_UPDATE=0 the daily
+# update.
 
 set -eu
 
@@ -36,7 +38,8 @@ usage() {
     say "    sh install.sh --uninstall   remove it again"
     say ""
     say "LUMEN_VERSION=0.2.2 picks a version, LUMEN_BIN_DIR another folder for the program."
-    say "LUMEN_DAEMON=0 leaves out the service that keeps lumen waiting from login on."
+    say "LUMEN_DAEMON=0 leaves out the service that keeps lumen waiting from login on,"
+    say "LUMEN_AUTO_UPDATE=0 the timer that updates lumen and its tools once a day."
 }
 
 # Whether the program at $1 is this lumen. Other programs are called lumen
@@ -51,11 +54,16 @@ our_entry() {
     grep -q '^Icon=lumen$' "$1" 2>/dev/null && grep -q '^Categories=.*TerminalEmulator' "$1" 2>/dev/null
 }
 
-# The same question for a service: the one lumen ships starts with this line. A
-# service written by hand, for lumen too, stays as it is.
+# The same question for a service or a timer: each one lumen ships starts with
+# its own line. One written by hand, for lumen too, stays as it is.
 our_unit() {
-    grep -q '^# Keeps a lumen running without a window from login on' "$1" 2>/dev/null &&
-        grep -q '^ExecStart=.*lumen"\{0,1\} --daemon$' "$1" 2>/dev/null
+    case ${1##*/} in
+        lumen.service) mark='# Keeps a lumen running without a window from login on' ;;
+        lumen-update.service) mark='# Updates lumen and the tools made for it' ;;
+        lumen-update.timer) mark='# Starts lumen-update.service once a day' ;;
+        *) return 1 ;;
+    esac
+    head -n 1 "$1" 2>/dev/null | grep -q -F -e "$mark"
 }
 
 # Whether systemd runs for this user, so that a service can be started.
@@ -78,7 +86,6 @@ refresh() {
 uninstall() {
     program=$bin_dir/lumen
     entry=$data_dir/applications/lumen.desktop
-    unit=$unit_dir/lumen.service
     # installed into another folder? The launcher entry names the program.
     if [ ! -e "$program" ] && [ -z "${LUMEN_BIN_DIR:-}" ] && our_entry "$entry"; then
         named=$(sed -n 's/^Exec=//p' "$entry" | head -n 1)
@@ -118,28 +125,37 @@ uninstall() {
         fi
     fi
     stop_daemon=
-    if [ -e "$unit" ]; then
-        if our_unit "$unit"; then
-            if user_systemd; then
-                systemctl --user disable lumen.service >/dev/null 2>&1 || true
-                stop_daemon=1
-            fi
-            rm -f -- "$unit"
-            found=1
-        else
+    reload=
+    for name in lumen-update.timer lumen-update.service lumen.service; do
+        unit=$unit_dir/$name
+        [ -e "$unit" ] || continue
+        if ! our_unit "$unit"; then
             say "$unit is not the one lumen comes with. It stays."
             other=1
+            continue
         fi
-    fi
+        if user_systemd; then
+            case $name in
+                # the daemon is stopped last, below
+                lumen.service) systemctl --user disable lumen.service >/dev/null 2>&1 || true && stop_daemon=1 ;;
+                *.timer) systemctl --user disable --now "$name" >/dev/null 2>&1 || true ;;
+            esac
+            reload=1
+        fi
+        rm -f -- "$unit"
+        found=1
+    done
     if [ -n "$found" ]; then
         refresh
         say "lumen is removed. Your settings are still in ${XDG_CONFIG_HOME:-$HOME/.config}/lumen."
     elif [ -z "$other" ]; then
         say "There is no lumen in $bin_dir. If it went into another folder, name it with LUMEN_BIN_DIR."
     fi
+    if [ -n "$reload" ]; then
+        systemctl --user daemon-reload || true
+    fi
     # last: this may run in one of the daemon's windows, which closes with it
     if [ -n "$stop_daemon" ]; then
-        systemctl --user daemon-reload || true
         systemctl --user stop lumen.service >/dev/null 2>&1 || true
     fi
 }
@@ -262,32 +278,35 @@ unit_quote() {
     printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/%/%%/g' -e 's/\$/$$/g')"
 }
 
+# Writes the service or timer $2 from the release in $1 into the user's systemd
+# folder, with the path to this program.
+write_unit() {
+    mkdir -p -- "$unit_dir"
+    LUMEN_EXEC=$(unit_quote "$bin_dir/lumen") awk '
+        /^ExecStart=\/usr\/bin\/lumen / { sub(/^ExecStart=\/usr\/bin\/lumen/, ""); print "ExecStart=" ENVIRON["LUMEN_EXEC"] $0; next }
+        { print }
+    ' "$1/$2" >"$unit_dir/$2"
+}
+
+# Whether the user turned $1 off: it is there, and not enabled.
+turned_off() {
+    [ -e "$unit_dir/$1" ] && [ "$(systemctl --user is-enabled "$1" 2>/dev/null)" = disabled ]
+}
+
 # The service that keeps lumen waiting without a window from login on, from
 # the release in $1. One that was turned off stays off.
 install_daemon() {
     unit=$unit_dir/lumen.service
     [ "${LUMEN_DAEMON:-1}" != 0 ] || return 0
-    # a release from before the service
-    [ -f "$1/lumen.service" ] || return 0
+    # a release from before the service, or no systemd to turn it on with
+    [ -f "$1/lumen.service" ] && user_systemd || return 0
     if [ -e "$unit" ] && ! our_unit "$unit"; then
         say "$unit is not the one lumen comes with. It stays as it is."
         return 0
     fi
-    # Without systemd for this user (over SSH, say) the service couldn't be turned
-    # on: it is left for an install that can.
-    if ! user_systemd; then
-        say "systemd doesn't run for this user here, so lumen gets no service that starts it at login."
-        return 0
-    fi
     off=
-    if [ -e "$unit" ] && [ "$(systemctl --user is-enabled lumen.service 2>/dev/null)" = disabled ]; then
-        off=1
-    fi
-    mkdir -p -- "$unit_dir"
-    LUMEN_EXEC=$(unit_quote "$bin_dir/lumen") awk '
-        /^ExecStart=\/usr\/bin\/lumen / { sub(/^ExecStart=\/usr\/bin\/lumen/, ""); print "ExecStart=" ENVIRON["LUMEN_EXEC"] $0; next }
-        { print }
-    ' "$1/lumen.service" >"$unit"
+    turned_off lumen.service && off=1
+    write_unit "$1" lumen.service
     systemctl --user daemon-reload || true
     if [ -n "$off" ]; then
         say "The service stays off, as you set it: systemctl --user enable --now lumen turns it on."
@@ -299,6 +318,31 @@ install_daemon() {
         say "lumen now waits in the background from login on, so that windows open at once."
     else
         say "The service could not be started: systemctl --user status lumen says why."
+    fi
+}
+
+# The timer that runs lumen update once a day, from the release in $1. One that
+# was turned off stays off.
+install_updates() {
+    [ "${LUMEN_AUTO_UPDATE:-1}" != 0 ] || return 0
+    [ -f "$1/lumen-update.timer" ] && user_systemd || return 0
+    for name in lumen-update.service lumen-update.timer; do
+        if [ -e "$unit_dir/$name" ] && ! our_unit "$unit_dir/$name"; then
+            say "$unit_dir/$name is not the one lumen comes with. It stays as it is, and lumen doesn't update itself."
+            return 0
+        fi
+    done
+    off=
+    turned_off lumen-update.timer && off=1
+    write_unit "$1" lumen-update.service
+    write_unit "$1" lumen-update.timer
+    systemctl --user daemon-reload || true
+    if [ -n "$off" ]; then
+        say "Daily updates stay off, as you set it: systemctl --user enable --now lumen-update.timer turns them on."
+    elif systemctl --user enable --now lumen-update.timer >/dev/null 2>&1; then
+        say "lumen and its tools now update themselves once a day."
+    else
+        say "The daily update could not be turned on: systemctl --user status lumen-update.timer says why."
     fi
 }
 
@@ -340,7 +384,13 @@ Nothing was installed."
     refresh
 
     say "lumen $version is installed: $bin_dir/lumen"
+    # Without systemd for this user (over SSH, say) nothing could turn the
+    # services on: they are left for an install that can.
+    if [ -f "$1/lumen.service" ] && ! user_systemd; then
+        say "systemd doesn't run for this user here, so lumen gets no service that starts it at login, and doesn't update itself."
+    fi
     install_daemon "$1"
+    install_updates "$1"
     first=$(command -v lumen 2>/dev/null) || first=
     if [ -z "$first" ]; then
         say "$bin_dir is not on your PATH. Add it, or start lumen from your desktop's menu."

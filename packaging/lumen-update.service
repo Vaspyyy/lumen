@@ -1,0 +1,17 @@
+# Updates lumen and the tools made for it (glint, crux, recap, seek, pulse) to
+# their newest releases. lumen-update.timer starts it once a day.
+#
+# packaging/install.sh and scripts/install.sh install it with the path to
+# their program.
+
+[Unit]
+Description=Update lumen and its tools
+Documentation=https://vaspyyy.github.io/lumen/docs/install/#updates
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/lumen update --notify
+# in the background: whatever else runs, a game say, comes first
+Nice=19
+CPUSchedulingPolicy=idle
+IOSchedulingClass=idle

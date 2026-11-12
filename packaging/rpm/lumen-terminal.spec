@@ -38,6 +38,8 @@ cp -a %{lumen_tree}/. %{buildroot}/
 %{_datadir}/applications/lumen.desktop
 # spelled out: the macro for this folder comes with systemd-rpm-macros, which the build may not have
 %{_prefix}/lib/systemd/user/lumen.service
+%{_prefix}/lib/systemd/user/lumen-update.service
+%{_prefix}/lib/systemd/user/lumen-update.timer
 %{_datadir}/icons/hicolor/*/apps/lumen.png
 %doc %{_datadir}/doc/lumen-terminal
 %license %{_datadir}/licenses/lumen-terminal
