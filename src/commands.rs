@@ -60,9 +60,8 @@ pub fn cell_of(uri: &str) -> Option<(u32, Part)> {
 /// What a shell said.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Mark {
-    /// A prompt begins (`A`). `with` is what the shell says along with it,
-    /// the fields after the `A`: two shells seldom say the same.
-    Prompt { with: String },
+    /// A prompt begins (`A`).
+    Prompt,
     /// The prompt is over, what is typed follows (`B`).
     Input,
     /// The command was sent off, its output follows (`C`). Some shells say
@@ -131,7 +130,7 @@ impl Mark {
         }
         let mut fields = text.strip_prefix("133;")?.split(';');
         Some(match fields.next()? {
-            "A" => Mark::Prompt { with: fields.collect::<Vec<_>>().join(";") },
+            "A" => Mark::Prompt,
             "B" => Mark::Input,
             "C" => {
                 let command = fields
@@ -144,13 +143,10 @@ impl Mark {
             "L" => Mark::FreshLine,
             // a prompt by its kind: right (`r`), continuation (`c`) and secondary (`s`)
             // ones stand where a command is typed, any other begins one
-            "P" => {
-                let with: Vec<&str> = fields.collect();
-                match with.iter().find_map(|field| field.strip_prefix("k=")) {
-                    Some("r") => Mark::Aside { right: true },
-                    Some("c" | "s") => Mark::Aside { right: false },
-                    _ => Mark::Prompt { with: with.join(";") },
-                }
+            "P" => match fields.find_map(|field| field.strip_prefix("k=")) {
+                Some("r") => Mark::Aside { right: true },
+                Some("c" | "s") => Mark::Aside { right: false },
+                _ => Mark::Prompt,
             },
             _ => return None,
         })
@@ -386,12 +382,6 @@ pub struct Log {
     /// The shell asked for a line of its own since the last prompt began:
     /// the prompt that comes is a new one.
     fresh: bool,
-    /// The prompt that is open was asked a line of its own for: what its
-    /// shell said along with it. A shell that asks says when a prompt is new,
-    /// so one it writes without asking is the open one, written again. A
-    /// prompt that comes with other words is another shell's: the one around
-    /// a shell that has ended, which may not be one that asks.
-    announced: Option<String>,
     /// A prompt beside what is typed is being written: the next `B` ends it.
     aside: bool,
     /// The command that ran when it did. How it ended may still be said.
@@ -522,7 +512,7 @@ impl Log {
                     self.leave();
                 }
             },
-            Mark::Prompt { with } => {
+            Mark::Prompt => {
                 if self.phase == Phase::Running {
                     // a prompt, and no word of how the command ended
                     self.leave();
@@ -533,24 +523,15 @@ impl Log {
                 let typing = matches!(self.phase, Phase::Prompt | Phase::Input);
                 let before = self.current.filter(|_| typing).map(|id| typed_before(term, id)).unwrap_or_default();
                 remark(term, &before, None);
-                // A prompt that is written again (after a resize, after a completion, on
-                // a cleared screen) is still the same prompt. A shell that asks for a
-                // line of its own before every new prompt has said so: without the
-                // asking, a prompt of that shell is the open one again. Of a shell that
-                // doesn't ask, a
-                // prompt is a new one if it comes below the lines of the one that was
-                // open (an empty line was sent off), unless those were just moved off
-                // a cleared screen.
+                // No command was sent off since the prompt that is open: this is that
+                // prompt, written again. After a resize, under a list of completions, on
+                // a cleared screen, below an empty line that was sent off, below a shell
+                // that ended at its prompt: nothing ran, so there is nothing to tell
+                // apart. A shell that asks for a line of its own before a prompt says
+                // that it is a new one.
                 let line = term.grid().cursor.point.line;
                 let fresh = std::mem::take(&mut self.fresh);
-                let open = typing && !fresh;
-                let again = open
-                    && self.current.is_some_and(|id| {
-                        self.announced.as_deref() == Some(with.as_str())
-                            || owner(term, line) == Some(id)
-                            || !follows(term, line, id)
-                            || cleared(term, line, id)
-                    });
+                let again = typing && !fresh;
                 self.over = None;
                 self.aside = false;
                 let id = match self.current {
@@ -559,10 +540,7 @@ impl Log {
                         forget_above(term, line, id, None);
                         id
                     },
-                    _ => {
-                        self.announced = fresh.then_some(with);
-                        self.open()
-                    },
+                    _ => self.open(),
                 };
                 self.phase = Phase::Prompt;
                 remark(term, &before, Some(id));
@@ -736,30 +714,6 @@ fn left_over<L>(term: &Term<L>, line: Line) -> bool {
 fn marks_on<L>(term: &Term<L>, line: Line) -> impl Iterator<Item = (u32, Part)> + '_ {
     let within = line >= term.topmost_line() && line <= term.bottommost_line();
     within.then(|| &term.grid()[line]).into_iter().flatten().filter_map(|cell| cell_of(cell.hyperlink()?.uri()))
-}
-
-/// Whether `line` comes below the lines of command `id`: what stands right
-/// above it is one of them. A prompt may begin with an empty line or two.
-fn follows<L>(term: &Term<L>, line: Line, id: u32) -> bool {
-    let mut above = line - 1;
-    for _ in 0..3 {
-        if above < term.topmost_line() {
-            break;
-        }
-        match owner(term, above) {
-            Some(other) => return other == id,
-            None if !term.grid()[above].is_clear() => return false,
-            None => above -= 1,
-        }
-    }
-    false
-}
-
-/// Whether the lines of command `id` were just moved off a cleared screen:
-/// `line` is the first one on the screen, and they stand right above it,
-/// where what was on a screen is kept when it is cleared.
-fn cleared<L>(term: &Term<L>, line: Line, id: u32) -> bool {
-    line == Line(0) && term.screen_lines() > 1 && owner(term, Line(-1)) == Some(id)
 }
 
 /// Marks as left over what is marked for command `id` on the lines right
@@ -958,13 +912,12 @@ mod tests {
     #[test]
     fn marks_are_found_in_the_output() {
         let found = marks(&[b"one\x1b]133;A\x07two\x1b]133;D;1\x1b\\three"]);
-        assert_eq!(found, [(11, Mark::Prompt { with: String::new() }), (25, Mark::End { exit: Some(1) })]);
+        assert_eq!(found, [(11, Mark::Prompt), (25, Mark::End { exit: Some(1) })]);
         // what fish sends
         let found =
             marks(&[b"\x1b]133;A;click_events=1\x1b\\$ \x1b]133;B\x1b\\\x1b]133;C;cmdline_url=echo%20hi%3B\x1b\\"]);
         let kinds: Vec<Mark> = found.into_iter().map(|(_, mark)| mark).collect();
-        let prompt = Mark::Prompt { with: "click_events=1".into() };
-        assert_eq!(kinds, [prompt, Mark::Input, Mark::Output { command: Some("echo hi;".into()) }]);
+        assert_eq!(kinds, [Mark::Prompt, Mark::Input, Mark::Output { command: Some("echo hi;".into()) }]);
         assert_eq!(marks(&[b"\x1b]133;D\x07"]), [(8, Mark::End { exit: None })]);
         assert_eq!(marks(&[b"\x1b]133;L\x07"]), [(8, Mark::FreshLine)]);
         assert_eq!(marks(&[b"\x1b]133;D;130;aid=7\x07"]), [(18, Mark::End { exit: Some(130) })]);
@@ -975,8 +928,7 @@ mod tests {
         let found = marks(&[b"\x1b]133;P;k=r\x07\x1b]133;P;k=c\x07\x1b]133;P;k=s\x07\x1b]133;P;k=i\x07\x1b]133;P\x07"]);
         let found: Vec<Mark> = found.into_iter().map(|(_, mark)| mark).collect();
         let (right, line) = (Mark::Aside { right: true }, Mark::Aside { right: false });
-        let (first, plain) = (Mark::Prompt { with: "k=i".into() }, Mark::Prompt { with: String::new() });
-        assert_eq!(found, [right, line.clone(), line, first, plain]);
+        assert_eq!(found, [right, line.clone(), line, Mark::Prompt, Mark::Prompt]);
     }
 
     #[test]
@@ -1016,9 +968,7 @@ mod tests {
         scanner.feed(b"\x1b]52;c;", |_, _| panic!());
         scanner.feed(&vec![b'A'; 1 << 20], |_, _| panic!());
         assert!(scanner.payload.is_empty());
-        scanner.feed(b"\x07\x1b]133;A\x07", |end, mark| {
-            assert_eq!((end, mark), (9, Mark::Prompt { with: String::new() }));
-        });
+        scanner.feed(b"\x07\x1b]133;A\x07", |end, mark| assert_eq!((end, mark), (9, Mark::Prompt)));
     }
 
     /// A terminal of 30 by 8 cells, and what a shell printed to it.
@@ -1134,13 +1084,19 @@ mod tests {
         // nothing of it is left above, so it has moved, and is the same prompt still
         screen.print("\x1b[2K\r\n\x1b]133;A\x07~> \x1b]133;B\x07");
         assert_eq!(screen.places(), [(0, 1, 1)]);
-        // an empty line sent off: the next prompt is a new one, and the old one stays what it was
+        // A line is sent off and no command is said to run: the prompt below it is the
+        // same one still, and what is left above it is no prompt.
         screen.print("x\r\n\x1b]133;A\x07~> \x1b]133;B\x07");
-        assert_eq!(screen.places(), [(0, 1, 1), (1, 2, 2)]);
+        assert_eq!(screen.places(), [(0, 2, 2)]);
+        assert_eq!(owner(&screen.term, Line(1)), None);
         assert_eq!(screen.command(0).status(), Status::Typed);
         // a prompt that begins with an empty line
         screen.print("\r\n\r\n\x1b]133;A\x07~> \x1b]133;B\x07");
-        assert_eq!(screen.places(), [(0, 1, 1), (1, 2, 2), (2, 4, 4)]);
+        assert_eq!(screen.places(), [(0, 4, 4)]);
+        // what is sent off at last is what was typed at the prompt as it stands
+        screen.print("ls\r\n\x1b]133;C\x07");
+        assert_eq!(screen.command(0).text.as_deref(), Some("ls"));
+        assert_eq!(screen.places(), [(0, 4, 4)]);
     }
 
     /// The marks of bash 5.3 with lumen's lines read in, as they were captured.
@@ -1293,22 +1249,30 @@ mod tests {
         assert_eq!(screen.command(0).text.as_deref(), Some("for x in 1 2\ndo echo $x\ndone"));
     }
 
-    /// bash with lumen's lines, started in fish 4.9 and left with Ctrl+D.
+    /// bash with lumen's lines, started in fish and left with Ctrl+D: in fish 4.9,
+    /// and in an older fish with lumen's lines, whose mark for a prompt is bash's.
     #[test]
-    fn a_shell_around_one_that_says_when_a_prompt_is_new() {
-        let mut screen = Screen::new();
-        let fish = "\x1b]133;A;click_events=1\x07> \x1b]133;B\x07";
-        screen.print(fish).print("bash\r\n\x1b]133;C;cmdline_url=bash\x07");
-        screen.print("\x1b]133;L\x07\x1b]133;A\x07$ \x1b]133;B\x07exit\r\n");
-        // fish says how bash ended and writes its prompt. It asks for no line of its
-        // own, and its prompt is not the one of bash again: nor is its next one.
-        screen.print("\x1b]133;D;0\x07").print(fish).print("\r\n").print(fish);
-        assert_eq!(screen.places(), [(0, 0, 0), (1, 1, 1), (2, 2, 2), (3, 3, 3)]);
-        // the same shell's prompt, written again without the asking, is the open one
-        let mut screen = Screen::new();
-        let bash = "\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07";
-        screen.print("\x1b]133;L\x07").print(bash).print("ls\r\nfoo1  foo2\r\n").print(bash).print("ls");
-        assert_eq!(screen.places(), [(0, 2, 2)]);
+    fn a_shell_around_one_that_ended_at_its_prompt() {
+        for fish in ["\x1b]133;A;click_events=1\x07> \x1b]133;B\x07", "\x1b]133;A\x07> "] {
+            let mut screen = Screen::new();
+            screen.print(fish).print("bash\r\n\x1b]133;C;cmdline_url=bash\x07");
+            screen.print("\x1b]133;L\x07\x1b]133;A\x07$ \x1b]133;B\x07exit\r\n");
+            // fish says how bash ended and writes its prompt, and once more after an empty
+            // line. Nothing ran at the prompt bash left open: it is the open prompt still,
+            // where fish has written its own.
+            screen.print("\x1b]133;D;0\x07").print(fish).print("\r\n").print(fish);
+            assert_eq!(screen.places(), [(0, 0, 0), (1, 3, 3)]);
+            // what bash left behind is not what `bash` printed
+            let outer = place_at(&screen.term, Line(0)).unwrap();
+            assert_eq!(output(&screen.term, outer), None);
+            // a command in fish is where it was typed, and the prompt after it is a new one
+            screen.print("ls\r\n\x1b]133;C;cmdline_url=ls\x07a\r\n\x1b]133;D;0\x07").print(fish);
+            assert_eq!(screen.places(), [(0, 0, 0), (1, 3, 3), (2, 5, 5)]);
+            assert_eq!(screen.command(1).text.as_deref(), Some("ls"));
+            assert_eq!(screen.command(1).status(), Status::Ended(Some(0)));
+            let ran = place_at(&screen.term, Line(3)).unwrap();
+            assert_eq!(text(&screen.term, output(&screen.term, ran).unwrap()), "a");
+        }
     }
 
     /// fish 4.9, which asks for no line of its own before a prompt, as captured.
@@ -1321,13 +1285,39 @@ mod tests {
         screen.print("\x1b[H\x1b[2J").print(prompt).print("echo abc");
         assert_eq!(screen.places(), [(0, 0, 0)]);
         assert_eq!(screen.line(-1), "> echo abc");
-        // an empty line sent off is known by where the next prompt stands
+        // an empty line sent off: nothing ran, so the prompt below it is the same one still
         screen.print("\x15\r\n").print(prompt);
-        assert_eq!(screen.places(), [(0, 0, 0), (1, 1, 1)]);
+        assert_eq!(screen.places(), [(0, 1, 1)]);
         // a command, and the screen cleared by one: the prompt after it is a new one
         screen.print("clear\r\n\x1b]133;C\x07\x1b[H\x1b[2J\x1b]133;D;0\x07").print(prompt);
-        assert_eq!(screen.places().last(), Some(&(2, 0, 0)));
-        assert_eq!(screen.command(1).text.as_deref(), Some("clear"));
+        assert_eq!(screen.places().last(), Some(&(1, 0, 0)));
+        assert_eq!(screen.command(0).text.as_deref(), Some("clear"));
+    }
+
+    /// fish 4.9 with a prompt of two lines, in a window that is made narrower, as captured.
+    #[test]
+    fn a_prompt_of_two_lines_that_is_written_again_from_its_second() {
+        let mut screen = Screen::new();
+        let prompt = "\x1b]133;A;click_events=1\x07~\r\n> \x1b]133;B\x07";
+        let typed = "echo aaaaaaaaaaaaaaaaaaaa";
+        screen.print("\x1b]133;A\x07> \x1b]133;B\x07true\r\n\x1b]133;C\x07\x1b]133;D;0\x07");
+        screen.print(prompt).print(typed);
+        assert_eq!(screen.places(), [(0, 0, 0), (1, 1, 2)]);
+        // The terminal wraps the prompt's second line anew, into two. fish knows of one:
+        // it goes up one line, which is that second line now, and writes all of its
+        // prompt from there. Its first line is left above.
+        screen.resize(20).print("\r\r\x1b[A\x1b[K").print(prompt).print(typed).print("\x1b[J\r\x1b[7C");
+        // (wrapped anew, the lines have moved up by one)
+        let lines: Vec<String> = (-1..4).map(|line| screen.line(line)).collect();
+        assert_eq!(lines, ["> true", "~", "~", "> echo aaaaaaaaaaaaa", "aaaaaaa"]);
+        // one prompt still, where it stands now: the line left above is none
+        assert_eq!(screen.places(), [(0, -1, -1), (1, 1, 3)]);
+        assert_eq!(owner(&screen.term, Line(0)), None);
+        screen.print("\r\n\x1b]133;C\x07");
+        assert_eq!(screen.command(1).text.as_deref(), Some(typed));
+        // and that line is not what the command before printed
+        let first = above(&screen.term, Line(1), |_| true).unwrap();
+        assert_eq!((first.id, output(&screen.term, first)), (0, None));
     }
 
     #[test]

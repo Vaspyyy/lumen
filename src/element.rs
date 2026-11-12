@@ -432,6 +432,11 @@ impl Element for TerminalElement {
                     push_background(&mut backgrounds, row, col, width, wash);
                     if let Some(color) = selection_fg {
                         fg_color = color;
+                    } else if palette::bare(fg) {
+                        // Text in the color of the pane's background stood on a block of
+                        // its own (inverse text), which the selection has taken the place
+                        // of: it is drawn in the color of the text.
+                        fg_color = Hsla { a: fg_color.a, ..ink };
                     }
                 } else if !default_bg {
                     push_background(&mut backgrounds, row, col, width, palette::resolve(bg, overrides, colors));

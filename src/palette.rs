@@ -75,10 +75,11 @@ pub fn drawn(fg: Color, bg: Color, flags: Flags, colors: &Colors) -> (Color, Col
     if flags.contains(Flags::INVERSE) { (bg, fg) } else { (fg, bg) }
 }
 
-/// Whether a cell's background is the pane's own. Nothing is painted for
-/// such a cell: what shows there is what the pane stands on ([`ground`]).
-pub fn bare(bg: Color) -> bool {
-    bg == Color::Named(NamedColor::Background)
+/// Whether a color is the pane's own background. Nothing is painted for a
+/// cell with such a background: what shows there is what the pane stands on
+/// ([`ground`]). Text in it is inverse text, on a block of its own.
+pub fn bare(color: Color) -> bool {
+    color == Color::Named(NamedColor::Background)
 }
 
 /// The background a program has set for the whole pane (OSC 11), where it
