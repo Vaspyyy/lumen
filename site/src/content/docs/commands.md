@@ -31,7 +31,7 @@ A prompt where nothing was run has no mark.
 | `Ctrl+Shift+Down` | Go to the next command. After the last one, back to the bottom |
 | `Ctrl+Shift+O` | Copy the output of the last command, also of one that still runs. When you have scrolled back, of the command at the top of the view |
 
-These keys are lumen's in a pane whose shell has marked a command. A full-screen program such as vim gets them itself. In a pane where no command was ever marked, they go to the program as they always did.
+These keys are lumen's in a pane whose shell has marked a prompt or a command. A full-screen program such as vim gets them itself. In a pane where nothing was ever marked, they go to the program as they always did.
 
 ## What a tab tells you
 

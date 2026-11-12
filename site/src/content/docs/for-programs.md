@@ -80,8 +80,8 @@ Anything after a further `;` is left alone, with one exception: `C;cmdline_url=T
 `B` can be left out. What was written before a `B` on its line is not part of what was typed.
 
 - **`L` is for a shell that writes its prompt where the output stopped**, as bash does. Send it before the prompt and before anything else the shell writes on the prompt's line. `A` itself moves nothing. A command that runs when an `L` comes is over, and a `D` that follows before the next `A` or `C` says how it ended.
-- **An `A` while a prompt is open** is that prompt written again, as after a resize: it stays the same command. It is a new prompt when it comes below the lines of the open one, with at most two empty lines between, or after an `L`.
-- **A `D` where no command runs is ignored.** So a shell may say it with every prompt it writes.
+- **An `A` while a prompt is open** is that prompt written again, as after a resize: it stays the same command. That holds on a line that is already the open prompt's, and anywhere else that is not below it. It is a new prompt when it comes below the lines of the open one, with at most two empty lines between, or after an `L`.
+- **A `D` where no command runs is ignored**, unless it is the one that follows an `L`. So a shell may say it with every prompt it writes.
 - **An `A` or a `C` while a command runs**, with no `D` before it, is taken for a shell inside that command: the command is no longer followed.
 - On the alternate screen the marks are ignored.
 
