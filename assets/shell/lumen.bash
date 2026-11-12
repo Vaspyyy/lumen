@@ -32,9 +32,12 @@ if [[ $- == *i* && -z ${__lumen_marks-} ]]; then
         # The prompt begins on a line of its own (L), also after output that
         # ended without a line break. bash itself doesn't see to that.
         printf '\e]133;L\a' >&2
-        if [[ $PS1 != "$before"*"$after" ]]; then
-            # a prompt that was set anew, or added to, since it was last marked
-            local inner=${PS1//"$ended"/}
+        if [[ ${PS1-} != *"$before"*"$after" ]]; then
+            # A prompt that was set anew, or added to at its end, since it was
+            # last marked. What was put in front of it stays in front: whoever
+            # put it there may take it off again.
+            local inner=${PS1-}
+            inner=${inner//"$ended"/}
             inner=${inner//"$plain"/}
             PS1=$before${inner//"$after"/}$after
         fi

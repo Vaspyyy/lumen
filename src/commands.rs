@@ -384,6 +384,8 @@ impl Log {
         }
         match mark {
             Mark::FreshLine => {
+                // what is written from here on is the next prompt's, not typed at the last one
+                tag(term, None);
                 // bash writes its prompt where the output stopped: after output without a
                 // line break at its end, the output's last line would be the prompt's
                 if term.grid().cursor.point.column.0 > 0 {
@@ -405,12 +407,19 @@ impl Log {
                     // a prompt, and no word of how the command ended
                     self.leave();
                 }
-                // A prompt that is written again (after a resize, after the screen was
-                // cleared, after a completion) is still the same prompt. It is a new one
-                // if the shell asked for a line of its own before it, or if it comes
-                // below the lines of the one that was open: an empty line was sent off.
+                // What the shell wrote on this line before the mark, while a command was
+                // being typed, was marked as typed: readline's mode, which stands before
+                // all of a prompt. It is this prompt's, and says nothing of whose line it is.
+                let typing = matches!(self.phase, Phase::Prompt | Phase::Input);
+                let before = self.current.filter(|_| typing).map(|id| typed_before(term, id)).unwrap_or_default();
+                remark(term, &before, None);
+                // A prompt that is written again (after a resize, after a completion) is
+                // still the same prompt. It is a new one if the shell asked for a line of
+                // its own before it, or if it comes below the lines of the one that was
+                // open: an empty line was sent off, or the screen was cleared and what
+                // stood on it is kept above.
                 let line = term.grid().cursor.point.line;
-                let open = matches!(self.phase, Phase::Prompt | Phase::Input) && !self.fresh;
+                let open = typing && !self.fresh;
                 let again =
                     open && self.current.is_some_and(|id| owner(term, line) == Some(id) || !follows(term, line, id));
                 self.fresh = false;
@@ -420,23 +429,17 @@ impl Log {
                     _ => self.open(),
                 };
                 self.phase = Phase::Prompt;
+                remark(term, &before, Some(id));
                 tag(term, Some((id, Part::Prompt)));
             },
             Mark::Input => {
                 if let (Some(id), Phase::Prompt | Phase::Input) = (self.current, self.phase) {
                     self.phase = Phase::Input;
                     // What stands before this mark on its line is the prompt. Written again
-                    // while a command is being typed (the last line of a prompt of several,
-                    // or what readline puts before a prompt), it was marked as typed.
-                    let point = term.grid().cursor.point;
-                    let typed = format!("{SCHEME}{id}:i");
-                    let prompt = format!("{SCHEME}{id}:p");
-                    let prompt = alacritty_terminal::term::cell::Hyperlink::new(Some(prompt.clone()), prompt);
-                    for cell in &mut term.grid_mut()[point.line][..point.column] {
-                        if cell.hyperlink().is_some_and(|link| link.uri() == typed) {
-                            cell.set_hyperlink(Some(prompt.clone()));
-                        }
-                    }
+                    // while a command is being typed (the last line of a prompt of several),
+                    // it was marked as typed.
+                    let before = typed_before(term, id);
+                    remark(term, &before, Some(id));
                     tag(term, Some((id, Part::Input)));
                 }
             },
@@ -523,6 +526,30 @@ fn tag<L: EventListener>(term: &mut Term<L>, cells: Option<(u32, Part)>) {
                 term.set_hyperlink(None);
             }
         },
+    }
+}
+
+/// The cells before the cursor on its line that are marked as typed at the
+/// prompt of command `id`. A line that is full has the cursor waiting on its
+/// last cell: that cell is before it too.
+fn typed_before<L>(term: &Term<L>, id: u32) -> Vec<Column> {
+    let cursor = &term.grid().cursor;
+    let end = cursor.point.column.0 + usize::from(cursor.input_needs_wrap);
+    let typed = format!("{SCHEME}{id}:i");
+    let row = &term.grid()[cursor.point.line];
+    (0..end).map(Column).filter(|&column| row[column].hyperlink().is_some_and(|link| link.uri() == typed)).collect()
+}
+
+/// Makes these cells of the cursor's line part of the prompt of command
+/// `id`, or cells of no command.
+fn remark<L>(term: &mut Term<L>, columns: &[Column], id: Option<u32>) {
+    let link = id.map(|id| {
+        let uri = format!("{SCHEME}{id}:p");
+        alacritty_terminal::term::cell::Hyperlink::new(Some(uri.clone()), uri)
+    });
+    let line = term.grid().cursor.point.line;
+    for &column in columns {
+        term.grid_mut()[line][column].set_hyperlink(link.clone());
     }
 }
 
@@ -934,6 +961,44 @@ mod tests {
         // the mode is not part of what was typed
         screen.print("\r\n\x1b]133;C\x07");
         assert_eq!(screen.command(1).text.as_deref(), Some("ls"));
+    }
+
+    /// More of bash 5.3 with `show-mode-in-prompt`, as captured: prompts that follow one no command was run at.
+    #[test]
+    fn readlines_mode_is_not_typed_at_the_prompt_before() {
+        let mut screen = Screen::new();
+        screen.print("\x1b]133;L\x07(ins)\x1b]133;A\x07$ \x1b]133;B\x07");
+        // an empty line sent off, then Ctrl+C on a line with something typed
+        screen.print("\r\n\x1b]133;L\x07(ins)\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07");
+        screen.print("ls^C\r\r\n\x1b]133;L\x07(ins)\x1b]133;D;130\x07\x1b]133;A\x07$ \x1b]133;B\x07");
+        screen.print("printf hi\r\n\x1b]133;C\x07hi");
+        // each prompt is on a line of its own command, and the last one was run
+        assert_eq!(screen.places(), [(0, 0, 0), (1, 1, 1), (2, 2, 2)]);
+        assert_eq!(screen.command(2).text.as_deref(), Some("printf hi"));
+        assert_eq!(screen.command(2).status(), Status::Running);
+
+        // emacs mode, where the mode is `@`, and the screen cleared with a command typed
+        let mut screen = Screen::new();
+        screen.print("\x1b]133;L\x07@\x1b]133;A\x07$ \x1b]133;B\x07true\r\n\x1b]133;C\x07");
+        screen.print("\x1b]133;L\x07@\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07ls");
+        screen.print("\x1b[H\x1b[2J@\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07ls");
+        // the prompt on the cleared screen is a new one, as it is without the mode
+        assert_eq!(screen.places(), [(0, -2, -2), (1, -1, -1), (2, 0, 0)]);
+        screen.print("\r\n\x1b]133;C\x07");
+        assert_eq!(screen.command(2).text.as_deref(), Some("ls"));
+    }
+
+    #[test]
+    fn a_prompt_as_wide_as_the_screen_written_again() {
+        let mut screen = Screen::new();
+        // 30 cells: the cursor waits on the last one
+        let prompt = "~/a/folder/with/a/long/name =>";
+        screen.print("\x1b]133;L\x07\x1b]133;A\x07").print(prompt).print("\x1b]133;B\x07ls");
+        assert_eq!(screen.line(1), "ls");
+        // written again from its start while `ls` stands typed
+        screen.print("\x1b[A\r").print(prompt).print("\x1b]133;B\x07ls -l\r\n\x1b]133;C\x07");
+        assert_eq!(screen.places(), [(0, 0, 1)]);
+        assert_eq!(screen.command(0).text.as_deref(), Some("ls -l"));
     }
 
     #[test]
