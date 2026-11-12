@@ -61,7 +61,7 @@ A program that never stops telling is not heard forever. Each pane gets a notifi
 To use it in a script of your own, end it with a line like this one:
 
 ```sh
-make all; printf '\e]777;notify;make;all is built\a'
+make all; printf '\033]777;notify;make;all is built\a'
 ```
 
 To keep programs from posting on the desktop, set `notifications = false` in the [config](/docs/configuration/). The dot on the tab stays.
@@ -103,10 +103,10 @@ Without marks, lumen is the terminal it was before: nothing is missing but what 
 ## Good to know
 
 - **The marks need room.** They stand in the space around a pane's text, which is [`padding`](/docs/configuration/) in the config. With less than 4 pixels of it they are not drawn. The keys work all the same.
-- **A prompt begins on a new line.** Where a command's output did not end with a line break, bash writes its prompt right behind it. With lumen's lines read in, bash asks for a line of its own first, so that the last line of the output stays with its command.
+- **A prompt begins on a new line.** Where a command's output did not end with a line break, bash writes its prompt right behind it, and zsh with `PROMPT_SP` turned off writes its prompt over it. With lumen's lines read in, both ask for a line of their own first, so that the last line of the output stays, and stays with its command.
 - **What runs before the prompt counts to the command.** A hook that prints before the prompt, as direnv does, has its lines copied with the command's output. In bash the time such hooks take is added to the command's time as well.
 - **bash with `promptvars` turned off** can't say how a command ended. Its mark says that it ended, and neither turns red nor names an exit status.
-- **A prompt that is written again stays one command.** A shell writes its prompt again under a list of completions, after `Ctrl+L`, and when the window changes its width. What is left of the earlier copy further up is not a command of its own, and it is not copied with what the command before it printed.
+- **A prompt that is written again stays one command.** A shell writes its prompt again under a list of completions, after `Ctrl+L`, and when the window changes its width. What is left of the earlier copy further up is not a command of its own, and it is not copied with what the command before it printed. bash and zsh tell lumen when a prompt is a new one, once they have read its lines. fish doesn't, so lumen goes by where its prompt stands: after the window was made narrower, a line of a fish prompt of several lines can stay behind as a prompt at which nothing was run.
 - **A prompt at the right of the line** (zsh's `RPROMPT`) and the one before a further line of a command (`PS2`, in bash and zsh) are prompts to lumen, and no part of the command. That takes a shell on this machine that has read lumen's lines. Over SSH, the shell there is not told that it runs in lumen, and marks neither of them.
 - **Over SSH** it works when the shell on the other machine marks its commands. A fish 4 there does. The same goes for a shell you start inside another. From the first prompt of the inner shell on, the marks are its own: the `ssh` command that led there is no longer followed, and its mark says how long it ran before that prompt.
 - **Inside tmux or another multiplexer** there are no marks: it keeps them to itself.

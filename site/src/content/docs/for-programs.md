@@ -76,7 +76,7 @@ A shell tells lumen where its commands are with the marks of OSC 133, each as `E
 | `C` | The command was sent off, its output begins |
 | `D` | The command has ended. `D;0` gives its exit status |
 | `L` | What follows begins on a line of its own: if the cursor is not at the start of a line, lumen begins a new one |
-| `P` | A prompt begins here, of the kind `k=` names. `P` and `P;k=i` say what `A` says. `P;k=r`, `P;k=c` and `P;k=s` begin a prompt beside what is typed: at the right of the line, or before a further line of the command |
+| `P` | A prompt begins here, of the kind `k=` names. `P;k=r`, `P;k=c` and `P;k=s` begin a prompt beside what is typed: at the right of the line, or before a further line of the command. A `P` of any other kind, or of none, says what `A` says |
 
 Anything after a further `;` is left alone, with one exception: `C;cmdline_url=TEXT` gives the command's text, percent-encoded, as fish sends it. Without it, lumen reads the text from the screen, between `B` and `C`.
 

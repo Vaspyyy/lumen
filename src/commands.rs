@@ -874,10 +874,16 @@ pub fn printed<L>(term: &Term<L>, line: Line) -> Option<Place> {
     let top = term.topmost_line();
     let mut line = line;
     while line >= top {
-        if let Some(place) = place_at(term, line) {
-            return Some(place);
+        // each line is read once: this runs for every line up to the command's
+        let mut left = false;
+        for (id, part) in marks_on(term, line) {
+            if part != Part::Left {
+                let (first, last) = own_lines(term, line, id);
+                return Some(Place { id, first, last });
+            }
+            left = true;
         }
-        if left_over(term, line) {
+        if left {
             return None;
         }
         line -= 1;

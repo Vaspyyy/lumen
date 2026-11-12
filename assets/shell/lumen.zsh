@@ -27,8 +27,9 @@ if [[ -o interactive && -z ${__lumen_marks-} ]]; then
         fi
         # The prompt at the right of the line, and the one a further line of a
         # command begins with, are marked as prompts (P), so that lumen does
-        # not take them for a part of the command. Only in lumen: the B that
-        # ends them is where a command begins to other terminals.
+        # not take them for a part of the command. Only where TERM_PROGRAM says
+        # lumen: the B that ends them is where a command begins to other
+        # terminals.
         if [[ ${TERM_PROGRAM-} == lumen ]]; then
             # (one prompt under two names, of which either may count as unset)
             local right=${RPROMPT-${RPS1-}}

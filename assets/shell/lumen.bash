@@ -45,8 +45,8 @@ if [[ $- == *i* ]]; then
         fi
         # A further line of a command begins with PS2. It is marked as a prompt
         # (P), so that lumen does not take it for a part of the command. Only
-        # in lumen: the B that ends it is where a command begins to other
-        # terminals.
+        # where TERM_PROGRAM says lumen: the B that ends it is where a command
+        # begins to other terminals.
         if [[ ${TERM_PROGRAM-} == lumen && -n ${PS2-} && $PS2 != *'133;P'* ]]; then
             PS2="\\[${esc}]133;P;k=c${bel}\\]${PS2}${after}"
         fi

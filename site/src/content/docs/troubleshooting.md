@@ -75,7 +75,7 @@ The light and the numbers on tabs come from [pulse](/docs/machine/), which has t
 A program can change a pane's colors while it runs, its background too. If one has ended and left its colors behind, this sets them back to the theme's:
 
 ```sh
-printf '\e]104\a\e]110\a\e]111\a\e]112\a'
+printf '\033]104\a\033]110\a\033]111\a\033]112\a'
 ```
 
 A new tab or pane has the theme's colors again in any case. See [Colors](/docs/colors/#colors-a-program-sets).

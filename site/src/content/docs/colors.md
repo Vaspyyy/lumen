@@ -140,7 +140,7 @@ lumen follows, in the pane the program runs in. Other panes and tabs keep the th
 
 A background that differs from the theme's fills the whole pane, and it is solid, whatever `opacity` says.
 
-A cursor color that a program sets is the cursor's. Where a program sets a background and no cursor, the theme's cursor stays as long as it stands out from that background. If it doesn't, as a light cursor on a light background, the cursor takes the color of the text. The selection does the same in a theme that names no color for it: it is a wash of the text's color, as the program has set it.
+A cursor color that a program sets is the cursor's. Where a program sets a background and no cursor, the theme's cursor stays as long as it stands out from that background. If it doesn't, as a light cursor on a light background, the cursor takes the color of the text. The selection on such a background is a wash of the text's color, whatever the theme says for it: the theme's colors were chosen for the theme's background.
 
 The colors stay until a program sets them back, or the pane is closed. [Troubleshooting](/docs/troubleshooting/#a-pane-has-other-colors-than-the-theme) has the line that sets them back by hand.
 

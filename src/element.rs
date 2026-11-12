@@ -353,8 +353,10 @@ impl Element for TerminalElement {
             ink = palette::ink(overrides, colors).hsla();
             let (of_cursor, under_cursor) = palette::cursor(overrides, colors);
             (cursor_color, on_cursor) = (of_cursor.hsla(), under_cursor.hsla());
-            let selection_bg = colors.selection.background.map(|c| c.hsla());
-            let selection_fg = colors.selection.text.map(|c| c.hsla());
+            // The theme's colors for the selection were chosen for the theme's
+            // background: on one a program has set, they may be lost.
+            let selection_bg = colors.selection.background.filter(|_| ground.is_none()).map(|c| c.hsla());
+            let selection_fg = colors.selection.text.filter(|_| ground.is_none()).map(|c| c.hsla());
             let mut run: Option<Run> = None;
             pointer = if self.hovered_mark.is_some() {
                 CursorStyle::PointingHand
@@ -424,8 +426,8 @@ impl Element for TerminalElement {
                     push_background(&mut backgrounds, row, col, width, accent);
                     fg_color = colors.primary.background.hsla();
                 } else if selected {
-                    // A theme without a selection color gets a see-through wash of the text
-                    // color: of the one a program has set, which is seen on its background.
+                    // Without a selection color, the selection is a see-through wash of the
+                    // text color: of the one a program has set, which is seen on its background.
                     let wash = selection_bg.unwrap_or(Hsla { a: 0.28, ..ink });
                     push_background(&mut backgrounds, row, col, width, wash);
                     if let Some(color) = selection_fg {
