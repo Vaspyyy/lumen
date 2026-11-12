@@ -57,7 +57,7 @@ Typing brings the view back to the bottom.
 | `Ctrl+Shift+Down` | Go to the next command |
 | `Ctrl+Shift+O` | Copy what the last command printed |
 
-These are lumen's where the shell marks its commands. In a full-screen program, and in a shell that marks nothing, they go to the program. See [Commands](/docs/commands/).
+These are lumen's in a pane whose shell has marked a command. In a full-screen program, and in a pane where no command was ever marked, they go to the program. See [Commands](/docs/commands/).
 
 ## Text size
 

@@ -61,6 +61,9 @@ pub enum Mark {
     Output { command: Option<String> },
     /// The command ended (`D`), with this exit status if the shell said it.
     End { exit: Option<i32> },
+    /// What follows is to begin on a line of its own (`L`): a new prompt is
+    /// on its way.
+    FreshLine,
 }
 
 impl Mark {
@@ -79,6 +82,7 @@ impl Mark {
                 Mark::Output { command }
             },
             "D" => Mark::End { exit: fields.next().and_then(|field| field.parse().ok()) },
+            "L" => Mark::FreshLine,
             _ => return None,
         })
     }
@@ -298,6 +302,11 @@ pub struct Log {
     /// a reader that one has since it last looked.
     ended: u64,
     failed: u64,
+    /// The shell asked for a line of its own since the last prompt began:
+    /// the prompt that comes is a new one.
+    fresh: bool,
+    /// The command that ran when it did. How it ended may still be said.
+    over: Option<u32>,
     /// The shell's process, whose folder a command starts in.
     shell: Option<u32>,
 }
@@ -374,24 +383,38 @@ impl Log {
             return;
         }
         match mark {
+            Mark::FreshLine => {
+                // bash writes its prompt where the output stopped: after output without a
+                // line break at its end, the output's last line would be the prompt's
+                if term.grid().cursor.point.column.0 > 0 {
+                    term.carriage_return();
+                    term.linefeed();
+                }
+                self.fresh = true;
+                // A prompt is on its way, so what ran is over. bash says how it ended
+                // in the prompt itself. If the prompt doesn't say it (a theme has set it
+                // anew, or it is the first one of a shell inside the command), the
+                // command is not left running for good.
+                if self.phase == Phase::Running {
+                    self.over = self.current;
+                    self.leave();
+                }
+            },
             Mark::Prompt => {
                 if self.phase == Phase::Running {
                     // a prompt, and no word of how the command ended
                     self.leave();
                 }
-                // A prompt begins on a line of its own. A shell that doesn't see to that
-                // (bash, after output without a line break at its end) is given the line,
-                // so that the output's last line stays the output's. A prompt that is
-                // written again where it stands is left where it is.
-                if !matches!(self.phase, Phase::Prompt | Phase::Input) && term.grid().cursor.point.column.0 > 0 {
-                    term.carriage_return();
-                    term.linefeed();
-                }
-                // A prompt that is written again where it stands (after a resize, after
-                // a completion) is still the same prompt. One on a line of its own is a new one.
+                // A prompt that is written again (after a resize, after the screen was
+                // cleared, after a completion) is still the same prompt. It is a new one
+                // if the shell asked for a line of its own before it, or if it comes
+                // below the lines of the one that was open: an empty line was sent off.
                 let line = term.grid().cursor.point.line;
-                let again = matches!(self.phase, Phase::Prompt | Phase::Input)
-                    && self.current.is_some_and(|id| owner(term, line) == Some(id));
+                let open = matches!(self.phase, Phase::Prompt | Phase::Input) && !self.fresh;
+                let again =
+                    open && self.current.is_some_and(|id| owner(term, line) == Some(id) || !follows(term, line, id));
+                self.fresh = false;
+                self.over = None;
                 let id = match self.current {
                     Some(id) if again => id,
                     _ => self.open(),
@@ -402,11 +425,24 @@ impl Log {
             Mark::Input => {
                 if let (Some(id), Phase::Prompt | Phase::Input) = (self.current, self.phase) {
                     self.phase = Phase::Input;
+                    // What stands before this mark on its line is the prompt. Written again
+                    // while a command is being typed (the last line of a prompt of several,
+                    // or what readline puts before a prompt), it was marked as typed.
+                    let point = term.grid().cursor.point;
+                    let typed = format!("{SCHEME}{id}:i");
+                    let prompt = format!("{SCHEME}{id}:p");
+                    let prompt = alacritty_terminal::term::cell::Hyperlink::new(Some(prompt.clone()), prompt);
+                    for cell in &mut term.grid_mut()[point.line][..point.column] {
+                        if cell.hyperlink().is_some_and(|link| link.uri() == typed) {
+                            cell.set_hyperlink(Some(prompt.clone()));
+                        }
+                    }
                     tag(term, Some((id, Part::Input)));
                 }
             },
             Mark::Output { command } => {
                 tag(term, None);
+                self.over = None;
                 let id = match (self.current, self.phase) {
                     (Some(id), Phase::Prompt | Phase::Input) => id,
                     (_, Phase::Running) => {
@@ -427,11 +463,19 @@ impl Log {
                 self.phase = Phase::Running;
             },
             Mark::End { exit } => {
-                tag(term, None);
+                // Only a command that runs can end. A shell whose prompt carries this
+                // mark says it again whenever the prompt is written again, and that
+                // changes nothing about the prompt.
                 if self.phase == Phase::Running {
+                    tag(term, None);
                     self.end(exit);
+                } else if let Some(command) = self.over.take().and_then(|id| self.commands.get_mut(&id)) {
+                    // the command a line of its own was asked for after: this is how it ended
+                    command.exit = exit;
+                    command.left = false;
+                    self.ended += 1;
+                    self.failed += command.failed() as u64;
                 }
-                self.phase = Phase::Idle;
             },
         }
     }
@@ -489,6 +533,23 @@ pub fn owner<L>(term: &Term<L>, line: Line) -> Option<u32> {
         return None;
     }
     term.grid()[line].into_iter().find_map(|cell| cell_of(cell.hyperlink()?.uri())).map(|(id, _)| id)
+}
+
+/// Whether `line` comes below the lines of command `id`: what stands right
+/// above it is one of them. A prompt may begin with an empty line or two.
+fn follows<L>(term: &Term<L>, line: Line, id: u32) -> bool {
+    let mut above = line - 1;
+    for _ in 0..3 {
+        if above < term.topmost_line() {
+            break;
+        }
+        match owner(term, above) {
+            Some(other) => return other == id,
+            None if !term.grid()[above].is_clear() => return false,
+            None => above -= 1,
+        }
+    }
+    false
 }
 
 /// The first and the last of the lines around `line` that are the command's
@@ -636,6 +697,7 @@ mod tests {
         let kinds: Vec<Mark> = found.into_iter().map(|(_, mark)| mark).collect();
         assert_eq!(kinds, [Mark::Prompt, Mark::Input, Mark::Output { command: Some("echo hi;".into()) }]);
         assert_eq!(marks(&[b"\x1b]133;D\x07"]), [(8, Mark::End { exit: None })]);
+        assert_eq!(marks(&[b"\x1b]133;L\x07"]), [(8, Mark::FreshLine)]);
         assert_eq!(marks(&[b"\x1b]133;D;130;aid=7\x07"]), [(18, Mark::End { exit: Some(130) })]);
     }
 
@@ -730,6 +792,11 @@ mod tests {
         }
     }
 
+    /// How many commands have ended on a screen, and how many of them failed.
+    fn ended(screen: &Screen) -> (u64, u64) {
+        screen.log.lock().unwrap().ended()
+    }
+
     #[test]
     fn a_command_is_known_by_its_prompt() {
         let mut screen = Screen::new();
@@ -777,12 +844,107 @@ mod tests {
         // the shell writes its prompt again in place, as after a completion
         screen.print("\r\x1b]133;A\x07~> \x1b]133;B\x07echo");
         assert_eq!(screen.places(), [(0, 0, 0)]);
-        // an empty line sent off: the next prompt is a new one, and the old one stays what it was
+        // its line is erased and the prompt written again a line further down:
+        // nothing of it is left above, so it has moved, and is the same prompt still
         screen.print("\x1b[2K\r\n\x1b]133;A\x07~> \x1b]133;B\x07");
-        assert_eq!(screen.places(), [(1, 1, 1)]);
+        assert_eq!(screen.places(), [(0, 1, 1)]);
+        // an empty line sent off: the next prompt is a new one, and the old one stays what it was
         screen.print("x\r\n\x1b]133;A\x07~> \x1b]133;B\x07");
-        assert_eq!(screen.places(), [(1, 1, 1), (2, 2, 2)]);
-        assert_eq!(screen.command(1).status(), Status::Typed);
+        assert_eq!(screen.places(), [(0, 1, 1), (1, 2, 2)]);
+        assert_eq!(screen.command(0).status(), Status::Typed);
+        // a prompt that begins with an empty line
+        screen.print("\r\n\r\n\x1b]133;A\x07~> \x1b]133;B\x07");
+        assert_eq!(screen.places(), [(0, 1, 1), (1, 2, 2), (2, 4, 4)]);
+    }
+
+    /// The marks of bash 5.3 with lumen's lines read in, as they were captured.
+    #[test]
+    fn bash_writes_its_prompt_again() {
+        let mut screen = Screen::new();
+        // bash says how the last command ended in every prompt, also in one it writes again
+        let prompt = "\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07";
+        screen.print("\x1b]133;L\x07\x1b]133;A\x07$ \x1b]133;B\x07");
+        screen.print("true\r\n\x1b]133;C\x07\x1b]133;L\x07").print(prompt).print("ls");
+        assert_eq!(screen.places(), [(0, 0, 0), (1, 1, 1)]);
+        assert_eq!(screen.command(0).status(), Status::Ended(Some(0)));
+        // the window is resized: bash erases the line and writes it again
+        screen.print("\r\x1b[K\r").print(prompt).print("ls");
+        assert_eq!(screen.places(), [(0, 0, 0), (1, 1, 1)]);
+        // The screen is cleared. What stood on it is kept above, the prompt with
+        // it: so the one bash writes on the empty screen is a new one.
+        screen.print("\x1b[H\x1b[2J").print(prompt).print("ls");
+        assert_eq!(screen.places(), [(0, -2, -2), (1, -1, -1), (2, 0, 0)]);
+        assert_eq!(screen.line(0), "$ ls");
+        // an empty line sent off, and Ctrl+C at the prompt: a new prompt each time
+        screen.print("\x15\r\n\x1b]133;L\x07").print(prompt);
+        screen.print("ls^C\r\n\x1b]133;L\x07\x1b]133;D;130\x07\x1b]133;A\x07$ \x1b]133;B\x07");
+        assert_eq!(screen.places()[2..], [(2, 0, 0), (3, 1, 1), (4, 2, 2)]);
+        // none of that ended a command
+        assert_eq!(ended(&screen), (1, 0));
+        screen.print("ls\r\n\x1b]133;C\x07");
+        assert_eq!(screen.command(4).text.as_deref(), Some("ls"));
+        assert_eq!(screen.command(2).status(), Status::Typed);
+        // the command is over when bash asks for the prompt's line, and the prompt says how it ended
+        screen.print("ls: no such thing\r\n\x1b]133;L\x07");
+        assert!(screen.log.lock().unwrap().running().is_none());
+        assert_eq!(ended(&screen), (1, 0));
+        screen.print("\x1b]133;D;2\x07\x1b]133;A\x07$ \x1b]133;B\x07");
+        assert_eq!(screen.command(4).status(), Status::Ended(Some(2)));
+        assert!(!screen.command(4).left);
+        assert_eq!(ended(&screen), (2, 1));
+    }
+
+    #[test]
+    fn a_prompt_that_lost_its_marks() {
+        let mut screen = Screen::new();
+        // bash, where a theme sets the prompt anew after lumen's lines: no A, no B, no D
+        screen.print("\x1b]133;L\x07$ sleep 1\r\n\x1b]133;C\x07");
+        assert!(screen.log.lock().unwrap().running().is_some());
+        screen.print("\x1b]133;L\x07$ ");
+        // nothing is left running, and nobody is told of an end that was not said
+        assert!(screen.log.lock().unwrap().running().is_none());
+        assert_eq!(ended(&screen), (0, 0));
+        assert!(screen.command(0).left);
+        // a status that comes later is not this command's
+        screen.print("true\r\n\x1b]133;C\x07\x1b]133;D;1\x07");
+        assert_eq!(screen.command(0).status(), Status::Ended(None));
+        assert_eq!(screen.command(1).status(), Status::Ended(Some(1)));
+    }
+
+    #[test]
+    fn what_readline_puts_before_a_prompt() {
+        let mut screen = Screen::new();
+        // bash with `show-mode-in-prompt`: the mode stands before all of the prompt
+        screen.print("\x1b]133;L\x07(ins)\x1b]133;A\x07$ \x1b]133;B\x07");
+        screen.print("printf hello\r\n\x1b]133;C\x07hello");
+        screen.print("\x1b]133;L\x07(ins)\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07");
+        assert_eq!(screen.line(1), "hello");
+        assert_eq!(screen.line(2), "(ins)$");
+        let first = place_at(&screen.term, Line(0)).unwrap();
+        assert_eq!(text(&screen.term, output(&screen.term, first).unwrap()), "hello");
+        screen.print("ls");
+        // the mode changes: the prompt is written again where it stands, twice
+        screen.print("\r(cmd)\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07\x1b[C");
+        screen.print("\r(ins)\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07\x1b[C");
+        // and after a resize
+        screen.print("\r\x1b[K\r(ins)\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07ls");
+        assert_eq!(screen.line(2), "(ins)$ ls");
+        assert_eq!(screen.line(3), "");
+        assert_eq!(screen.places(), [(0, 0, 0), (1, 2, 2)]);
+        // the mode is not part of what was typed
+        screen.print("\r\n\x1b]133;C\x07");
+        assert_eq!(screen.command(1).text.as_deref(), Some("ls"));
+    }
+
+    #[test]
+    fn the_last_line_of_a_prompt_written_again() {
+        let mut screen = Screen::new();
+        // a prompt of two lines: after a resize bash writes only the second one again
+        screen.print("\x1b]133;L\x07\x1b]133;A\x07~/code\r\r\n$ \x1b]133;B\x07ls");
+        screen.print("\r\x1b[K\r$ \x1b]133;B\x07ls -l");
+        assert_eq!(screen.places(), [(0, 0, 1)]);
+        screen.print("\r\n\x1b]133;C\x07");
+        assert_eq!(screen.command(0).text.as_deref(), Some("ls -l"));
     }
 
     #[test]
@@ -865,9 +1027,11 @@ mod tests {
     #[test]
     fn a_prompt_begins_on_a_line_of_its_own() {
         let mut screen = Screen::new();
-        // bash writes its prompt where the output stopped
-        screen.run("printf hello", "hello", 0).run("printf 'a\\nb'", "a\r\nb", 0);
-        screen.print("\x1b]133;A\x07$ \x1b]133;B\x07");
+        // bash writes its prompt where the output stopped, and asks for a line of its own first
+        let next = "\x1b]133;L\x07\x1b]133;D;0\x07\x1b]133;A\x07";
+        screen.print("\x1b]133;L\x07\x1b]133;A\x07~> \x1b]133;B\x07printf hello\r\n\x1b]133;C\x07hello");
+        screen.print(next).print("~> \x1b]133;B\x07printf 'a\\nb'\r\n\x1b]133;C\x07a\r\nb");
+        screen.print(next).print("$ \x1b]133;B\x07");
         assert_eq!(screen.line(1), "hello");
         assert_eq!(screen.line(2), "~> printf 'a\\nb'");
         assert_eq!(screen.line(4), "b");
@@ -876,10 +1040,11 @@ mod tests {
         assert_eq!(text(&screen.term, output(&screen.term, first).unwrap()), "hello");
         let second = place_at(&screen.term, Line(2)).unwrap();
         assert_eq!(text(&screen.term, output(&screen.term, second).unwrap()), "a\nb");
-        // a prompt that is written again where it stands stays there
-        screen.print("ls\x1b]133;A\x07\x1b[1G\x1b[K$ \x1b]133;B\x07ls");
-        assert_eq!(screen.line(5), "$ ls");
-        assert_eq!(screen.line(6), "");
+        // A prompt's own mark moves nothing: what a shell has written before it on
+        // its line stays there, and is the shell's to see to.
+        screen.print("ls\r\n\x1b]133;C\x07x\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07");
+        assert_eq!(screen.line(6), "x$");
+        assert_eq!(screen.line(7), "");
     }
 
     #[test]

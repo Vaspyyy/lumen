@@ -31,7 +31,7 @@ A prompt where nothing was run has no mark.
 | `Ctrl+Shift+Down` | Go to the next command. After the last one, back to the bottom |
 | `Ctrl+Shift+O` | Copy the output of the last command, also of one that still runs. When you have scrolled back, of the command at the top of the view |
 
-These keys are lumen's where the shell marks its commands. A full-screen program such as vim gets them itself, and in a shell that marks nothing they go to the program as they always did.
+These keys are lumen's in a pane whose shell has marked a command. A full-screen program such as vim gets them itself. In a pane where no command was ever marked, they go to the program as they always did.
 
 ## What a tab tells you
 
@@ -83,7 +83,10 @@ Without marks, lumen is the terminal it was before: nothing is missing but what 
 ## Good to know
 
 - **The marks need room.** They stand in the space around a pane's text, which is [`padding`](/docs/configuration/) in the config. With less than 4 pixels of it they are not drawn. The keys work all the same.
-- **A prompt begins on a new line.** Where a command's output did not end with a line break, bash writes its prompt right behind it. With marks, lumen gives the prompt a line of its own, so that the last line of the output stays with its command.
+- **A prompt begins on a new line.** Where a command's output did not end with a line break, bash writes its prompt right behind it. With lumen's lines read in, bash asks for a line of its own first, so that the last line of the output stays with its command.
+- **What runs before the prompt counts to the command.** A hook that prints before the prompt, as direnv does, has its lines copied with the command's output. In bash the time such hooks take is added to the command's time as well.
+- **bash with `promptvars` turned off** can't say how a command ended. Its mark says that it ended, and neither turns red nor names an exit status.
+- **After the window was made narrower**, zsh with a prompt on the right writes some lines again in other places. The marks of commands that were on screen can then be off by a line.
 - **Over SSH** it works when the shell on the other machine marks its commands. A fish 4 there does. The same goes for a shell you start inside another. From the first prompt of the inner shell on, the marks are its own: the `ssh` command that led there is no longer followed, and its mark says how long it ran before that prompt.
 - **Inside tmux or another multiplexer** there are no marks: it keeps them to itself.
 - **In a full-screen program** nothing is marked. A shell you start inside one belongs to that program's screen.

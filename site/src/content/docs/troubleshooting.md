@@ -46,6 +46,7 @@ If it **is underlined** and the click copies nothing, lumen says why at the bott
 The marks beside commands, the keys that jump between them and the dots on tabs all need a shell that says where its commands are.
 
 - **bash and zsh** need one line in their startup file, and **fish** needs version 4.0 or the same kind of line. See [Commands](/docs/commands/#setting-up-your-shell). The line counts for tabs opened after it was added.
+- **bash has the line and still shows no marks**: something sets the prompt anew after lumen's line, and takes the marks out of it. Make lumen's line the last one in `~/.bashrc`, after the prompt's theme.
 - **`padding` is under 4** in the config: there is no room for the marks. The keys still work.
 - **Inside tmux** or another multiplexer the marks don't reach lumen.
 

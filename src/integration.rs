@@ -56,6 +56,14 @@ mod tests {
     }
 
     #[test]
+    fn bash_asks_for_a_line_of_its_own() {
+        // bash writes its prompt where the output stopped, and readline may write before the prompt
+        assert!(BASH.contains("133;L"));
+        // how a command ended is said in the prompt, and without a status where the prompt can't say it
+        assert!(BASH.contains("133;D;\\$?") && BASH.contains("133;D\\a"));
+    }
+
+    #[test]
     fn only_known_shells() {
         let args = |list: &[&str]| list.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
         assert_eq!(run(&args(&["pair"])), None);

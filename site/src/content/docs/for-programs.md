@@ -69,14 +69,21 @@ A shell tells lumen where its commands are with the marks of OSC 133, each as `E
 
 | Mark | Says |
 | --- | --- |
-| `A` | A prompt begins here. If the cursor is not at the start of a line, lumen begins a new line first |
+| `A` | A prompt begins here |
 | `B` | The prompt has ended, what is typed begins |
 | `C` | The command was sent off, its output begins |
 | `D` | The command has ended. `D;0` gives its exit status |
+| `L` | What follows begins on a line of its own: if the cursor is not at the start of a line, lumen begins a new one |
 
 Anything after a further `;` is left alone, with one exception: `C;cmdline_url=TEXT` gives the command's text, percent-encoded, as fish sends it. Without it, lumen reads the text from the screen, between `B` and `C`.
 
-`B` can be left out. A prompt that is written again in the same place, as after a resize, stays the same command. An `A` or a `C` that comes while a command runs, with no `D` before it, is taken for a shell inside that command: the command is no longer followed. On the alternate screen the marks are ignored.
+`B` can be left out. What was written before a `B` on its line is not part of what was typed.
+
+- **`L` is for a shell that writes its prompt where the output stopped**, as bash does. Send it before the prompt and before anything else the shell writes on the prompt's line. `A` itself moves nothing. A command that runs when an `L` comes is over, and a `D` that follows before the next `A` or `C` says how it ended.
+- **An `A` while a prompt is open** is that prompt written again, as after a resize: it stays the same command. It is a new prompt when it comes right below the lines of the open one, or after an `L`.
+- **A `D` where no command runs is ignored.** So a shell may say it with every prompt it writes.
+- **An `A` or a `C` while a command runs**, with no `D` before it, is taken for a shell inside that command: the command is no longer followed.
+- On the alternate screen the marks are ignored.
 
 What lumen does with them is in [Commands](/docs/commands/). `lumen shell-integration bash` prints a small, complete example for a shell.
 

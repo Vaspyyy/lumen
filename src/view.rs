@@ -76,10 +76,18 @@ impl Seen {
         if cells[at].1.is_whitespace() {
             return None;
         }
+        // The folder is asked for only where the text may name a file in it: every
+        // line up to the command's prompt is read for it, with the terminal locked.
+        let text: Vec<char> = cells.iter().map(|&(_, c, _)| c).collect();
+        let mut wanted = false;
+        let _ = links::in_text(&text, at, |name| {
+            wanted = !name.starts_with(['/', '~']);
+            None
+        });
         let log = terminal.commands.lock().unwrap();
         // A shell that marks no commands has none to ask, and all of the scrollback
         // would be searched for one.
-        let printed_by = if log.is_empty() {
+        let printed_by = if !wanted || log.is_empty() {
             None
         } else {
             commands::place_at(term, line).or_else(|| commands::above(term, line, |_| true))
