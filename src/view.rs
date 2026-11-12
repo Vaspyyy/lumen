@@ -1400,8 +1400,9 @@ impl Render for TerminalView {
             })
             .children(spots)
             .children(about)
-            .children(hint)
             .children(search)
+            // last, and so over all the rest: a command for the prompt is shown in full
+            .children(hint)
     }
 }
 
