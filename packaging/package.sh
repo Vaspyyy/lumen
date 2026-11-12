@@ -39,6 +39,7 @@ trap 'rm -rf "$work"' EXIT
 tree() {
     install -Dm755 "$bin" "$1/usr/bin/lumen"
     install -Dm644 packaging/lumen.desktop "$1/usr/share/applications/lumen.desktop"
+    install -Dm644 packaging/lumen.service "$1/usr/lib/systemd/user/lumen.service"
     for size in $sizes; do
         install -Dm644 "assets/icon/lumen-$size.png" "$1/usr/share/icons/hicolor/${size}x${size}/apps/lumen.png"
     done
@@ -51,7 +52,7 @@ name=lumen-$version-$machine-linux
 mkdir -p "$work/$name/icons"
 install -m755 "$bin" "$work/$name/lumen"
 install -m755 packaging/install.sh "$work/$name/install.sh"
-install -m644 packaging/lumen.desktop LICENSE README.md "$work/$name/"
+install -m644 packaging/lumen.desktop packaging/lumen.service LICENSE README.md "$work/$name/"
 for size in $sizes; do
     install -m644 "assets/icon/lumen-$size.png" "$work/$name/icons/"
 done

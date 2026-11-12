@@ -39,7 +39,7 @@ apt_lists() {
 # bring along. Asked before anything else is installed, so that nothing but
 # the package's own dependencies can have brought it.
 arrived() {
-    for file in /usr/bin/lumen /usr/share/applications/lumen.desktop /usr/share/icons/hicolor/256x256/apps/lumen.png; do
+    for file in /usr/bin/lumen /usr/share/applications/lumen.desktop /usr/lib/systemd/user/lumen.service /usr/share/icons/hicolor/256x256/apps/lumen.png; do
         [ -f "$file" ] || fail "$file is missing"
     done
     lumen --version || fail "lumen doesn't start: a library it is linked against is not among the package's dependencies"
@@ -55,7 +55,7 @@ arrived() {
 }
 
 gone() {
-    for file in /usr/bin/lumen /usr/share/applications/lumen.desktop /usr/share/icons/hicolor/256x256/apps/lumen.png; do
+    for file in /usr/bin/lumen /usr/share/applications/lumen.desktop /usr/lib/systemd/user/lumen.service /usr/share/icons/hicolor/256x256/apps/lumen.png; do
         [ ! -e "$file" ] || fail "$file is still there after the package was removed"
     done
 }
@@ -194,6 +194,8 @@ case $kind in
         ! grep -q "^Note:" /tmp/out || fail "install.sh has a note on a system that has everything"
         su tester -c "$home/.local/bin/lumen --version"
         grep -qx "Exec=$home/.local/bin/lumen" "$home/.local/share/applications/lumen.desktop" || fail "the launcher entry doesn't name the program by its path"
+        grep -qx "Exec=$home/.local/bin/lumen --new-window" "$home/.local/share/applications/lumen.desktop" || fail "the launcher entry's New Window lost its flag"
+        grep -qx "ExecStart=$home/.local/bin/lumen --daemon" "$home/.config/systemd/user/lumen.service" || fail "the service doesn't name the program by its path"
         [ -f "$home/.local/share/icons/hicolor/256x256/apps/lumen.png" ] || fail "the icons are missing"
         [ "$(stat -c %U "$home/.local/bin/lumen")" = tester ] || fail "the program doesn't belong to the user"
         [ "$(ls -A "$home/.local/bin")" = lumen ] || fail "something is left next to the program: $(ls -A "$home/.local/bin")"
@@ -224,6 +226,7 @@ case $kind in
         step "removed"
         as_tester "" --uninstall
         [ ! -e "$home/.local/bin/lumen" ] && [ ! -e "$home/.local/share/applications/lumen.desktop" ] || fail "something is left after --uninstall"
+        [ ! -e "$home/.config/systemd/user/lumen.service" ] || fail "the service is left after --uninstall"
 
         step "another program called lumen is neither written over nor removed"
         su tester -c "printf '#!/bin/sh\necho another lumen\n' > $home/.local/bin/lumen && chmod +x $home/.local/bin/lumen"
@@ -242,11 +245,12 @@ case $kind in
         cat /tmp/out
         grep -q "^lumen $version is installed: $home/my bin/lumen$" /tmp/out || fail "install.sh did not install the unpacked copy"
         grep -x "Exec=\"$home/my bin/lumen\"" "$home/.local/share/applications/lumen.desktop" || fail "the path in the launcher entry is not quoted"
+        grep -x "ExecStart=\"$home/my bin/lumen\" --daemon" "$home/.config/systemd/user/lumen.service" || fail "the path in the service is not quoted"
         su tester -c "'$home/my bin/lumen' --version"
 
         step "removed without naming the folder: the launcher entry says where the program is"
         as_tester "" --uninstall
-        [ ! -e "$home/my bin/lumen" ] && [ ! -e "$home/.local/share/applications/lumen.desktop" ] || fail "something is left after --uninstall"
+        [ ! -e "$home/my bin/lumen" ] && [ ! -e "$home/.local/share/applications/lumen.desktop" ] && [ ! -e "$home/.config/systemd/user/lumen.service" ] || fail "something is left after --uninstall"
 
         step "nothing there: it says so"
         as_tester "" --uninstall >/tmp/out 2>&1

@@ -26,6 +26,7 @@ package() {
   cd "lumen-$pkgver-x86_64-linux"
   install -Dm755 lumen "$pkgdir/usr/bin/lumen"
   install -Dm644 lumen.desktop "$pkgdir/usr/share/applications/lumen.desktop"
+  install -Dm644 lumen.service "$pkgdir/usr/lib/systemd/user/lumen.service"
   local size
   for size in 32 48 64 128 256 512; do
     install -Dm644 "icons/lumen-$size.png" "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/lumen.png"

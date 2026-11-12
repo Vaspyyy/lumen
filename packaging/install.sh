@@ -1,6 +1,7 @@
 #!/bin/sh
 # Installs lumen for one user, without root: the program into ~/.local/bin,
-# the launcher entry and the icons into ~/.local/share.
+# the launcher entry and the icons into ~/.local/share, and a systemd user
+# service that keeps lumen waiting from login on, so that windows open at once.
 #
 #   curl -fsSL https://vaspyyy.github.io/lumen/install.sh | sh
 #
@@ -11,7 +12,7 @@
 #   curl -fsSL https://vaspyyy.github.io/lumen/install.sh | sh -s -- --uninstall
 #
 # LUMEN_VERSION=0.2.2 picks a version, LUMEN_BIN_DIR another folder for the
-# program.
+# program, LUMEN_DAEMON=0 leaves the service out.
 
 set -eu
 
@@ -35,6 +36,7 @@ usage() {
     say "    sh install.sh --uninstall   remove it again"
     say ""
     say "LUMEN_VERSION=0.2.2 picks a version, LUMEN_BIN_DIR another folder for the program."
+    say "LUMEN_DAEMON=0 leaves out the service that keeps lumen waiting from login on."
 }
 
 # Whether the program at $1 is this lumen. Other programs are called lumen
@@ -47,6 +49,16 @@ ours() {
 # The same question for a launcher entry.
 our_entry() {
     grep -q '^Icon=lumen$' "$1" 2>/dev/null && grep -q '^Categories=.*TerminalEmulator' "$1" 2>/dev/null
+}
+
+# The same question for a service.
+our_unit() {
+    grep -q '^ExecStart=.*lumen"\{0,1\} --daemon$' "$1" 2>/dev/null
+}
+
+# Whether systemd runs for this user, so that a service can be started.
+user_systemd() {
+    command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1
 }
 
 # Some desktops keep a list of the launcher entries.
@@ -64,6 +76,7 @@ refresh() {
 uninstall() {
     program=$bin_dir/lumen
     entry=$data_dir/applications/lumen.desktop
+    unit=$unit_dir/lumen.service
     # installed into another folder? The launcher entry names the program.
     if [ ! -e "$program" ] && [ -z "${LUMEN_BIN_DIR:-}" ] && our_entry "$entry"; then
         named=$(sed -n 's/^Exec=//p' "$entry" | head -n 1)
@@ -99,6 +112,21 @@ uninstall() {
             found=1
         else
             say "$entry belongs to another program of the same name. It stays."
+            other=1
+        fi
+    fi
+    if [ -e "$unit" ]; then
+        if our_unit "$unit"; then
+            if user_systemd; then
+                systemctl --user disable --now lumen.service >/dev/null 2>&1 || true
+            fi
+            rm -f -- "$unit"
+            if user_systemd; then
+                systemctl --user daemon-reload || true
+            fi
+            found=1
+        else
+            say "$unit belongs to another program of the same name. It stays."
             other=1
         fi
     fi
@@ -216,6 +244,56 @@ desktop_quote() {
     printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\\\\\/g' -e 's/["`$]/\\\\&/g' -e 's/%/%%/g')"
 }
 
+# A path as the ExecStart line of a service wants it, in the same way.
+unit_quote() {
+    case $1 in
+        *[!A-Za-z0-9/._+-]*) ;;
+        *)
+            printf '%s' "$1"
+            return
+            ;;
+    esac
+    printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/%/%%/g' -e 's/\$/$$/g')"
+}
+
+# The service that keeps lumen waiting without a window from login on, from
+# the release in $1. One that was turned off stays off.
+install_daemon() {
+    unit=$unit_dir/lumen.service
+    [ "${LUMEN_DAEMON:-1}" != 0 ] || return 0
+    # a release from before the service
+    [ -f "$1/lumen.service" ] || return 0
+    if [ -e "$unit" ] && ! our_unit "$unit"; then
+        say "$unit belongs to another program of the same name. It stays, and lumen has no service."
+        return 0
+    fi
+    off=
+    if [ -e "$unit" ] && user_systemd && [ "$(systemctl --user is-enabled lumen.service 2>/dev/null)" = disabled ]; then
+        off=1
+    fi
+    mkdir -p -- "$unit_dir"
+    LUMEN_EXEC=$(unit_quote "$bin_dir/lumen") awk '
+        /^ExecStart=\/usr\/bin\/lumen / { sub(/^ExecStart=\/usr\/bin\/lumen/, ""); print "ExecStart=" ENVIRON["LUMEN_EXEC"] $0; next }
+        { print }
+    ' "$1/lumen.service" >"$unit"
+    if ! user_systemd; then
+        say "systemd doesn't run for this user, so the service is not started: $unit"
+        return 0
+    fi
+    systemctl --user daemon-reload || true
+    if [ -n "$off" ]; then
+        say "The service stays off, as you set it: systemctl --user enable --now lumen turns it on."
+        return 0
+    fi
+    # Started if it doesn't run. One that runs from before an update makes way
+    # for the new program by itself, when it has no window open.
+    if systemctl --user enable --now lumen.service >/dev/null 2>&1; then
+        say "lumen now waits in the background from login on, so that windows open at once."
+    else
+        say "The service could not be started: systemctl --user status lumen says why."
+    fi
+}
+
 # Installs the release that is unpacked in $1.
 install_from() {
     "$1/lumen" --version >/dev/null 2>&1 || cannot_start "$1/lumen"
@@ -254,6 +332,7 @@ Nothing was installed."
     refresh
 
     say "lumen $version is installed: $bin_dir/lumen"
+    install_daemon "$1"
     first=$(command -v lumen 2>/dev/null) || first=
     if [ -z "$first" ]; then
         say "$bin_dir is not on your PATH. Add it, or start lumen from your desktop's menu."
@@ -291,6 +370,10 @@ main() {
     case ${XDG_DATA_HOME:-} in
         /*) data_dir=$XDG_DATA_HOME ;;
         *) data_dir=$HOME/.local/share ;;
+    esac
+    case ${XDG_CONFIG_HOME:-} in
+        /*) unit_dir=$XDG_CONFIG_HOME/systemd/user ;;
+        *) unit_dir=$HOME/.config/systemd/user ;;
     esac
 
     if [ "$(id -u)" = 0 ]; then

@@ -1,11 +1,29 @@
 #!/bin/sh
 # Builds lumen and installs it for this user: the program into Cargo's bin
-# folder, the launcher entry and the icons into ~/.local/share.
+# folder, the launcher entry and the icons into ~/.local/share, and the
+# systemd user service that keeps lumen waiting from login on (LUMEN_DAEMON=0
+# leaves it out).
 set -e
 CDPATH='' cd -- "$(dirname -- "$0")/.."
 cargo install --path . --locked
+program=${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin/lumen
 data=${XDG_DATA_HOME:-$HOME/.local/share}
 install -Dm644 packaging/lumen.desktop "$data/applications/lumen.desktop"
+if [ "${LUMEN_DAEMON:-1}" != 0 ]; then
+    units=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
+    # a service you turned off stays off
+    off=
+    if [ -e "$units/lumen.service" ] && [ "$(systemctl --user is-enabled lumen.service 2>/dev/null)" = disabled ]; then
+        off=1
+    fi
+    mkdir -p "$units"
+    sed "s|^ExecStart=/usr/bin/lumen |ExecStart=\"$program\" |" packaging/lumen.service >"$units/lumen.service"
+    if command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
+        systemctl --user daemon-reload
+        # a daemon from before makes way for the new program by itself, when it has no window open
+        [ -n "$off" ] || systemctl --user enable --now lumen.service
+    fi
+fi
 for size in 32 48 64 128 256 512; do
     install -Dm644 "assets/icon/lumen-$size.png" "$data/icons/hicolor/${size}x${size}/apps/lumen.png"
 done

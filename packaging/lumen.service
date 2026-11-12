@@ -1,0 +1,21 @@
+# Keeps a lumen running without a window from login on, so that `lumen`
+# opens its first window at once instead of starting the GPU first.
+#
+#   systemctl --user enable --now lumen
+#
+# packaging/install.sh and scripts/install.sh install and enable it with the
+# path to their program.
+
+[Unit]
+Description=lumen terminal, waiting for its first window
+Documentation=https://vaspyyy.github.io/lumen/docs/launching/
+
+[Service]
+ExecStart=/usr/bin/lumen --daemon
+# A daemon whose program was updated ends when it has no windows, and the new
+# one takes its place.
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=default.target
