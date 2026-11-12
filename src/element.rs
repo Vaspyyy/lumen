@@ -4,7 +4,7 @@
 //! into plain runs of same-styled text and background rectangles; the lock
 //! is released before any text is shaped.
 
-use std::cell::Cell as StdCell;
+use std::cell::{Cell as StdCell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -22,6 +22,7 @@ use gpui::{
 };
 
 use crate::blocks::{self, snap};
+use crate::commands::{self, Status};
 use crate::config::Config;
 use crate::graphics;
 use crate::palette;
@@ -52,6 +53,17 @@ impl Geometry {
         let row = (y as usize).min(self.rows.saturating_sub(1));
         (col, row, x.fract() >= 0.5)
     }
+}
+
+/// The mark of a command, beside its own lines: where the mouse is on it.
+#[derive(Clone, Copy, Debug)]
+pub struct MarkSpot {
+    /// The command's number in the terminal's log.
+    pub id: u32,
+    /// The first of its lines on screen.
+    pub row: usize,
+    /// From the pane's edge to the grid, as tall as the command's lines.
+    pub bounds: Bounds<Pixels>,
 }
 
 /// The font and the size of a cell, for a config and a pane's zoom.
@@ -144,6 +156,10 @@ pub struct TerminalElement {
     pub search: Option<(Rc<[Match]>, Option<usize>)>,
     /// Text an input method is composing, shown at the cursor.
     pub composing: Option<String>,
+    /// Where the marks of the commands on screen are, for the mouse.
+    pub marks: Rc<RefCell<Vec<MarkSpot>>>,
+    /// The command whose mark the mouse is on.
+    pub hovered_mark: Option<u32>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -199,6 +215,8 @@ pub struct Layout {
     hitbox: Hitbox,
     cell: Size<Pixels>,
     rects: Vec<(Bounds<Pixels>, Hsla)>,
+    /// The marks of the commands, left of the grid.
+    pills: Vec<(Bounds<Pixels>, Hsla)>,
     images: Vec<ImageLayout>,
     /// The block elements, which are filled and not written.
     fills: Vec<(Bounds<Pixels>, Hsla)>,
@@ -310,6 +328,10 @@ impl Element for TerminalElement {
         // the cells that show part of an image: row, column, placement, column and row in the image
         let mut image_cells: Vec<(usize, usize, u32, usize, usize)> = Vec::new();
         let mut found: Vec<(usize, usize, usize, Hsla)> = Vec::new();
+        // the commands whose own lines are on screen: number, first and last row
+        let mut marked: Vec<(u32, usize, usize)> = Vec::new();
+        // and the color of the mark of each that was sent off
+        let mut commands: Vec<(u32, usize, usize, Hsla)> = Vec::new();
         let accent = config.accent();
         let cursor;
         let pointer;
@@ -322,8 +344,13 @@ impl Element for TerminalElement {
             let selection_bg = colors.selection.background.map(|c| c.hsla());
             let selection_fg = colors.selection.text.map(|c| c.hsla());
             let mut run: Option<Run> = None;
-            pointer =
-                if content.mode.intersects(TermMode::MOUSE_MODE) { CursorStyle::Arrow } else { CursorStyle::IBeam };
+            pointer = if self.hovered_mark.is_some() {
+                CursorStyle::PointingHand
+            } else if content.mode.intersects(TermMode::MOUSE_MODE) {
+                CursorStyle::Arrow
+            } else {
+                CursorStyle::IBeam
+            };
 
             // what the search found, as far as it is on screen
             let mut on_match = None;
@@ -351,11 +378,18 @@ impl Element for TerminalElement {
                 }
                 let (row, col) = (row as usize, indexed.point.column.0);
                 let cell = indexed.cell;
-                if let Some(link) = cell.hyperlink()
-                    && let Some((placement, image_col, image_row)) = graphics::cell_of(link.uri())
-                {
-                    image_cells.push((row, col, placement, image_col, image_row));
-                    continue;
+                if let Some(link) = cell.hyperlink() {
+                    if let Some((placement, image_col, image_row)) = graphics::cell_of(link.uri()) {
+                        image_cells.push((row, col, placement, image_col, image_row));
+                        continue;
+                    }
+                    // a cell of a prompt or of what was typed at it: its command's lines reach here
+                    if let Some((id, _)) = commands::cell_of(link.uri()) {
+                        match marked.last_mut() {
+                            Some(last) if last.0 == id => last.2 = row,
+                            _ => marked.push((id, row, row)),
+                        }
+                    }
                 }
                 let flags = cell.flags;
                 if flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
@@ -472,12 +506,47 @@ impl Element for TerminalElement {
                 let wide = under.flags.contains(Flags::WIDE_CHAR);
                 (row as usize, point.column.0, if wide { 2 } else { 1 }, shape, under.c, under.flags)
             });
+
+            // A command that was sent off has a mark: lit while it runs, red when it failed.
+            let log = terminal.commands.lock().unwrap();
+            for (id, first, last) in marked {
+                let Some(command) = log.get(id) else { continue };
+                let hovered = self.hovered_mark == Some(id);
+                let color = match command.status() {
+                    Status::Typed => continue,
+                    Status::Running => accent,
+                    Status::Ended(_) if command.failed() => colors.normal.red.hsla(),
+                    Status::Ended(_) => colors.primary.foreground.hsla().opacity(if hovered { 0.7 } else { 0.3 }),
+                };
+                commands.push((id, first, last, color));
+            }
         }
 
         let mut rects = Vec::with_capacity(backgrounds.len() + found.len());
         for (row, col, cells, color) in backgrounds.into_iter().chain(found) {
             rects.push((cell_bounds(col, row, cells), color));
         }
+
+        // The marks stand in the space between the pane's edge and the grid.
+        let strip = origin.x - bounds.origin.x;
+        let mut pills = Vec::with_capacity(commands.len());
+        let mut spots = Vec::with_capacity(commands.len());
+        if strip >= px(4.) {
+            for (id, first, last, color) in commands {
+                let lines = cell_bounds(0, first, 1).union(&cell_bounds(0, last, 1));
+                let width = px(if self.hovered_mark == Some(id) { 5. } else { 3. }).min(strip - px(1.));
+                let inset = (cell_height * 0.18).round();
+                let left = snap(bounds.origin.x + (strip - width) / 2., scale);
+                let pill = Bounds::from_corners(
+                    point(left, lines.top() + inset),
+                    point(snap(left + width, scale), lines.bottom() - inset),
+                );
+                pills.push((pill, color));
+                let spot = Bounds::from_corners(point(bounds.origin.x, lines.top()), point(origin.x, lines.bottom()));
+                spots.push(MarkSpot { id, row: first, bounds: spot });
+            }
+        }
+        *self.marks.borrow_mut() = spots;
 
         let mut fills = Vec::with_capacity(block_cells.len());
         for (row, col, cells, shape, color) in block_cells {
@@ -612,7 +681,8 @@ impl Element for TerminalElement {
             let block = blocks::shape(c)
                 .filter(|_| shape == CursorShape::Block && cells == 1 && !flags.contains(Flags::HIDDEN))
                 .map(|block| (block, ink.opacity(block.cover)));
-            let text = (shape == CursorShape::Block && c != ' ' && c != '\0' && block.is_none()).then(|| {
+            let shown = c != ' ' && c != '\0' && !flags.contains(Flags::HIDDEN);
+            let text = (shape == CursorShape::Block && shown && block.is_none()).then(|| {
                 let style = RunStyle {
                     fg: ink,
                     bold: flags.contains(Flags::BOLD),
@@ -630,7 +700,7 @@ impl Element for TerminalElement {
         });
         self.motion.set(motion);
 
-        Layout { hitbox, cell, rects, images, fills, lines, marks, composing, cursor, pointer }
+        Layout { hitbox, cell, rects, pills, images, fills, lines, marks, composing, cursor, pointer }
     }
 
     fn paint(
@@ -649,6 +719,10 @@ impl Element for TerminalElement {
 
         for (rect, color) in &layout.rects {
             window.paint_quad(fill(*rect, *color));
+        }
+        for (pill, color) in &layout.pills {
+            let radius = pill.size.width / 2.;
+            window.paint_quad(quad(*pill, radius, *color, px(0.), transparent_black(), BorderStyle::default()));
         }
         for image in &layout.images {
             let _ = window.paint_image(image.clip, image.bounds, Corners::default(), image.image.clone(), 0, false);

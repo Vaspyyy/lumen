@@ -1,7 +1,7 @@
 //! A terminal on screen: its keyboard, mouse, selection, clipboard, links
 //! and search.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -9,26 +9,28 @@ use std::time::{Duration, Instant};
 
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Direction, Line, Point as GridPoint, Side};
-use alacritty_terminal::selection::SelectionType;
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 use alacritty_terminal::term::{Term, TermMode};
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, BoxShadow, ClickEvent, ClipboardItem, Context, Entity, EntityInputHandler, EventEmitter,
-    ExternalDragPayload, ExternalPaths, FileDragPaths, FocusHandle, Focusable, KeyDownEvent, KeyUpEvent, Keystroke,
-    Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    ScrollDelta, ScrollEvent, SharedString, Subscription, Task, UTF16Selection, Window, div, point, px, svg,
+    ExternalDragPayload, ExternalPaths, FileDragPaths, FocusHandle, Focusable, KeyContext, KeyDownEvent, KeyUpEvent,
+    Keystroke, Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, ScrollDelta, ScrollEvent, SharedString, Subscription, Task, UTF16Selection, Window, div, point, px, svg,
 };
 
 use crate::actions::{
-    Copy, Paste, ScrollBottom, ScrollPageDown, ScrollPageUp, ScrollTop, ToggleSearch, ZoomIn, ZoomOut, ZoomReset,
+    Copy, CopyOutput, NextCommand, Paste, PreviousCommand, ScrollBottom, ScrollPageDown, ScrollPageUp, ScrollTop,
+    ToggleSearch, ZoomIn, ZoomOut, ZoomReset,
 };
+use crate::commands;
 use crate::config::Config;
-use crate::element::{Geometry, Motion, TerminalElement};
+use crate::element::{Geometry, MarkSpot, Motion, TerminalElement};
 use crate::keys::Press;
 use crate::links::{self, Target};
-use crate::terminal::{Started, Terminal, TerminalEvent};
+use crate::terminal::{CommandEvent, Listener, Started, Terminal, TerminalEvent};
 use crate::{keys, mouse};
 
 pub enum ViewEvent {
@@ -40,8 +42,14 @@ pub enum ViewEvent {
     Output,
     /// The pane was clicked or otherwise took the keyboard.
     Focused,
+    /// The program rang the bell.
+    Bell,
+    /// A command was sent off, or one ended.
+    Command(CommandEvent),
     /// Something to tell the user in passing: a file was copied.
     Notice(String),
+    /// A line in a file is to be opened in the editor.
+    Edit { path: PathBuf, line: u32, column: Option<u32> },
 }
 
 /// A link the mouse is on.
@@ -119,6 +127,10 @@ pub struct TerminalView {
     mouse: Option<Point<Pixels>>,
     modifiers: Modifiers,
     hover: Option<Hover>,
+    /// Where the marks of the commands on screen are, as of the last frame.
+    marks: Rc<RefCell<Vec<MarkSpot>>>,
+    /// The command whose mark the mouse is on.
+    hovered_mark: Option<u32>,
     /// The keys whose press went to the program, and whose release may too.
     keys_down: Vec<String>,
     search: Option<Search>,
@@ -151,7 +163,8 @@ impl TerminalView {
             cx.subscribe(&terminal, |_, _, event: &TerminalEvent, cx| match event {
                 TerminalEvent::Title => cx.emit(ViewEvent::Title),
                 TerminalEvent::Exited => cx.emit(ViewEvent::Closed),
-                TerminalEvent::Bell => {},
+                TerminalEvent::Bell => cx.emit(ViewEvent::Bell),
+                TerminalEvent::Command(event) => cx.emit(ViewEvent::Command(*event)),
             }),
             cx.on_focus(&focus, window, |this, _, cx| {
                 this.touch();
@@ -205,6 +218,8 @@ impl TerminalView {
             mouse: None,
             modifiers: Modifiers::default(),
             hover: None,
+            marks: Rc::default(),
+            hovered_mark: None,
             keys_down: Vec::new(),
             search: None,
             search_refresh: None,
@@ -353,8 +368,10 @@ impl TerminalView {
         }
         let offset = term.grid().display_offset() as i32;
         let link_at = |row: usize, col: usize| term.grid()[Line(row as i32 - offset)][Column(col)].hyperlink();
-        let link = link_at(row, col)?;
-        let target = links::target(link.uri())?;
+        // a link the program marked, or else what its plain text names
+        let Some((target, link)) = link_at(row, col).and_then(|link| Some((links::target(link.uri())?, link))) else {
+            return self.text_under_mouse(&term, terminal, Line(row as i32 - offset), row, col);
+        };
         // the cells around `col` that carry the same link
         let stretch = |row: usize, col: usize| {
             let (mut start, mut end) = (col, col + 1);
@@ -404,6 +421,41 @@ impl TerminalView {
         Some(Hover { target, segments })
     }
 
+    /// What the plain text under the mouse names: a web address, or a file
+    /// that is there. Looked for only while Ctrl is held, which is when a
+    /// click would follow it: a file is looked up on disk.
+    fn text_under_mouse(
+        &self,
+        term: &Term<Listener>,
+        terminal: &Terminal,
+        line: Line,
+        row: usize,
+        col: usize,
+    ) -> Option<Hover> {
+        if !self.modifiers.control {
+            return None;
+        }
+        // the line's characters, each with its column: a wide one takes two cells
+        let cells: Vec<(usize, char)> = term.grid()[line]
+            .into_iter()
+            .enumerate()
+            .filter(|(_, cell)| !cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER))
+            .map(|(col, cell)| (col, cell.c))
+            .collect();
+        let text: Vec<char> = cells.iter().map(|&(_, c)| c).collect();
+        let at = cells.iter().rposition(|&(cell_col, _)| cell_col <= col)?;
+        let (target, part) = links::in_text(&text, at, |name| {
+            // a path is meant from where the command that printed it was run
+            let log = terminal.commands.lock().unwrap();
+            let printed_by = commands::place_at(term, line).or_else(|| commands::above(term, line, |_| true));
+            let folder = printed_by.and_then(|place| log.get(place.id)?.cwd.clone()).or_else(|| terminal.cwd());
+            links::find_file(name, folder.as_deref())
+        })?;
+        let (first, last) = (cells[part.start].0, cells[part.end - 1].0);
+        let wide = term.grid()[line][Column(last)].flags.contains(Flags::WIDE_CHAR);
+        Some(Hover { target, segments: vec![(row, first, last + 1 + wide as usize - first)] })
+    }
+
     fn update_hover(&mut self, cx: &mut Context<Self>) {
         let hover = self.link_under_mouse(cx);
         if hover != self.hover {
@@ -431,6 +483,9 @@ impl TerminalView {
         match (&hover.target, open) {
             (Target::Copy(path), false) => self.copy_file(path, cx),
             (Target::Copy(path) | Target::File(path), _) => cx.open_with_system(path),
+            (Target::Place { path, line, column }, _) => {
+                cx.emit(ViewEvent::Edit { path: path.clone(), line: *line, column: *column })
+            },
             (Target::Url(url), _) => cx.open_url(url),
         }
     }
@@ -456,6 +511,137 @@ impl TerminalView {
             }
         };
         cx.emit(ViewEvent::Notice(notice));
+    }
+
+    /// The command whose mark is at this position.
+    fn mark_at(&self, position: Point<Pixels>) -> Option<MarkSpot> {
+        self.marks.borrow().iter().find(|spot| spot.bounds.contains(&position)).copied()
+    }
+
+    /// Scrolls to the command before or after the one the view starts with:
+    /// its prompt becomes the first line.
+    fn jump(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let terminal = self.terminal.read(cx);
+        {
+            let mut term = terminal.term.lock();
+            let log = terminal.commands.lock().unwrap();
+            let sent_off = |id: u32| log.get(id).is_some_and(|command| command.started.is_some());
+            let offset = term.grid().display_offset() as i32;
+            let top = Line(-offset);
+            let target = if forward {
+                let from = commands::place_at(&*term, top).map_or(top, |place| place.last);
+                commands::below(&*term, from, sent_off)
+            } else {
+                commands::above(&*term, top, sent_off)
+            };
+            let wanted = match target {
+                // a command that is on the screen as it stands needs no scrolling back
+                Some(place) => (-place.first.0).max(0),
+                None if forward => 0,
+                None => return,
+            };
+            term.scroll_display(Scroll::Delta(wanted - offset));
+        }
+        self.update_hover(cx);
+        cx.notify();
+    }
+
+    /// Copies what a command printed, and selects it: that shows what was copied.
+    fn copy_output_of(
+        &mut self,
+        find: impl FnOnce(&Term<Listener>, &commands::Log) -> Option<commands::Place>,
+        cx: &mut Context<Self>,
+    ) {
+        let terminal = self.terminal.read(cx);
+        let found = {
+            let mut term = terminal.term.lock();
+            let log = terminal.commands.lock().unwrap();
+            find(&term, &log).map(|place| {
+                let name = log.get(place.id).and_then(|command| command.name());
+                let copied = commands::output(&*term, place).map(|lines| {
+                    let mut selection =
+                        Selection::new(SelectionType::Lines, GridPoint::new(lines.0, Column(0)), Side::Left);
+                    selection.update(GridPoint::new(lines.1, term.last_column()), Side::Right);
+                    term.selection = Some(selection);
+                    (commands::text(&*term, lines), (lines.1.0 - lines.0.0) as usize + 1)
+                });
+                (name, copied)
+            })
+        };
+        let notice = match found {
+            None => "No command here: the shell has to mark its commands for this".to_string(),
+            Some((name, None)) => match name {
+                Some(name) => format!("{name} printed nothing"),
+                None => "That command printed nothing".to_string(),
+            },
+            Some((name, Some((text, lines)))) => {
+                cx.write_to_primary(ClipboardItem::new_string(text.clone()));
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                let lines = if lines == 1 { "1 line".to_string() } else { format!("{lines} lines") };
+                match name {
+                    Some(name) => format!("Copied the output of {name}: {lines}"),
+                    None => format!("Copied {lines} of output"),
+                }
+            },
+        };
+        cx.emit(ViewEvent::Notice(notice));
+        cx.notify();
+    }
+
+    /// The output of the command the view starts with, when it is scrolled
+    /// back; of the last command otherwise.
+    fn copy_output(&mut self, _: &CopyOutput, _: &mut Window, cx: &mut Context<Self>) {
+        self.copy_output_of(
+            |term, log| {
+                let sent_off = |id: u32| log.get(id).is_some_and(|command| command.started.is_some());
+                let offset = term.grid().display_offset() as i32;
+                if offset == 0 {
+                    return commands::above(term, term.bottommost_line() + 1, sent_off);
+                }
+                let top = Line(-offset);
+                commands::place_at(term, top)
+                    .filter(|place| sent_off(place.id))
+                    .or_else(|| commands::above(term, top, sent_off))
+            },
+            cx,
+        );
+    }
+
+    /// What is said about a command while the mouse is on its mark.
+    fn render_mark(&self, spot: MarkSpot, geometry: Geometry, cx: &App) -> Option<impl IntoElement + use<>> {
+        let config = cx.global::<Config>();
+        let about = self.terminal.read(cx).commands.lock().unwrap().get(spot.id)?.describe()?;
+        const HEIGHT: f32 = 26.;
+        // above the command's lines, or below them where there is no room above
+        let above = spot.bounds.top() - geometry.bounds.origin.y - px(HEIGHT + 4.);
+        let top = if above >= px(0.) { above } else { spot.bounds.bottom() - geometry.bounds.origin.y + px(4.) };
+        Some(
+            div()
+                .absolute()
+                .left(geometry.origin.x - geometry.bounds.origin.x)
+                .top(top)
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .h(px(HEIGHT))
+                .px(px(10.))
+                .rounded(px(8.))
+                .bg(config.colors.primary.background.hsla().opacity(0.95))
+                .border_1()
+                .border_color(gpui::white().opacity(0.14))
+                .shadow(vec![BoxShadow {
+                    color: gpui::black().opacity(0.35),
+                    offset: point(px(0.), px(2.)),
+                    blur_radius: px(10.),
+                    spread_radius: px(0.),
+                    inset: false,
+                }])
+                .font_family(crate::fonts::ui())
+                .text_size(px(12.5))
+                .text_color(gpui::white().opacity(0.92))
+                .child(SharedString::from(about))
+                .child(div().text_color(gpui::white().opacity(0.45)).child("click copies the output")),
+        )
     }
 
     fn toggle_search(&mut self, _: &ToggleSearch, _: &mut Window, cx: &mut Context<Self>) {
@@ -587,6 +773,19 @@ impl TerminalView {
             }
             return;
         }
+        // a click on a command's mark is for the command, not for the text beside it
+        if event.button == MouseButton::Left
+            && let Some(spot) = self.mark_at(event.position)
+        {
+            self.copy_output_of(
+                |term, _| {
+                    let line = Line(spot.row as i32 - term.grid().display_offset() as i32);
+                    commands::place_at(term, line).filter(|place| place.id == spot.id)
+                },
+                cx,
+            );
+            return;
+        }
         match event.button {
             MouseButton::Left => {
                 let ty = match event.click_count {
@@ -618,6 +817,11 @@ impl TerminalView {
             cx.notify();
         }
         self.update_hover(cx);
+        let mark = if hovered && !self.selecting { self.mark_at(event.position).map(|spot| spot.id) } else { None };
+        if mark != self.hovered_mark {
+            self.hovered_mark = mark;
+            cx.notify();
+        }
         let Some(geometry) = self.geometry.get() else {
             return;
         };
@@ -875,11 +1079,22 @@ impl Render for TerminalView {
             _ => Vec::new(),
         };
         let search = self.search.as_ref().map(|search| self.render_search(search, cx));
+        let hovered_mark =
+            self.hovered_mark.and_then(|id| self.marks.borrow().iter().find(|spot| spot.id == id).copied());
+        let about = match (hovered_mark, self.geometry.get()) {
+            (Some(spot), Some(geometry)) => self.render_mark(spot, geometry, cx),
+            _ => None,
+        };
+        let mut context = KeyContext::default();
+        context.add("Terminal");
+        if self.mode(cx).contains(TermMode::ALT_SCREEN) {
+            context.add("alt_screen");
+        }
         div()
             .relative()
             .size_full()
             .track_focus(&self.focus)
-            .key_context("Terminal")
+            .key_context(context)
             .on_key_down(cx.listener(Self::key_down))
             .on_key_up(cx.listener(Self::key_up))
             .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
@@ -889,6 +1104,9 @@ impl Render for TerminalView {
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::toggle_search))
+            .on_action(cx.listener(Self::copy_output))
+            .on_action(cx.listener(|this, _: &PreviousCommand, _, cx| this.jump(false, cx)))
+            .on_action(cx.listener(|this, _: &NextCommand, _, cx| this.jump(true, cx)))
             .on_action(cx.listener(|this, _: &ScrollPageUp, _, cx| this.scroll_by(Scroll::PageUp, cx)))
             .on_action(cx.listener(|this, _: &ScrollPageDown, _, cx| this.scroll_by(Scroll::PageDown, cx)))
             .on_action(cx.listener(|this, _: &ScrollTop, _, cx| this.scroll_by(Scroll::Top, cx)))
@@ -921,8 +1139,11 @@ impl Render for TerminalView {
                 link: link.map(|hover| hover.segments).unwrap_or_default(),
                 search: self.search.as_ref().map(|search| (search.matches.clone(), search.current)),
                 composing: self.composing.clone(),
+                marks: self.marks.clone(),
+                hovered_mark: self.hovered_mark,
             })
             .children(spots)
+            .children(about)
             .children(search)
     }
 }

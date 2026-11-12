@@ -45,7 +45,58 @@ Programs can print links of any kind: web pages, or the `file://` links that `ls
 
 A plain click on these does nothing, so that you can still select the text. Only a file name from a listing is copied by a plain click.
 
-> A web address that is printed as plain text, with no link around it, is not clickable yet. lumen follows the links programs mark as links.
+## Web addresses and places in code
+
+Most of what you would like to click is not marked as a link at all: a web address in a log, the `src/main.rs:42:9` in a compiler's error. lumen finds those in the text.
+
+Hold `Ctrl` and move the mouse onto one. If lumen can follow it, it is underlined, and a click does:
+
+| `Ctrl+Click` on | Does |
+| --- | --- |
+| A web address, such as `https://example.com/docs` | Opens it in your browser |
+| A file or folder that is there, such as `notes/todo.md` | Opens it in its program |
+| A file with a line, such as `src/main.rs:42` | Opens the file at that line in [your editor](#your-editor) |
+
+lumen reads a line in these forms:
+
+```
+src/main.rs:42            src/main.rs:42:9
+src/main.rs(42)           src/main.rs(42,9)
+File "tools/build.py", line 42
+```
+
+Those cover what compilers, linters, test runners and searches print, among them crux, seek and recap. A full stop, a comma or a bracket around an address or a path is left out.
+
+**Only a file that is there is a link.** lumen looks on the disk before it underlines a path, so a word with a dot in it does not turn into a link by chance. It looks only while `Ctrl` is held.
+
+**Where a path is looked for.** A path that starts with `/` or `~` is taken as it is. Any other is followed from the folder the command that printed it ran in, which lumen knows when [your shell marks its commands](/docs/commands/); without that, from the folder the pane's shell is in now. Tools that run further down in a project often name files from its top, so for a path with a `/` in it the five folders above are tried as well, up to your home folder. A bare name such as `main.rs` is looked for in that one folder only.
+
+Not found this way: a path that is broken over two lines, and a path with a space in it.
+
+## Your editor
+
+A file with a line opens in your editor, at that line. Which program that is:
+
+1. `command` in the `[editor]` table of the [config](/docs/configuration/#editor), if you set it
+2. else what `$VISUAL` names, else `$EDITOR`
+3. else the program your desktop opens the file with, which does not know about the line
+
+```toml
+[editor]
+command = "nvim"
+```
+
+An editor that runs in a terminal, such as vim, nvim, helix, nano or micro, opens in a new tab, in the file's folder. The tab closes when you leave the editor. An editor with a window of its own, such as VS Code, Zed, Kate or a JetBrains IDE, is started beside lumen.
+
+lumen knows how the common editors take a line. For any other, write the whole command, with `{file}`, `{line}` and `{column}` where they belong, and say whether it runs in a terminal:
+
+```toml
+[editor]
+command = "myeditor --line {line} --column {column} {file}"
+terminal = false
+```
+
+`$VISUAL` and `$EDITOR` are read from the environment lumen was started in. Started from the application menu, that is your desktop's, which may not have what your shell's startup file sets. If lumen opens the wrong program, set `command`.
 
 ## Selecting text that is a link
 
@@ -75,4 +126,5 @@ A link can come from anywhere: from a file you print, from a server you are logg
 ## Not there yet
 
 - Dragging a file out of the window works on Wayland, not on X11.
+- A path over SSH names a file on the other machine. lumen looks for it on yours, and finds it only if the same file is there too.
 - Several files can't be selected and copied together.

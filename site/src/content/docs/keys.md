@@ -49,6 +49,16 @@ lumen keeps few keys for itself. Where a program is likely to want a key, lumen'
 
 Typing brings the view back to the bottom.
 
+## Commands
+
+| Key | Does |
+| --- | --- |
+| `Ctrl+Shift+Up` | Go to the command before |
+| `Ctrl+Shift+Down` | Go to the next command |
+| `Ctrl+Shift+O` | Copy what the last command printed |
+
+These need a shell that marks its commands, and are lumen's only at a shell: a full-screen program gets them itself. See [Commands](/docs/commands/).
+
 ## Text size
 
 | Key | Does |

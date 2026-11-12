@@ -15,6 +15,9 @@ actions!(
         ZoomOut,
         ZoomReset,
         ToggleSearch,
+        PreviousCommand,
+        NextCommand,
+        CopyOutput,
         NewTab,
         CloseTab,
         NextTab,
@@ -41,6 +44,8 @@ pub struct GoToTab(pub usize);
 
 pub fn bind(cx: &mut App) {
     let terminal = Some("Terminal");
+    // a full-screen program has no commands on its screen: these keys are its own there
+    let shell = Some("Terminal && !alt_screen");
     let mut keys = vec![
         KeyBinding::new("ctrl-shift-c", Copy, terminal),
         KeyBinding::new("ctrl-shift-v", Paste, terminal),
@@ -54,6 +59,9 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new("ctrl--", ZoomOut, terminal),
         KeyBinding::new("ctrl-0", ZoomReset, terminal),
         KeyBinding::new("ctrl-shift-f", ToggleSearch, terminal),
+        KeyBinding::new("ctrl-shift-up", PreviousCommand, shell),
+        KeyBinding::new("ctrl-shift-down", NextCommand, shell),
+        KeyBinding::new("ctrl-shift-o", CopyOutput, shell),
         KeyBinding::new("ctrl-shift-t", NewTab, None),
         KeyBinding::new("ctrl-shift-w", ClosePane, None),
         KeyBinding::new("ctrl-shift-q", CloseTab, None),

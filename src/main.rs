@@ -2,10 +2,13 @@
 
 mod actions;
 mod blocks;
+mod commands;
 mod config;
+mod editor;
 mod element;
 mod fonts;
 mod graphics;
+mod integration;
 mod keys;
 mod links;
 mod mouse;
@@ -78,7 +81,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Spawn, i32> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-h" | "--help" => {
-                print!("{USAGE}\n{}", phone::USAGE);
+                print!("{USAGE}\n{}\n{}", integration::USAGE, phone::USAGE);
                 return Err(0);
             },
             "-v" | "--version" => {
@@ -169,7 +172,7 @@ fn watch_config(cx: &mut App) {
 fn main() {
     // the commands for phones work over SSH, with no display: before anything of the window
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if let Some(status) = phone::run(&args) {
+    if let Some(status) = phone::run(&args).or_else(|| integration::run(&args)) {
         std::process::exit(status);
     }
     let spawn = match parse_args(args.into_iter()) {

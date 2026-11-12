@@ -43,7 +43,16 @@ Hold `Shift` and the mouse is lumen's again, to select text in such a program.
 | `Ctrl+Click` | Opens it |
 | Drag | Takes the file along |
 
-Other links open with `Ctrl+Click`. See [Files and links](/docs/files-and-links/).
+Other links open with `Ctrl+Click`. So do web addresses, files and places in code such as `src/main.rs:42` that a program printed as plain text: hold `Ctrl`, and what lumen can follow is underlined under the mouse. See [Files and links](/docs/files-and-links/).
+
+## Commands
+
+| On the mark beside a command | Does |
+| --- | --- |
+| Move the mouse onto it | Says how the command ended and how long it took |
+| Click | Copies what the command printed |
+
+See [Commands](/docs/commands/).
 
 ## Tabs and panes
 

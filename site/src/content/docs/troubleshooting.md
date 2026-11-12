@@ -41,6 +41,24 @@ Move the mouse onto the name first. If it is **not underlined**, lumen doesn't k
 
 If it **is underlined** and the click copies nothing, lumen says why at the bottom of the window. Usually the helper that holds the clipboard is missing: install `wl-clipboard` on Wayland, `xclip` on X11.
 
+## Commands have no marks
+
+The marks beside commands, the keys that jump between them and the dots on tabs all need a shell that says where its commands are.
+
+- **bash and zsh** need one line in their startup file, and **fish** needs version 4.0 or the same kind of line. See [Commands](/docs/commands/#setting-up-your-shell). The line counts for tabs opened after it was added.
+- **`padding` is under 4** in the config: there is no room for the marks. The keys still work.
+- **Inside tmux** or another multiplexer the marks don't reach lumen.
+
+## `Ctrl+Click` on a path does nothing
+
+Hold `Ctrl` and look whether the path is underlined. If it is not, lumen found no such file:
+
+- The path is meant from another folder than lumen looked in. With a shell that [marks its commands](/docs/commands/), lumen knows where each command ran. Without, it goes by where the shell is now.
+- The path is on another machine, in a pane where you are logged in over SSH.
+- The path has a space in it, or is broken over two lines.
+
+If it opens in the wrong program, say which editor you want: [`[editor]`](/docs/configuration/#editor) in the config.
+
 ## `glint --thumbs` draws blocks, not pictures
 
 - glint is older than 0.11.1 and doesn't know lumen. Update it, or run `glint --thumbs=kitty`.

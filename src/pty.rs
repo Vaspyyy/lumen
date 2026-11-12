@@ -1,8 +1,9 @@
 //! The thread between a terminal and its program.
 //!
 //! It reads what the program prints, takes the images out of it (see
-//! [`crate::graphics`]) and gives the rest to the terminal's parser, and it
-//! writes what is typed. This is alacritty_terminal's event loop (Apache-2.0)
+//! [`crate::graphics`]) and gives the rest to the terminal's parser, with
+//! what a shell says about its commands taken on where it stands (see
+//! [`crate::commands`]), and it writes what is typed. This is alacritty_terminal's event loop (Apache-2.0)
 //! with that one step added: its own can't be told about escape sequences
 //! the parser doesn't know.
 
@@ -21,6 +22,7 @@ use alacritty_terminal::tty::{self, EventedPty, EventedReadWrite};
 use alacritty_terminal::vte::ansi;
 use polling::{Event as Interest, Events, PollMode, Poller};
 
+use crate::commands;
 use crate::graphics::{Filter, Graphics, Piece, Shared};
 
 const READ_BUFFER: usize = 0x10_0000;
@@ -64,6 +66,9 @@ pub struct IoLoop<L: EventListener> {
     listener: L,
     filter: Filter,
     graphics: Graphics,
+    /// What finds a shell's marks in the output, and the commands they tell of.
+    marks: commands::Scanner,
+    commands: commands::Shared,
     /// A cell's size in pixels, which an image's size in cells follows from.
     cell: (f32, f32),
 }
@@ -82,6 +87,7 @@ impl<L: EventListener + Send + 'static> IoLoop<L> {
         listener: L,
         pty: tty::Pty,
         images: Shared,
+        commands: commands::Shared,
         cell: (f32, f32),
     ) -> io::Result<IoLoop<L>> {
         let (tx, rx) = mpsc::channel();
@@ -94,6 +100,8 @@ impl<L: EventListener + Send + 'static> IoLoop<L> {
             listener,
             filter: Filter::default(),
             graphics: Graphics::new(images),
+            marks: commands::Scanner::default(),
+            commands,
             cell,
         })
     }
@@ -140,7 +148,7 @@ impl<L: EventListener + Send + 'static> IoLoop<L> {
                 match piece {
                     Piece::Text(bytes) => {
                         let term = terminal.get_or_insert_with(|| self.terminal.lock_unfair());
-                        state.parser.advance(&mut **term, bytes);
+                        commands::advance(&mut self.marks, &self.commands, &mut state.parser, &mut **term, bytes);
                     },
                     Piece::Command(command) => {
                         // reading an image takes a while: the window may have the grid meanwhile

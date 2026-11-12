@@ -22,6 +22,7 @@ use futures::StreamExt;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use gpui::{ClipboardItem, Context, EventEmitter, Task};
 
+use crate::commands;
 use crate::config::{Config, CursorShape};
 use crate::graphics;
 use crate::palette;
@@ -75,14 +76,30 @@ pub enum TerminalEvent {
     /// The title or the working directory changed.
     Title,
     Bell,
+    /// A command was sent off, or one ended.
+    Command(CommandEvent),
     /// The program ended.
     Exited,
+}
+
+/// What happened to a command, as far as the window cares.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandEvent {
+    Started,
+    Ended {
+        /// It ended with an error of its own.
+        failed: bool,
+    },
 }
 
 pub struct Terminal {
     pub term: Arc<FairMutex<Term<Listener>>>,
     /// The images the program has put on screen.
     pub images: graphics::Shared,
+    /// The commands the shell has told of.
+    pub commands: commands::Shared,
+    /// The command that was running and how many had ended, when that was last looked at.
+    commands_seen: (Option<u32>, u64),
     io: Sender,
     pub size: TermSize,
     title: Option<String>,
@@ -105,6 +122,7 @@ pub struct Spawn {
 pub struct Started {
     term: Arc<FairMutex<Term<Listener>>>,
     images: graphics::Shared,
+    commands: commands::Shared,
     io: Sender,
     size: TermSize,
     shell_pid: u32,
@@ -135,14 +153,16 @@ impl Terminal {
         let listener = Listener(tx);
         let term = Arc::new(FairMutex::new(Term::new(term_options(config), &size, listener.clone())));
         let images = graphics::Shared::default();
-        let io_loop = IoLoop::new(term.clone(), listener, pty, images.clone(), (size.cell_width, size.cell_height))?;
+        let commands = commands::Shared::new(commands::Log::new(shell_pid).into());
+        let cell = (size.cell_width, size.cell_height);
+        let io_loop = IoLoop::new(term.clone(), listener, pty, images.clone(), commands.clone(), cell)?;
         let io = io_loop.sender();
         io_loop.spawn();
-        Ok(Started { term, images, io, size, shell_pid, events: rx })
+        Ok(Started { term, images, commands, io, size, shell_pid, events: rx })
     }
 
     pub fn new(started: Started, cx: &mut Context<Self>) -> Self {
-        let Started { term, images, io, size, shell_pid, events: mut rx } = started;
+        let Started { term, images, commands, io, size, shell_pid, events: mut rx } = started;
         let events = cx.spawn(async move |this, cx| {
             while let Some(first) = rx.next().await {
                 // output arrives in bursts: take what is there, redraw once
@@ -161,12 +181,43 @@ impl Terminal {
             }
         });
 
-        Terminal { term, images, io, size, title: None, shell_pid, exited: false, _events: events }
+        Terminal {
+            term,
+            images,
+            commands,
+            commands_seen: (None, 0),
+            io,
+            size,
+            title: None,
+            shell_pid,
+            exited: false,
+            _events: events,
+        }
+    }
+
+    /// Tells of the commands that were sent off or ended since this last looked.
+    fn notice_commands(&mut self, cx: &mut Context<Self>) {
+        let (running, last, ended) = {
+            let log = self.commands.lock().unwrap();
+            let (last, ended) = log.last_ended();
+            (log.running().map(|(id, _)| id), last.map(|command| command.failed()), ended)
+        };
+        let (was_running, had_ended) = std::mem::replace(&mut self.commands_seen, (running, ended));
+        if ended != had_ended {
+            cx.emit(TerminalEvent::Command(CommandEvent::Ended { failed: last.unwrap_or(false) }));
+        }
+        if running.is_some() && running != was_running {
+            cx.emit(TerminalEvent::Command(CommandEvent::Started));
+        }
     }
 
     fn handle(&mut self, event: TermEvent, cx: &mut Context<Self>) {
         match event {
-            TermEvent::Wakeup | TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => cx.notify(),
+            TermEvent::Wakeup => {
+                self.notice_commands(cx);
+                cx.notify();
+            },
+            TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => cx.notify(),
             TermEvent::Title(title) => {
                 self.title = Some(title);
                 cx.emit(TerminalEvent::Title);

@@ -58,6 +58,16 @@ These need no window. They run in any terminal, and over SSH.
 
 [lumen on your phone](/docs/phone/) is where to start, [How the phone logs in](/docs/phone-security/) says what pairing changes on the PC, and [Terminals that keep running](/docs/kept-terminals/) is about `attach` and `sessions`.
 
+## Shells
+
+| Command | Does |
+| --- | --- |
+| `lumen shell-integration bash` | Prints the lines that make bash mark its commands |
+| `lumen shell-integration zsh` | The same for zsh |
+| `lumen shell-integration fish` | The same for fish older than 4.0. Newer ones need none |
+
+They are printed, and written nowhere: you add one line to your shell's startup file that reads them in. [Commands](/docs/commands/#setting-up-your-shell) has the line for each shell.
+
 ## As the default terminal
 
 The install script adds a launcher entry, `lumen.desktop`, so lumen can be chosen as the terminal in your desktop's settings. Desktops and launchers that start a terminal with a command usually pass it after `-e`, which lumen takes.

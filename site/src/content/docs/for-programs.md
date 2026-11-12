@@ -26,6 +26,7 @@ The better way to find out what a terminal can do is to ask it. lumen answers th
 | Text styles | Bold, italic, dim, inverse, hidden, strikethrough; straight and curly underlines, in a color of their own. A double underline is drawn as a thicker line, dotted and dashed ones as a straight one |
 | Wide characters | Characters that take two cells, such as CJK and most emoji |
 | Links | OSC 8. See [Files and links](/docs/files-and-links/) |
+| Commands | The marks of OSC 133: where a prompt, a command's output and its end are. See [Marks for commands](#marks-for-commands) |
 | Pictures | The kitty graphics protocol, in part. See [Pictures](/docs/images/) |
 | Keyboard | The kitty keyboard protocol, all of its levels |
 | Mouse | Click, drag and motion reports, in the SGR format and the older one |
@@ -62,9 +63,29 @@ Three rules, which keep such links from being misused:
 
 In other terminals the link is handed to the desktop, where [glint](https://github.com/Vaspyyy/glint) can register itself to do the copying (`glint --init copy`).
 
+## Marks for commands
+
+A shell tells lumen where its commands are with the marks of OSC 133, each as `ESC ] 133 ; X ESC \\` or ending in `BEL`:
+
+| Mark | Says |
+| --- | --- |
+| `A` | A prompt begins here |
+| `B` | The prompt has ended, what is typed begins |
+| `C` | The command was sent off, its output begins |
+| `D` | The command has ended. `D;0` gives its exit status |
+
+Anything after a further `;` is left alone, with one exception: `C;cmdline_url=TEXT` gives the command's text, percent-encoded, as fish sends it. Without it, lumen reads the text from the screen, between `B` and `C`.
+
+`B` can be left out. A prompt that is written again in the same place, as after a resize, stays the same command. On the alternate screen the marks are ignored.
+
+What lumen does with them is in [Commands](/docs/commands/). `lumen shell-integration bash` prints a small, complete example for a shell.
+
+## Places in code
+
+lumen opens `path:line` in the user's editor on a `Ctrl+Click`, with no link around it. A tool that prints places as `path:line`, `path:line:column`, `path(line)` or `path(line,column)`, with the path relative to the folder it was run in or to a folder above that, needs to do nothing more. See [Files and links](/docs/files-and-links/#web-addresses-and-places-in-code).
+
 ## Not supported
 
 - Sixel and iTerm2 pictures.
 - Reading the clipboard with OSC 52.
-- The bell. It is silent, and nothing flashes.
-- Marks for where a command's output starts and ends (OSC 133). They are what the next part of the [roadmap](/docs/roadmap/) builds on.
+- A bell you can hear. The bell puts a dot on a tab that is not being looked at, and does nothing else.

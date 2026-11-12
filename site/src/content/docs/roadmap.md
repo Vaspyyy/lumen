@@ -25,15 +25,17 @@ An app for Android that opens terminals on your PC. They keep running there, so 
 
 ## 3. Command blocks and refs
 
+**Done**, in [0.4.0](/releases/0.4.0/).
+
+A terminal's history used to be one long stream of text. Shells can mark where each command starts, where its output ends and how it ended. With those marks lumen treats a command and its output as one thing: you jump from command to command, copy the output of one, and see at a glance which ones failed. A tab says when a command in it has ended. See [Commands](/docs/commands/).
+
+The second half is about places in code. Tools such as crux, seek and recap print them as `path:line`. A `Ctrl+Click` on one opens that place in your editor. See [Files and links](/docs/files-and-links/#web-addresses-and-places-in-code).
+
+## 4. The machine in view
+
 **Next.**
 
-Today a terminal's history is one long stream of text. Shells can mark where each command starts, where its output ends and how it ended. With those marks lumen can treat a command and its output as one thing:
-
-- jump from command to command
-- copy the output of one command
-- see at a glance which commands failed
-
-The second half is about places in code. Tools such as crux, seek and recap print them as `path:line`. In lumen a click on one will open that place in your editor.
+pulse, a tool of the family that is not public yet, knows what the machine is busy with. lumen will show that where you work: a tab that says what its command costs, and a word when a long one is done.
 
 ## What is missing
 
@@ -44,10 +46,10 @@ Things other terminals have and lumen doesn't, in no order. None of them has a d
 - **Packages for one kind of machine.** They are built for `x86_64`. On ARM, lumen is built from source.
 - **Linux only**, and Android for the phone app. No iPhone.
 - **The phone app shows no pictures**, has no splits and no search, and doesn't take your font and colors from the PC.
-- **Web addresses in plain text are not clickable.** Only what a program marks as a link is.
 - **Dragging a file out of the window** works on Wayland, not on X11.
 - **Animated pictures** show their first frame.
 - **Sixel pictures** are not drawn.
-- **The bell** does nothing.
+- **The bell** makes no sound. It puts a dot on a tab you are not looking at.
+- **Folding a command's output away.** lumen knows where a command's output is, and can't hide it yet.
 
 If one of these keeps you from using lumen, [say so](https://github.com/Vaspyyy/lumen/issues). What people miss most is done first.

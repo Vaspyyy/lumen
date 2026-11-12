@@ -61,6 +61,10 @@ draw_bold_text_with_bright_colors = false
 [colors.primary]
 background = "#12111a"
 foreground = "#e4e1ee"
+
+[editor]
+# command = "nvim"         # $VISUAL or $EDITOR if unset
+# terminal = true          # by the editor's name if unset
 ```
 
 The `[colors]` table has more in it: the cursor's colors, the selection's, and the sixteen colors programs use. [Colors](/docs/colors/) has all of them.
@@ -102,5 +106,14 @@ More in [Fonts](/docs/fonts/).
 | `blink` | `true` | The cursor dims and comes back. It never goes out, so it is never lost |
 | `glow` | `true` | The cursor gives off light onto what is around it |
 | `smooth` | `true` | The cursor glides to where it goes instead of jumping |
+
+## `[editor]`
+
+What a `Ctrl+Click` on a place in code, such as `src/main.rs:42`, opens. See [Files and links](/docs/files-and-links/#your-editor).
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `command` | unset | The editor: its name, with any arguments it should always get. For an editor lumen doesn't know, the whole command with `{file}`, `{line}` and `{column}` in it. Unset, it is what `$VISUAL` names, or else `$EDITOR` |
+| `terminal` | unset | `true` if the editor runs in a terminal, and so gets a tab. `false` if it has a window of its own. Unset, lumen goes by the editor's name, and takes one it doesn't know for an editor of the terminal |
 
 A value outside its range is brought to the nearest one that is allowed.

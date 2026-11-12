@@ -28,7 +28,12 @@ go install github.com/Vaspyyy/glint@latest
 - [seek](https://github.com/Vaspyyy/seek) is a code search that knows which function each hit is in.
 - [recap](https://github.com/Vaspyyy/recap) is a git diff by function and type instead of by hunk.
 
-All three print places in code as `path:line`, such as `src/view.rs:412`. Today lumen shows them as any terminal does. Making them clickable, so that a place opens in your editor, is the next part of the [roadmap](/docs/roadmap/).
+All three print places in code as `path:line`, such as `src/view.rs:412`.
+
+With lumen:
+
+- **A place is a click away.** Hold `Ctrl` and click one, and the file opens in your editor at that line. See [Files and links](/docs/files-and-links/#web-addresses-and-places-in-code).
+- **A run is one thing.** With a shell that marks its commands, the output of a `crux` run is copied with one click, and the tab says when a long run has ended. See [Commands](/docs/commands/).
 
 ## What the tools don't do
 

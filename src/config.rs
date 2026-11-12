@@ -244,6 +244,18 @@ impl Default for Colors {
     }
 }
 
+/// The program a line in a file is opened with.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Editor {
+    /// The program, or a whole line with `{file}`, `{line}` and `{column}`
+    /// in it. What `$VISUAL` or `$EDITOR` name if unset.
+    pub command: Option<String>,
+    /// Whether it runs in a terminal, and so gets a tab. Unset, lumen goes
+    /// by the editor's name.
+    pub terminal: Option<bool>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -251,6 +263,7 @@ pub struct Config {
     pub window: Window,
     pub cursor: Cursor,
     pub colors: Colors,
+    pub editor: Editor,
     /// Lines kept above the screen.
     pub scrollback: usize,
     /// Selecting text copies it, as well as putting it in the middle-click selection.
@@ -274,6 +287,7 @@ impl Default for Config {
             window: Window::default(),
             cursor: Cursor::default(),
             colors: Colors::default(),
+            editor: Editor::default(),
             scrollback: 10_000,
             copy_on_select: false,
             shell: None,

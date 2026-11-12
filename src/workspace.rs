@@ -2,7 +2,8 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -18,8 +19,9 @@ use crate::actions::{
     NextTab, PreviousTab, SplitDown, SplitRight, ToggleZoomPane,
 };
 use crate::config::Config;
+use crate::editor;
 use crate::element::Metrics;
-use crate::terminal::{Spawn, Terminal};
+use crate::terminal::{CommandEvent, Spawn, Terminal};
 use crate::view::{TerminalView, ViewEvent};
 
 type Pane = Entity<TerminalView>;
@@ -183,6 +185,19 @@ struct Tab {
     active: Pane,
     /// The active pane fills the tab, the others wait behind it.
     zoomed: bool,
+    /// What happened in it while it wasn't looked at.
+    news: Option<News>,
+}
+
+/// What a tab that isn't looked at has to tell, the least pressing first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum News {
+    /// A program rang the bell.
+    Bell,
+    /// A command ended.
+    Done,
+    /// A command failed.
+    Failed,
 }
 
 /// A divider being dragged.
@@ -210,7 +225,9 @@ pub struct Workspace {
     /// until it goes away.
     notice: Option<SharedString>,
     notice_end: Option<Task<()>>,
-    _observers: [Subscription; 2],
+    /// The window's title as the desktop was last told: the active tab's.
+    title: String,
+    _observers: [Subscription; 3],
 }
 
 /// A terminal that was started before it was asked for, so that the tab it
@@ -243,10 +260,20 @@ impl Workspace {
             spare_refresh: None,
             notice: None,
             notice_end: None,
+            title: String::new(),
             _observers: [
                 // a spare is laid out for the window's size: a resized window wants a new one
                 cx.observe_window_bounds(window, |this, window, cx| this.refresh_spare_soon(window, cx)),
                 cx.observe_global_in::<Config>(window, Self::config_changed),
+                // back at the window, what its tab had to tell has been seen
+                cx.observe_window_activation(window, |this, window, cx| {
+                    if window.is_window_active()
+                        && let Some(tab) = this.tabs.get_mut(this.active)
+                        && tab.news.take().is_some()
+                    {
+                        cx.notify();
+                    }
+                }),
             ],
         };
         let pane = this.open(spawn, (1., 1.), window, cx)?;
@@ -290,6 +317,12 @@ impl Workspace {
                 }
             },
             ViewEvent::Notice(text) => this.say(text.clone(), cx),
+            ViewEvent::Edit { path, line, column } => this.edit(path, *line, *column, window, cx),
+            ViewEvent::Bell => this.tell(pane, News::Bell, window, cx),
+            ViewEvent::Command(CommandEvent::Started) => cx.notify(),
+            ViewEvent::Command(CommandEvent::Ended { failed }) => {
+                this.tell(pane, if *failed { News::Failed } else { News::Done }, window, cx)
+            },
             ViewEvent::Focused => {
                 if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.root.contains(pane))
                     && &tab.active != pane
@@ -304,10 +337,53 @@ impl Workspace {
         Ok(pane)
     }
 
+    /// Opens a line of a file in the editor: in a tab if the editor runs in
+    /// a terminal, in its own window otherwise. Without an editor the file
+    /// goes to whatever the desktop opens it with.
+    fn edit(&mut self, path: &Path, line: u32, column: Option<u32>, window: &mut Window, cx: &mut Context<Self>) {
+        let editor = cx.global::<Config>().editor.clone();
+        let env = |name: &str| std::env::var(name).ok();
+        let Some(launch) = editor::launch(editor.command.as_deref(), editor.terminal, env, path, line, column) else {
+            cx.open_with_system(path);
+            return;
+        };
+        let program = launch.argv[0].clone();
+        let started = if launch.terminal {
+            let spawn = Spawn { cwd: path.parent().map(Path::to_path_buf), command: Some(launch.argv) };
+            self.open(spawn, (1., 1.), window, cx).map(|pane| self.push_tab(pane, window, cx))
+        } else {
+            let mut command = std::process::Command::new(&program);
+            command.args(&launch.argv[1..]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+            command.spawn().map(|mut child| {
+                // someone has to hear of its end, or it stays behind as a dead process
+                std::thread::spawn(move || child.wait());
+            })
+        };
+        if let Err(e) = started {
+            self.say(format!("Can't start {program}: {e}"), cx);
+        }
+    }
+
+    /// Something happened in a pane. Its tab keeps it as news, unless the
+    /// tab is the one being looked at.
+    fn tell(&mut self, pane: &Pane, news: News, window: &mut Window, cx: &mut Context<Self>) {
+        let looked_at = window.is_window_active() || crate::preview();
+        let active = self.active;
+        if let Some((index, tab)) = self.tabs.iter_mut().enumerate().find(|(_, tab)| tab.root.contains(pane))
+            && !(looked_at && index == active)
+        {
+            tab.news = tab.news.max(Some(news));
+        }
+        cx.notify();
+    }
+
     fn push_tab(&mut self, pane: Pane, window: &mut Window, cx: &mut Context<Self>) {
         self.next_id += 1;
         let at = if self.tabs.is_empty() { 0 } else { self.active + 1 };
-        self.tabs.insert(at, Tab { id: self.next_id, root: Node::Leaf(pane.clone()), active: pane, zoomed: false });
+        self.tabs.insert(
+            at,
+            Tab { id: self.next_id, root: Node::Leaf(pane.clone()), active: pane, zoomed: false, news: None },
+        );
         self.activate(at, window, cx);
     }
 
@@ -316,6 +392,7 @@ impl Workspace {
             return;
         }
         self.active = index;
+        self.tabs[index].news = None;
         let focus = self.tabs[index].active.focus_handle(cx);
         window.focus(&focus, cx);
         cx.notify();
@@ -690,6 +767,20 @@ impl Workspace {
         let title = tab.active.read(cx).terminal.read(cx).title();
         let id = tab.id;
         let text = gpui::white().opacity(if active { 0.92 } else { 0.5 });
+        // A tab that isn't looked at says what happened in it, or that a command still runs there.
+        let colors = &cx.global::<Config>().colors;
+        let dot = match tab.news {
+            Some(News::Failed) => Some(colors.normal.red.hsla()),
+            Some(News::Done) => Some(colors.normal.green.hsla()),
+            Some(News::Bell) => Some(accent),
+            None => {
+                let mut panes = Vec::new();
+                tab.root.panes(&mut panes);
+                let running =
+                    |pane: &Pane| pane.read(cx).terminal.read(cx).commands.lock().unwrap().running().is_some();
+                (!active && panes.iter().any(running)).then(|| gpui::white().opacity(0.32))
+            },
+        };
         div()
             .id(SharedString::from(format!("tab-{id}")))
             .group("tab")
@@ -733,6 +824,7 @@ impl Workspace {
             })
             .drag_over::<DraggedTab>(|style, _, _, _| style.bg(gpui::white().opacity(0.14)))
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| this.reorder(dragged.id, id, cx)))
+            .children(dot.map(|color| div().flex_none().size(px(6.)).rounded(px(3.)).bg(color)))
             .child(div().flex_1().min_w_0().truncate().child(SharedString::from(title)))
             .child(
                 div()
@@ -965,6 +1057,12 @@ impl Render for Workspace {
             bottom_left: radius(!t.bottom && !t.left),
             bottom_right: radius(!t.bottom && !t.right),
         };
+        // the window is named after its active tab, for the desktop's task bar and window list
+        let title = self.tabs.get(self.active).map(|tab| tab.active.read(cx).terminal.read(cx).title());
+        if let Some(title) = title.filter(|title| *title != self.title) {
+            window.set_window_title(&title);
+            self.title = title;
+        }
         window.set_client_inset(px(if frame.floating() { SHADOW } else { 0. }));
         window.set_client_corner_radii(corners);
 

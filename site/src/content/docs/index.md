@@ -12,6 +12,8 @@ What sets it apart is one idea: **the screen is not only text**. When a tool pri
 
 - **A file name is the file.** In a listing, a click on a name copies the file to the clipboard, `Ctrl+Click` opens it, and on Wayland you can drag it out of the window into another program. See [Files and links](/docs/files-and-links/).
 - **Pictures sit between the lines.** What a program sends with the kitty graphics protocol is drawn in place and scrolls with the text. See [Pictures](/docs/images/).
+- **A command is one thing.** lumen knows where each command starts and ends: jump between them, copy what one printed with a click, and see on a tab when a long one is done. See [Commands](/docs/commands/).
+- **A place in code is a click away.** `Ctrl+Click` on `src/main.rs:42` in an error opens that line in your editor. See [Files and links](/docs/files-and-links/#web-addresses-and-places-in-code).
 - **A new tab is there at once.** With `prewarm` on, the next shell is started ahead of time. See [Instant tabs](/docs/instant-tabs/).
 - **Your terminals come along.** The Android app opens terminals that run on your PC and keep running when you put the phone away. It logs in with a key that never leaves the phone. See [lumen on your phone](/docs/phone/).
 
