@@ -50,5 +50,6 @@ strip = true
 lto = "thin"
 
 [patch.crates-io]
-# GPUI's renderer, with lumen's changes: see vendor/README.md
+# GPUI's renderer and its Linux platform, with lumen's changes: see vendor/README.md
 gpui-fast-wgpu = { path = "vendor/gpui-fast-wgpu" }
+gpui-fast-linux = { path = "vendor/gpui-fast-linux" }
