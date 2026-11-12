@@ -375,10 +375,6 @@ impl Config {
         }
     }
 
-    pub fn cursor_color(&self) -> Hsla {
-        self.colors.cursor.cursor.unwrap_or(self.colors.primary.foreground).hsla()
-    }
-
     pub fn accent(&self) -> Hsla {
         self.colors.accent.hsla()
     }

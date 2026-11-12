@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::search::Match;
-use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
+use alacritty_terminal::vte::ansi::CursorShape;
 use gpui::{
     App, BorderStyle, Bounds, BoxShadow, Corners, CursorStyle, DispatchPhase, Element, ElementId, ElementInputHandler,
     Entity, FocusHandle, Font, FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
@@ -342,6 +342,7 @@ impl Element for TerminalElement {
         let ground;
         let ink;
         let cursor_color;
+        let on_cursor;
         {
             let terminal = self.terminal.read(cx);
             let term = terminal.term.lock();
@@ -350,8 +351,8 @@ impl Element for TerminalElement {
             let overrides = content.colors;
             ground = palette::ground(overrides, colors);
             ink = palette::ink(overrides, colors).hsla();
-            cursor_color = overrides[NamedColor::Cursor]
-                .map_or_else(|| config.cursor_color(), |rgb| crate::config::Rgb(rgb.r, rgb.g, rgb.b).hsla());
+            let (of_cursor, under_cursor) = palette::cursor(overrides, colors);
+            (cursor_color, on_cursor) = (of_cursor.hsla(), under_cursor.hsla());
             let selection_bg = colors.selection.background.map(|c| c.hsla());
             let selection_fg = colors.selection.text.map(|c| c.hsla());
             let mut run: Option<Run> = None;
@@ -423,8 +424,9 @@ impl Element for TerminalElement {
                     push_background(&mut backgrounds, row, col, width, accent);
                     fg_color = colors.primary.background.hsla();
                 } else if selected {
-                    // a theme without a selection color gets a see-through wash of the text color
-                    let wash = selection_bg.unwrap_or_else(|| Hsla { a: 0.28, ..colors.primary.foreground.hsla() });
+                    // A theme without a selection color gets a see-through wash of the text
+                    // color: of the one a program has set, which is seen on its background.
+                    let wash = selection_bg.unwrap_or(Hsla { a: 0.28, ..ink });
                     push_background(&mut backgrounds, row, col, width, wash);
                     if let Some(color) = selection_fg {
                         fg_color = color;
@@ -687,7 +689,7 @@ impl Element for TerminalElement {
                     window.request_animation_frame();
                 }
             }
-            let on_cursor = colors.cursor.text.unwrap_or(behind).hsla().opacity(lit);
+            let on_cursor = on_cursor.opacity(lit);
             let block = blocks::shape(c)
                 .filter(|_| shape == CursorShape::Block && cells == 1 && !flags.contains(Flags::HIDDEN))
                 .map(|block| (block, on_cursor.opacity(block.cover)));

@@ -60,8 +60,9 @@ pub fn cell_of(uri: &str) -> Option<(u32, Part)> {
 /// What a shell said.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Mark {
-    /// A prompt begins (`A`).
-    Prompt,
+    /// A prompt begins (`A`). `with` is what the shell says along with it,
+    /// the fields after the `A`: two shells seldom say the same.
+    Prompt { with: String },
     /// The prompt is over, what is typed follows (`B`).
     Input,
     /// The command was sent off, its output follows (`C`). Some shells say
@@ -73,9 +74,9 @@ pub enum Mark {
     /// on its way.
     FreshLine,
     /// A prompt beside or within what is typed (`P`): the one at the right
-    /// of the line, or the one a further line of the command begins with.
-    /// What is typed goes on after the next `B`.
-    Aside,
+    /// of the line (`right`), or the one a further line of the command
+    /// begins with. What is typed goes on after the next `B`.
+    Aside { right: bool },
     /// Not a mark of a command: a program has something to tell the user.
     Notify(Note),
 }
@@ -130,7 +131,7 @@ impl Mark {
         }
         let mut fields = text.strip_prefix("133;")?.split(';');
         Some(match fields.next()? {
-            "A" => Mark::Prompt,
+            "A" => Mark::Prompt { with: fields.collect::<Vec<_>>().join(";") },
             "B" => Mark::Input,
             "C" => {
                 let command = fields
@@ -143,9 +144,13 @@ impl Mark {
             "L" => Mark::FreshLine,
             // a prompt by its kind: right (`r`), continuation (`c`) and secondary (`s`)
             // ones stand where a command is typed, any other begins one
-            "P" => match fields.find_map(|field| field.strip_prefix("k=")) {
-                Some("r" | "c" | "s") => Mark::Aside,
-                _ => Mark::Prompt,
+            "P" => {
+                let with: Vec<&str> = fields.collect();
+                match with.iter().find_map(|field| field.strip_prefix("k=")) {
+                    Some("r") => Mark::Aside { right: true },
+                    Some("c" | "s") => Mark::Aside { right: false },
+                    _ => Mark::Prompt { with: with.join(";") },
+                }
             },
             _ => return None,
         })
@@ -381,10 +386,12 @@ pub struct Log {
     /// The shell asked for a line of its own since the last prompt began:
     /// the prompt that comes is a new one.
     fresh: bool,
-    /// The prompt that is open was asked a line of its own for. A shell that
-    /// does this says when a prompt is new, so one it writes without asking
-    /// is the open one, written again.
-    announced: bool,
+    /// The prompt that is open was asked a line of its own for: what its
+    /// shell said along with it. A shell that asks says when a prompt is new,
+    /// so one it writes without asking is the open one, written again. A
+    /// prompt that comes with other words is another shell's: the one around
+    /// a shell that has ended, which may not be one that asks.
+    announced: Option<String>,
     /// A prompt beside what is typed is being written: the next `B` ends it.
     aside: bool,
     /// The command that ran when it did. How it ended may still be said.
@@ -515,7 +522,7 @@ impl Log {
                     self.leave();
                 }
             },
-            Mark::Prompt => {
+            Mark::Prompt { with } => {
                 if self.phase == Phase::Running {
                     // a prompt, and no word of how the command ended
                     self.leave();
@@ -529,7 +536,8 @@ impl Log {
                 // A prompt that is written again (after a resize, after a completion, on
                 // a cleared screen) is still the same prompt. A shell that asks for a
                 // line of its own before every new prompt has said so: without the
-                // asking, this is the open one again. Of a shell that doesn't ask, a
+                // asking, a prompt of that shell is the open one again. Of a shell that
+                // doesn't ask, a
                 // prompt is a new one if it comes below the lines of the one that was
                 // open (an empty line was sent off), unless those were just moved off
                 // a cleared screen.
@@ -538,7 +546,7 @@ impl Log {
                 let open = typing && !fresh;
                 let again = open
                     && self.current.is_some_and(|id| {
-                        self.announced
+                        self.announced.as_deref() == Some(with.as_str())
                             || owner(term, line) == Some(id)
                             || !follows(term, line, id)
                             || cleared(term, line, id)
@@ -552,7 +560,7 @@ impl Log {
                         id
                     },
                     _ => {
-                        self.announced = fresh;
+                        self.announced = fresh.then_some(with);
                         self.open()
                     },
                 };
@@ -560,8 +568,15 @@ impl Log {
                 remark(term, &before, Some(id));
                 tag(term, Some((id, Part::Prompt)));
             },
-            Mark::Aside => {
+            Mark::Aside { right } => {
                 if let (Some(id), Phase::Prompt | Phase::Input) = (self.current, self.phase) {
+                    // What a further line begins with before its prompt (readline's
+                    // mode) was marked as typed. Before a prompt at the right of the
+                    // line stands the command.
+                    if !right {
+                        let before = typed_before(term, id);
+                        remark(term, &before, Some(id));
+                    }
                     self.aside = true;
                     tag(term, Some((id, Part::Prompt)));
                 }
@@ -937,12 +952,13 @@ mod tests {
     #[test]
     fn marks_are_found_in_the_output() {
         let found = marks(&[b"one\x1b]133;A\x07two\x1b]133;D;1\x1b\\three"]);
-        assert_eq!(found, [(11, Mark::Prompt), (25, Mark::End { exit: Some(1) })]);
+        assert_eq!(found, [(11, Mark::Prompt { with: String::new() }), (25, Mark::End { exit: Some(1) })]);
         // what fish sends
         let found =
             marks(&[b"\x1b]133;A;click_events=1\x1b\\$ \x1b]133;B\x1b\\\x1b]133;C;cmdline_url=echo%20hi%3B\x1b\\"]);
         let kinds: Vec<Mark> = found.into_iter().map(|(_, mark)| mark).collect();
-        assert_eq!(kinds, [Mark::Prompt, Mark::Input, Mark::Output { command: Some("echo hi;".into()) }]);
+        let prompt = Mark::Prompt { with: "click_events=1".into() };
+        assert_eq!(kinds, [prompt, Mark::Input, Mark::Output { command: Some("echo hi;".into()) }]);
         assert_eq!(marks(&[b"\x1b]133;D\x07"]), [(8, Mark::End { exit: None })]);
         assert_eq!(marks(&[b"\x1b]133;L\x07"]), [(8, Mark::FreshLine)]);
         assert_eq!(marks(&[b"\x1b]133;D;130;aid=7\x07"]), [(18, Mark::End { exit: Some(130) })]);
@@ -952,7 +968,9 @@ mod tests {
     fn a_prompt_says_its_kind() {
         let found = marks(&[b"\x1b]133;P;k=r\x07\x1b]133;P;k=c\x07\x1b]133;P;k=s\x07\x1b]133;P;k=i\x07\x1b]133;P\x07"]);
         let found: Vec<Mark> = found.into_iter().map(|(_, mark)| mark).collect();
-        assert_eq!(found, [Mark::Aside, Mark::Aside, Mark::Aside, Mark::Prompt, Mark::Prompt]);
+        let (right, line) = (Mark::Aside { right: true }, Mark::Aside { right: false });
+        let (first, plain) = (Mark::Prompt { with: "k=i".into() }, Mark::Prompt { with: String::new() });
+        assert_eq!(found, [right, line.clone(), line, first, plain]);
     }
 
     #[test]
@@ -992,7 +1010,9 @@ mod tests {
         scanner.feed(b"\x1b]52;c;", |_, _| panic!());
         scanner.feed(&vec![b'A'; 1 << 20], |_, _| panic!());
         assert!(scanner.payload.is_empty());
-        scanner.feed(b"\x07\x1b]133;A\x07", |end, mark| assert_eq!((end, mark), (9, Mark::Prompt)));
+        scanner.feed(b"\x07\x1b]133;A\x07", |end, mark| {
+            assert_eq!((end, mark), (9, Mark::Prompt { with: String::new() }));
+        });
     }
 
     /// A terminal of 30 by 8 cells, and what a shell printed to it.
@@ -1259,6 +1279,30 @@ mod tests {
         let mut screen = Screen::new();
         screen.print(more).print("x");
         assert_eq!(screen.places(), []);
+        // readline's mode, which it writes before the prompt of every line, is not typed either
+        let mut screen = Screen::new();
+        let more = "(ins)\x1b]133;P;k=c\x07> \x1b]133;B\x07";
+        screen.print("\x1b]133;L\x07(ins)\x1b]133;A\x07$ \x1b]133;B\x07for x in 1 2\r\n");
+        screen.print(more).print("do echo $x\r\n").print(more).print("done\r\n\x1b]133;C\x07");
+        assert_eq!(screen.command(0).text.as_deref(), Some("for x in 1 2\ndo echo $x\ndone"));
+    }
+
+    /// bash with lumen's lines, started in fish 4.9 and left with Ctrl+D.
+    #[test]
+    fn a_shell_around_one_that_says_when_a_prompt_is_new() {
+        let mut screen = Screen::new();
+        let fish = "\x1b]133;A;click_events=1\x07> \x1b]133;B\x07";
+        screen.print(fish).print("bash\r\n\x1b]133;C;cmdline_url=bash\x07");
+        screen.print("\x1b]133;L\x07\x1b]133;A\x07$ \x1b]133;B\x07exit\r\n");
+        // fish says how bash ended and writes its prompt. It asks for no line of its
+        // own, and its prompt is not the one of bash again: nor is its next one.
+        screen.print("\x1b]133;D;0\x07").print(fish).print("\r\n").print(fish);
+        assert_eq!(screen.places(), [(0, 0, 0), (1, 1, 1), (2, 2, 2), (3, 3, 3)]);
+        // the same shell's prompt, written again without the asking, is the open one
+        let mut screen = Screen::new();
+        let bash = "\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07";
+        screen.print("\x1b]133;L\x07").print(bash).print("ls\r\nfoo1  foo2\r\n").print(bash).print("ls");
+        assert_eq!(screen.places(), [(0, 2, 2)]);
     }
 
     /// fish 4.9, which asks for no line of its own before a prompt, as captured.

@@ -94,6 +94,41 @@ pub fn ink(overrides: &Overrides, colors: &Colors) -> Rgb {
     rgb(Color::Named(NamedColor::Foreground), overrides, colors)
 }
 
+/// The cursor's color, and the color of what stands under a block cursor.
+///
+/// A cursor color a program has set (OSC 12) is the cursor's, with the
+/// pane's background on it. Otherwise the cursor is the theme's. On a
+/// background a program has set, a theme's cursor may be as light or as dark
+/// as that background: then the cursor is in the color of the text, as it
+/// is in a theme that names no cursor color.
+pub fn cursor(overrides: &Overrides, colors: &Colors) -> (Rgb, Rgb) {
+    /// Less contrast than this, and a cursor is hard to find on its background.
+    const LEAST: f32 = 3.;
+    let theme = colors.cursor.cursor.unwrap_or(colors.primary.foreground);
+    let ground = ground(overrides, colors);
+    let behind = ground.unwrap_or(colors.primary.background);
+    match overrides[NamedColor::Cursor] {
+        Some(set) => (Rgb(set.r, set.g, set.b), behind),
+        None if ground.is_some_and(|ground| contrast(theme, ground) < LEAST) => (ink(overrides, colors), behind),
+        None => (theme, colors.cursor.text.unwrap_or(behind)),
+    }
+}
+
+/// How far two colors are apart in lightness, as the contrast ratio the
+/// web's guidelines count with: 1 for the same lightness, 21 for black on
+/// white.
+pub fn contrast(a: Rgb, b: Rgb) -> f32 {
+    let light = |color: Rgb| {
+        let part = |value: u8| {
+            let value = f32::from(value) / 255.;
+            if value <= 0.04045 { value / 12.92 } else { ((value + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * part(color.0) + 0.7152 * part(color.1) + 0.0722 * part(color.2)
+    };
+    let (a, b) = (light(a), light(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
 /// Whether text in one color can be told from the color behind it. Two
 /// colors that differ less than this are the same to anyone who is not
 /// looking for a difference. `dim` text is drawn partly see-through.
@@ -146,6 +181,32 @@ mod tests {
         overrides[NamedColor::Background] =
             Some(alacritty_terminal::vte::ansi::Rgb { r: theme.0, g: theme.1, b: theme.2 });
         assert_eq!(ground(&overrides, &colors), None);
+    }
+
+    #[test]
+    fn a_cursor_that_is_seen_on_what_a_program_sets() {
+        let set = |r, g, b| Some(alacritty_terminal::vte::ansi::Rgb { r, g, b });
+        let colors = Colors::default();
+        let (lamp, on_lamp) = (colors.cursor.cursor.unwrap(), colors.cursor.text.unwrap());
+        assert!((contrast(Rgb(0, 0, 0), Rgb(255, 255, 255)) - 21.).abs() < 0.01);
+        assert!((contrast(lamp, lamp) - 1.).abs() < 0.01);
+        // nothing set: the theme's cursor, and its color for what is under it
+        let mut overrides = Overrides::default();
+        assert_eq!(cursor(&overrides, &colors), (lamp, on_lamp));
+        // another dark background: the lamp is still seen on it
+        overrides[NamedColor::Background] = set(30, 30, 46);
+        assert_eq!(cursor(&overrides, &colors), (lamp, on_lamp));
+        // A light background, with nothing said of the cursor: the lamp is lost on
+        // it, so the cursor is in the color of the text.
+        overrides[NamedColor::Background] = set(250, 244, 237);
+        overrides[NamedColor::Foreground] = set(87, 82, 121);
+        assert_eq!(cursor(&overrides, &colors), (Rgb(87, 82, 121), Rgb(250, 244, 237)));
+        // a cursor the program has set: that one, and the pane's background on it
+        overrides[NamedColor::Cursor] = set(215, 130, 126);
+        assert_eq!(cursor(&overrides, &colors), (Rgb(215, 130, 126), Rgb(250, 244, 237)));
+        // set on the theme's own background
+        overrides[NamedColor::Background] = None;
+        assert_eq!(cursor(&overrides, &colors), (Rgb(215, 130, 126), colors.primary.background));
     }
 
     #[test]

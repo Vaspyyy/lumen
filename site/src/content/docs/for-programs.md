@@ -14,7 +14,7 @@ This page is for people who write command line tools, and for anyone who wants t
 | `TERM_PROGRAM` | `lumen` |
 | `TERM_PROGRAM_VERSION` | lumen's version, such as `0.2.1` |
 
-lumen has no terminfo entry of its own. It behaves as xterm does where programs look that up, so it works on machines that have never heard of it, over SSH as well. `TERM_PROGRAM` is not passed on over SSH unless you configure that.
+lumen has no terminfo entry of its own. It behaves as xterm does where programs look that up, so it works on machines that have never heard of it, over SSH as well. `TERM_PROGRAM` is not passed on over SSH unless you configure that. Another terminal that is started from a shell in lumen inherits it, unless it sets its own.
 
 The better way to find out what a terminal can do is to ask it. lumen answers the queries the protocols below define for that.
 
@@ -83,9 +83,12 @@ Anything after a further `;` is left alone, with one exception: `C;cmdline_url=T
 `B` can be left out. What was written before a `B` on its line is not part of what was typed.
 
 - **`L` is for a shell that writes its prompt where the output stopped**, as bash does. Send it before the prompt and before anything else the shell writes on the prompt's line. `A` itself moves nothing. A command that runs when an `L` comes is over, and a `D` that follows before the next `A` or `C` says how it ended.
-- **An `A` while a prompt is open** is that prompt written again, as after a resize or under a list of completions: it stays the same command. An `A` after an `L` is always a new prompt. If the open prompt came after an `L`, the shell is one that says when a prompt is new, and every `A` without an `L` is the open prompt again. Of a shell that sends no `L`, an `A` is the open prompt again on a line that is already that prompt's, anywhere else that is not below it, and on the first line of a screen that was just cleared. It is a new prompt when it comes below the lines of the open one, with at most two empty lines between.
-- **What is left of a prompt that was written again** belongs to no command: the lines of its earlier copy right above it, with what stood typed there and what the shell printed under it. They are no prompt, and no output of the command before.
-- **A prompt of the kind `r`, `c` or `s`** is no part of the command. What is written from the `P` to the next `B` is not read as typed, and what is typed goes on after that `B`. Where no prompt is open, such a `P` says nothing. Send these only where `TERM_PROGRAM` is `lumen`: to a terminal that doesn't know them, the `B` that ends one is where the command begins.
+- **An `A` while a prompt is open** is either that prompt written again, as after a resize or under a list of completions, or a new prompt. Written again, it stays the same command.
+  - After an `L` it is a new prompt.
+  - If the open prompt came after an `L`, its shell is one that says when a prompt is new. An `A` without an `L` is then that prompt again wherever it comes, if the same fields follow the `A` as in the one that opened the prompt.
+  - Any other `A` goes by where it stands: every `A` of a shell that sends no `L`, and one with other fields than the open prompt's, which is taken for another shell's, such as the one around a shell that has ended. It is the open prompt again on a line that is already that prompt's, anywhere else that is not below it, and on the first line of a screen that was just cleared. It is a new prompt below the lines of the open one, with at most two empty lines between.
+- **What is left of a prompt that was written again** is the lines of its earlier copy right above it, with what stood typed there and what the shell printed under it. They are not a prompt of their own, nothing on them is read as typed, and they are no output of the command before. Where a shell writes only the last line of its prompt again, the lines above that one stay the prompt's.
+- **A prompt of the kind `r`, `c` or `s`** is no part of the command. What is written from the `P` to the next `B` is not read as typed, and what is typed goes on after that `B`. Before a `c` or an `s`, what stands on its line is not read as typed either. Where no prompt is open, such a `P` says nothing. Send these only where `TERM_PROGRAM` is `lumen`: to a terminal that doesn't know them, the `B` that ends one is where the command begins.
 - **A `D` where no command runs is ignored**, unless it is the one that follows an `L`. So a shell may say it with every prompt it writes.
 - **An `A` or a `C` while a command runs**, with no `D` before it, is taken for a shell inside that command: the command is no longer followed.
 - On the alternate screen the marks are ignored.
