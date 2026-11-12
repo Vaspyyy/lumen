@@ -7,8 +7,8 @@
 [Unit]
 Description=Update lumen and its tools
 Documentation=https://vaspyyy.github.io/lumen/docs/install/#updates
-# tried again (below) at most three times a day
-StartLimitIntervalSec=1d
+# three starts at most within two hours: the first and the two below
+StartLimitIntervalSec=2h
 StartLimitBurst=3
 
 [Service]
@@ -19,7 +19,10 @@ Nice=19
 CPUSchedulingPolicy=idle
 IOSchedulingClass=idle
 # The run after a day the computer was off comes at login, when the network
-# may not be there yet: once more half an hour later.
+# may not be there yet. When only the network failed, lumen update ends with
+# 75 and is tried again half an hour later, twice at most. A failure that would
+# come again the same way (status 1) is said once instead.
 Restart=on-failure
+RestartPreventExitStatus=1 2
 RestartSec=30min
 TimeoutStartSec=1h

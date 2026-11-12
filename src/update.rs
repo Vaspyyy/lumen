@@ -5,16 +5,20 @@
 //! into the folder the running program is in. A lumen built from source is
 //! replaced by the release once a newer one is out. One from a package (under
 //! /usr, which root owns) is left to the package manager, and its owner is
-//! told once per version. A build in a cargo `target` folder is left alone.
+//! told once per version. A build in a cargo target folder is left alone.
 //!
 //! The tools (glint, crux, recap, seek, pulse) are installed with `go
 //! install`, and updated the same way, each into the folder its program file
 //! is in. Only the ones that are installed, that Go built from their module,
-//! are updated, and only where Go is. Their newest version is the one Go's
-//! module proxy names, which is what `go install` takes.
+//! are updated, and only where Go is. Their newest version is the one `go
+//! list` names, through the user's own GOPROXY, which is what `go install`
+//! takes.
 //!
 //! Nothing is ever replaced by an older version. `lumen-update.timer` runs
-//! this once a day, with `--notify`, at the lowest priority.
+//! this once a day, with `--notify`, at the lowest priority. When only the
+//! network failed it ends with [`EX_TEMPFAIL`], and the service tries again;
+//! a failure that would come again the same way is noted, said once, and
+//! not tried again by the timer for that version.
 
 use std::collections::BTreeSet;
 use std::fs::File;
@@ -34,7 +38,8 @@ UPDATES
 ";
 
 const GITHUB: &str = "https://github.com/Vaspyyy";
-/// Go's module proxy, where `go install` looks: the module path's capitals as `!` and the letter.
+/// Go's module proxy, for a tool's newest version where there is no Go to ask: the
+/// module path's capitals as `!` and the letter.
 const PROXY: &str = "https://proxy.golang.org/github.com/!vaspyyy";
 const DOCS: &str = "https://vaspyyy.github.io/lumen/docs/install/#updates";
 const TOOLS: &[&str] = &["glint", "crux", "recap", "seek", "pulse"];
@@ -43,6 +48,8 @@ const ARCHIVE: &str = "lumen-x86_64-linux.tar.gz";
 /// Where an update unpacks a release, next to the program: one left by an update that
 /// was stopped is cleared by the next.
 const WORK: &str = ".lumen-update";
+/// The exit status when only the network failed: lumen-update.service tries again.
+pub const EX_TEMPFAIL: i32 = 75;
 
 /// Runs the command if `args` is one, and gives its exit status.
 pub fn run(args: &[String]) -> Option<i32> {
@@ -51,12 +58,13 @@ pub fn run(args: &[String]) -> Option<i32> {
         return None;
     }
     let mut check = false;
-    let mut notify = false;
+    let mut timer = false;
     for arg in rest {
         match arg.as_str() {
             "--check" => check = true,
-            // the timer's: says on the desktop what changed
-            "--notify" => notify = true,
+            // the timer's: says on the desktop what changed, and doesn't try again what
+            // failed the same way before
+            "--notify" => timer = true,
             other => {
                 eprintln!("lumen: update takes --check, not {other}\nTry 'lumen --help'.");
                 return Some(2);
@@ -70,17 +78,40 @@ pub fn run(args: &[String]) -> Option<i32> {
         );
         return Some(1);
     }
-    Some(update(check, notify))
+    Some(update(if check {
+        How::Check
+    } else if timer {
+        How::Timer
+    } else {
+        How::ByHand
+    }))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum How {
+    /// Only says what is out.
+    Check,
+    /// `lumen update`: tries everything, also what failed before.
+    ByHand,
+    /// The timer: tells on the desktop, and leaves alone what failed before.
+    Timer,
 }
 
 /// A version as releases are numbered: 0.11.2, or v0.11.2 as a tag. A pre-release
-/// (0.6.0-rc.1) comes before its release.
+/// (0.6.0-rc.1) comes before its release, and rc.10 after rc.9.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Version {
     numbers: Vec<u64>,
     /// false for a pre-release: false sorts first
     released: bool,
-    pre: String,
+    pre: Vec<Part>,
+}
+
+/// A part of a pre-release's name: numbers count as numbers, and come before words.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Part {
+    Number(u64),
+    Word(String),
 }
 
 impl Version {
@@ -92,7 +123,12 @@ impl Version {
         let parts: Option<Vec<u64>> = numbers.split('.').map(|part| part.parse().ok()).collect();
         let mut numbers = parts.filter(|parts| !parts.is_empty() && parts.len() <= 3)?;
         numbers.resize(3, 0);
-        Some(Version { numbers, released: pre.is_empty(), pre: pre.to_string() })
+        let pre = if pre.is_empty() {
+            Vec::new()
+        } else {
+            pre.split('.').map(|part| part.parse().map_or_else(|_| Part::Word(part.into()), Part::Number)).collect()
+        };
+        Some(Version { numbers, released: pre.is_empty(), pre })
     }
 }
 
@@ -100,24 +136,60 @@ impl std::fmt::Display for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let numbers: Vec<String> = self.numbers.iter().map(u64::to_string).collect();
         f.write_str(&numbers.join("."))?;
-        if !self.released {
-            write!(f, "-{}", self.pre)?;
+        let pre: Vec<String> = self
+            .pre
+            .iter()
+            .map(|part| match part {
+                Part::Number(number) => number.to_string(),
+                Part::Word(word) => word.clone(),
+            })
+            .collect();
+        if !pre.is_empty() {
+            write!(f, "-{}", pre.join("."))?;
         }
         Ok(())
     }
 }
 
-/// What one update did, for the notification.
+/// Why something couldn't be put in place.
+enum Failure {
+    /// The network, or what came over it (a login page in place of the release, say), or
+    /// a full disk: tried again.
+    Again(String),
+    /// What would fail the same way next time: said once, and not tried again by the
+    /// timer for this version.
+    Lasting(String),
+}
+
+/// What one update did.
 #[derive(Default)]
 struct Report {
     /// "glint 0.11.1 → 0.11.2"
     updated: Vec<String>,
-    /// What is out but can't be put in place here, keyed so that each is told once.
+    /// What is out but waits for the owner, keyed so that each is told once.
     waiting: Vec<(String, String)>,
+    /// Something failed that will fail again the same way.
     failed: bool,
+    /// Something failed that may work in a while.
+    again: bool,
 }
 
-fn update(check: bool, notify: bool) -> i32 {
+impl Report {
+    fn failure(&mut self, failure: &Failure) {
+        match failure {
+            Failure::Again(why) => {
+                eprintln!("lumen: {why}");
+                self.again = true;
+            },
+            Failure::Lasting(why) => {
+                eprintln!("lumen: {why}");
+                self.failed = true;
+            },
+        }
+    }
+}
+
+fn update(how: How) -> i32 {
     // two at once (the timer, and one by hand) would write over each other
     let _lock = match lock() {
         Ok(lock) => lock,
@@ -128,15 +200,20 @@ fn update(check: bool, notify: bool) -> i32 {
     };
     let mut told = Told::load();
     let mut report = Report::default();
-    update_lumen(check, &mut told, &mut report);
+    update_lumen(how, &mut told, &mut report);
+    let go = find("go", &go_folders()).first().cloned();
     for tool in TOOLS {
-        update_tool(tool, check, &mut report);
+        update_tool(tool, go.as_deref(), how, &mut told, &mut report);
     }
-    if notify {
+    if how == How::Timer {
         tell(&report, &mut told);
     }
     told.save();
-    if report.failed { 1 } else { 0 }
+    match (report.failed, report.again) {
+        (true, _) => 1,
+        (false, true) => EX_TEMPFAIL,
+        (false, false) => 0,
+    }
 }
 
 /// The lock that keeps a second update from starting, held until it is dropped.
@@ -155,11 +232,12 @@ fn lock() -> Result<File, String> {
     Ok(file)
 }
 
-/// What the owner was told of, or what failed, so that it is said and tried once per
-/// version: `lumen 0.6.0`, `failed lumen 0.6.0`, `seek 0.5.3 needs Go`.
+/// What the owner was told of, and what failed for good, so that each is said once and
+/// tried once per version: `lumen 0.6.0`, `failed seek 0.5.3`, `seek 0.5.3 needs Go`.
 struct Told {
     file: Option<PathBuf>,
     lines: BTreeSet<String>,
+    changed: bool,
 }
 
 impl Told {
@@ -170,7 +248,7 @@ impl Told {
             .and_then(|file| std::fs::read_to_string(file).ok())
             .map(|text| text.lines().map(str::to_string).collect())
             .unwrap_or_default();
-        Told { file, lines }
+        Told { file, lines, changed: false }
     }
 
     fn knows(&self, line: &str) -> bool {
@@ -178,11 +256,11 @@ impl Told {
     }
 
     fn note(&mut self, line: String) {
-        self.lines.insert(line);
+        self.changed |= self.lines.insert(line);
     }
 
     fn save(&self) {
-        let Some(file) = &self.file else { return };
+        let Some(file) = self.file.as_ref().filter(|_| self.changed) else { return };
         if let Some(dir) = file.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -191,76 +269,105 @@ impl Told {
     }
 }
 
-/// Runs curl, or wget where there is no curl, over https only, a few times when the
-/// network isn't there yet.
-fn fetch(url: &str) -> Result<Vec<u8>, String> {
-    let curl = Command::new("curl")
-        .args(["--proto", "=https", "--tlsv1.2", "-fsSL", "--retry", "3", "--max-time", "300", url])
-        .stderr(Stdio::piped())
-        .output();
-    let output = match curl {
+/// curl, told to read no ~/.curlrc (whose `location` would follow the redirect that
+/// [`newest_lumen`] reads), over https only, a few times when the network isn't there yet.
+fn curl() -> Command {
+    let mut curl = Command::new("curl");
+    curl.args(["-q", "--proto", "=https", "--tlsv1.2", "-fsS", "--retry", "3"]);
+    curl
+}
+
+/// Fetches a URL with curl, or with wget where there is no curl.
+fn fetch(url: &str) -> Result<Vec<u8>, Failure> {
+    let fetched = curl().args(["-L", "--max-time", "300", url]).stderr(Stdio::piped()).output();
+    let output = match fetched {
         Ok(output) => output,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Command::new("wget")
             .args(["-q", "--https-only", "--tries=3", "--timeout=300", "-O", "-", url])
             .stderr(Stdio::piped())
             .output()
-            .map_err(|_| "curl or wget is needed to fetch updates".to_string())?,
-        Err(e) => return Err(format!("can't run curl: {e}")),
+            .map_err(|_| Failure::Lasting("curl or wget is needed to fetch updates".into()))?,
+        Err(e) => return Err(Failure::Again(format!("can't run curl: {e}"))),
     };
     if !output.status.success() {
-        let said = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("could not fetch {url}: {}", said.trim()));
+        return Err(Failure::Again(format!("could not fetch {url}: {}", last_lines(&output.stderr))));
     }
     Ok(output.stdout)
 }
 
 /// The tag of lumen's newest release, from where GitHub's page for it leads: unlike
 /// GitHub's API, that has no limit of 60 questions an hour.
-fn newest_lumen() -> Result<(String, Version), String> {
+fn newest_lumen() -> Result<(String, Version), Failure> {
     let url = format!("{GITHUB}/lumen/releases/latest");
-    let output = Command::new("curl")
-        .args(["--proto", "=https", "--tlsv1.2", "-fsS", "--retry", "3", "--max-time", "60"])
-        .args(["-o", "/dev/null", "-w", "%{redirect_url}", &url])
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| format!("curl is needed to look for lumen's newest release: {e}"))?;
-    if !output.status.success() {
-        return Err(format!("could not reach {url}: {}", String::from_utf8_lossy(&output.stderr).trim()));
-    }
-    let to = String::from_utf8_lossy(&output.stdout);
+    let asked = curl().args(["--max-time", "60", "-o", "/dev/null", "-w", "%{redirect_url}", &url]).output();
+    let to = match asked {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout).into_owned(),
+        Ok(output) => return Err(Failure::Again(format!("could not reach {url}: {}", last_lines(&output.stderr)))),
+        // wget says where it leads in the headers it prints
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let output = Command::new("wget")
+                .args(["--https-only", "--tries=3", "--timeout=60", "--max-redirect=0", "-S", "-O", "/dev/null", &url])
+                .output()
+                .map_err(|_| Failure::Lasting("curl or wget is needed to look for updates".into()))?;
+            let headers = String::from_utf8_lossy(&output.stderr);
+            let location = headers.lines().find_map(|line| {
+                let (name, value) = line.trim().split_once(':')?;
+                name.eq_ignore_ascii_case("location").then(|| value.trim().to_string())
+            });
+            location.ok_or_else(|| Failure::Again(format!("could not reach {url}")))?
+        },
+        Err(e) => return Err(Failure::Again(format!("can't run curl: {e}"))),
+    };
     let tag = to.rsplit_once("/tag/").map(|(_, tag)| tag.trim().to_string()).unwrap_or_default();
-    let version = Version::parse(&tag).ok_or_else(|| format!("{url} leads to no release: {to:?}"))?;
+    let version = Version::parse(&tag).ok_or_else(|| Failure::Again(format!("{url} leads to no release: {to:?}")))?;
     Ok((tag, version))
 }
 
-/// A tool's newest version, as Go's module proxy has it.
-fn newest_tool(tool: &str) -> Result<(String, Version), String> {
-    let body = fetch(&format!("{PROXY}/{tool}/@latest"))?;
-    let latest: serde_json::Value =
-        serde_json::from_slice(&body).map_err(|e| format!("the Go proxy's answer about {tool} is not JSON: {e}"))?;
-    let tag = latest.get("Version").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
-    let version = Version::parse(&tag).ok_or_else(|| format!("{tool} has no version on the Go proxy: {tag:?}"))?;
+/// A tool's newest version: as `go list` finds it, through the user's GOPROXY, as `go
+/// install` will; without Go, as Go's module proxy has it.
+fn newest_tool(tool: &str, go: Option<&Path>) -> Result<(String, Version), Failure> {
+    let module = format!("github.com/Vaspyyy/{tool}@latest");
+    let tag = match go {
+        Some(go) => {
+            let output = Command::new(go)
+                .args(["list", "-m", "-f", "{{.Version}}", &module])
+                // outside any module, whose go.mod would have a say
+                .current_dir("/")
+                .stdin(Stdio::null())
+                .output()
+                .map_err(|e| Failure::Again(format!("can't run go: {e}")))?;
+            if !output.status.success() {
+                return Err(Failure::Again(format!(
+                    "go can't find {tool}'s newest version: {}",
+                    last_lines(&output.stderr)
+                )));
+            }
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        },
+        None => {
+            let body = fetch(&format!("{PROXY}/{tool}/@latest"))?;
+            let latest: serde_json::Value = serde_json::from_slice(&body)
+                .map_err(|e| Failure::Again(format!("the Go proxy's answer about {tool} is not JSON: {e}")))?;
+            latest.get("Version").and_then(serde_json::Value::as_str).unwrap_or_default().to_string()
+        },
+    };
+    let version =
+        Version::parse(&tag).ok_or_else(|| Failure::Again(format!("{tool} has no newest version: {tag:?}")))?;
     Ok((tag, version))
 }
 
-fn update_lumen(check: bool, told: &mut Told, report: &mut Report) {
+fn update_lumen(how: How, told: &mut Told, report: &mut Report) {
     let ours = Version::parse(env!("CARGO_PKG_VERSION")).expect("lumen's own version");
     let (tag, newest) = match newest_lumen() {
         Ok(found) => found,
-        Err(why) => {
-            eprintln!("lumen: {why}");
-            report.failed = true;
-            return;
-        },
+        Err(failure) => return report.failure(&failure),
     };
     if newest <= ours {
         println!("lumen {ours} is the newest");
         return;
     }
     let Some(exe) = std::env::current_exe().ok() else {
-        eprintln!("lumen: can't tell where this lumen is");
-        report.failed = true;
-        return;
+        return report.failure(&Failure::Lasting("can't tell where this lumen is".into()));
     };
     let dir = match kind(&exe) {
         Kind::Ours(dir) => dir,
@@ -278,16 +385,13 @@ fn update_lumen(check: bool, told: &mut Told, report: &mut Report) {
         println!("lumen {newest} is out (this is {ours}), but not built for {}: {DOCS}", std::env::consts::ARCH);
         return;
     }
-    if check {
-        println!("lumen {ours} → {newest}");
+    let failed = format!("failed lumen {newest}");
+    if how == How::Timer && told.knows(&failed) {
+        println!("lumen {newest} is out, and could not be installed here; `lumen update` tries again");
         return;
     }
-    // a release that couldn't be installed here is tried again once a newer one is out
-    let failed = format!("failed lumen {newest}");
-    if told.knows(&failed) {
-        println!(
-            "lumen {newest} is out, and could not be installed here before; see `journalctl --user -u lumen-update`"
-        );
+    if how == How::Check {
+        println!("lumen {ours} → {newest}");
         return;
     }
     match install_lumen(&tag, &dir) {
@@ -295,16 +399,12 @@ fn update_lumen(check: bool, told: &mut Told, report: &mut Report) {
             println!("lumen {ours} → {newest}");
             report.updated.push(format!("lumen {ours} → {newest}"));
         },
-        Err(why) => {
-            eprintln!("lumen: lumen {newest} is out, and could not be installed: {why}");
-            report.failed = true;
-            // not again for this version, unless it was only the network
-            if !why.starts_with("could not fetch") {
-                told.note(failed);
-                report
-                    .waiting
-                    .push((format!("lumen {newest} failed"), format!("lumen {newest} could not be installed: {why}")));
+        Err(failure) => {
+            if let Failure::Lasting(why) = &failure {
+                told.note(failed.clone());
+                report.waiting.push((failed, format!("lumen {newest} could not be installed: {why}")));
             }
+            report.failure(&failure);
         },
     }
 }
@@ -315,7 +415,7 @@ enum Kind {
     Ours(PathBuf),
     /// By a package manager, under /usr: only it may change it.
     Package,
-    /// A build in a cargo `target` folder, not installed at all.
+    /// A build in a cargo target folder, not installed at all.
     Build,
 }
 
@@ -327,8 +427,8 @@ fn kind(exe: &Path) -> Kind {
     if system || !writable(dir) {
         return Kind::Package;
     }
-    let build = dir.ends_with("target/debug") || dir.ends_with("target/release");
-    if build || dir.parent().is_some_and(|parent| parent.file_name().is_some_and(|name| name == "target")) {
+    // cargo marks every target folder with this file: target/release, target/<triple>/debug
+    if dir.ancestors().take(3).any(|folder| folder.join("CACHEDIR.TAG").is_file()) {
         return Kind::Build;
     }
     Kind::Ours(dir.to_path_buf())
@@ -342,38 +442,44 @@ fn writable(dir: &Path) -> bool {
 }
 
 /// Fetches the release `tag`, checks it, and has its own install.sh put it into `dir`.
-fn install_lumen(tag: &str, dir: &Path) -> Result<(), String> {
+fn install_lumen(tag: &str, dir: &Path) -> Result<(), Failure> {
+    // what comes over the network may be a login page in its place: tried again
     let base = format!("{GITHUB}/lumen/releases/download/{tag}");
-    let sums = String::from_utf8(fetch(&format!("{base}/SHA256SUMS"))?).map_err(|_| "SHA256SUMS is not text")?;
-    let want = checksum_of(&sums, ARCHIVE).ok_or_else(|| format!("the release's SHA256SUMS doesn't list {ARCHIVE}"))?;
+    let sums = String::from_utf8(fetch(&format!("{base}/SHA256SUMS"))?)
+        .map_err(|_| Failure::Again("SHA256SUMS is not text".into()))?;
+    let want = checksum_of(&sums, ARCHIVE)
+        .ok_or_else(|| Failure::Again(format!("the release's SHA256SUMS doesn't list {ARCHIVE}")))?;
     let archive = fetch(&format!("{base}/{ARCHIVE}"))?;
     let have = hex(&Sha256::digest(&archive));
     if have != want {
-        return Err(format!("what was fetched is damaged: its checksum is {have}, the release says {want}"));
+        return Err(Failure::Again(format!(
+            "what was fetched is damaged: its checksum is {have}, the release says {want}"
+        )));
     }
 
     // unpacked next to the program, as install.sh does: /tmp may not let it start
     let work = dir.join(WORK);
     let _ = std::fs::remove_dir_all(&work);
-    std::fs::create_dir(&work).map_err(|e| format!("can't make {}: {e}", work.display()))?;
+    std::fs::create_dir(&work).map_err(|e| Failure::Again(format!("can't make {}: {e}", work.display())))?;
     let result = (|| {
-        std::fs::write(work.join(ARCHIVE), &archive).map_err(|e| format!("can't write the archive: {e}"))?;
+        std::fs::write(work.join(ARCHIVE), &archive)
+            .map_err(|e| Failure::Again(format!("can't write the archive: {e}")))?;
         let unpacked = Command::new("tar")
             .arg("-xzf")
             .arg(work.join(ARCHIVE))
             .arg("-C")
             .arg(&work)
             .status()
-            .map_err(|e| format!("can't run tar: {e}"))?;
+            .map_err(|e| Failure::Lasting(format!("can't run tar: {e}")))?;
         if !unpacked.success() {
-            return Err("tar could not unpack the archive".to_string());
+            return Err(Failure::Again("tar could not unpack the archive".into()));
         }
         let folder = std::fs::read_dir(&work)
-            .map_err(|e| e.to_string())?
+            .map_err(|e| Failure::Again(e.to_string()))?
             .flatten()
             .map(|entry| entry.path())
             .find(|path| path.is_dir() && path.join("install.sh").is_file())
-            .ok_or("the archive doesn't hold install.sh")?;
+            .ok_or_else(|| Failure::Lasting("the archive doesn't hold install.sh".into()))?;
         let mut install = Command::new("sh");
         install.arg(folder.join("install.sh")).env("LUMEN_BIN_DIR", dir).stdin(Stdio::null());
         // what was left out or turned off stays so: only services that are there are kept up
@@ -384,11 +490,11 @@ fn install_lumen(tag: &str, dir: &Path) -> Result<(), String> {
         if !units.join("lumen-update.timer").exists() {
             install.env("LUMEN_AUTO_UPDATE", "0");
         }
-        let output = install.output().map_err(|e| format!("can't run install.sh: {e}"))?;
+        let output = install.output().map_err(|e| Failure::Lasting(format!("can't run install.sh: {e}")))?;
         // what it said goes where this update's output goes: the journal, for the timer
         print!("{}", String::from_utf8_lossy(&output.stdout));
         if !output.status.success() {
-            return Err(format!("install.sh failed: {}", last_lines(&output.stderr)));
+            return Err(Failure::Lasting(format!("install.sh failed: {}", last_lines(&output.stderr))));
         }
         Ok(())
     })();
@@ -424,29 +530,15 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn update_tool(tool: &str, check: bool, report: &mut Report) {
-    let go = find("go", &go_folders());
-    // a tool that isn't installed stays so
-    let Some(program) = find_tool(tool, go.as_deref()) else { return };
-    let Some(ours) = tool_version(tool, &program, go.as_deref()) else {
-        println!("{tool}: {} is not {tool} as Go built it, so it stays as it is", program.display());
-        return;
-    };
-    let (tag, newest) = match newest_tool(tool) {
+fn update_tool(tool: &str, go: Option<&Path>, how: How, told: &mut Told, report: &mut Report) {
+    // a tool that isn't installed stays so, and so does another program of its name
+    let Some((program, ours)) = find_tool(tool, go) else { return };
+    let (tag, newest) = match newest_tool(tool, go) {
         Ok(found) => found,
-        Err(why) => {
-            eprintln!("lumen: {why}");
-            report.failed = true;
-            return;
-        },
+        Err(failure) => return report.failure(&failure),
     };
     if newest <= ours {
         println!("{tool} {ours} is the newest");
-        return;
-    }
-    let folder = program.parent().unwrap_or(Path::new("/")).to_path_buf();
-    if check {
-        println!("{tool} {ours} → {newest}");
         return;
     }
     let Some(go) = go else {
@@ -456,6 +548,7 @@ fn update_tool(tool: &str, check: bool, report: &mut Report) {
             .push((format!("{tool} {newest} needs Go"), format!("{tool} {newest} is out: updating it needs Go")));
         return;
     };
+    let folder = program.parent().unwrap_or(Path::new("/")).to_path_buf();
     if !writable(&folder) {
         println!("{tool} {newest} is out (this is {ours}); {} is not yours to write to", folder.display());
         report.waiting.push((
@@ -464,36 +557,57 @@ fn update_tool(tool: &str, check: bool, report: &mut Report) {
         ));
         return;
     }
-    let installed = Command::new(&go)
+    let failed = format!("failed {tool} {newest}");
+    if how == How::Timer && told.knows(&failed) {
+        println!("{tool} {newest} is out, and could not be installed here; `lumen update` tries again");
+        return;
+    }
+    if how == How::Check {
+        println!("{tool} {ours} → {newest}");
+        return;
+    }
+    let installed = Command::new(go)
         .args(["install", &format!("github.com/Vaspyyy/{tool}@{tag}")])
         // into the folder the tool's file is in, not wherever Go puts programs by default
         .env("GOBIN", &folder)
+        .current_dir("/")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .output();
-    match installed {
+    let failure = match installed {
         Ok(output)
-            if output.status.success() && tool_version(tool, &program, Some(&go)).is_some_and(|now| now >= newest) =>
+            if output.status.success() && tool_version(tool, &program, Some(go)).is_some_and(|now| now >= newest) =>
         {
             println!("{tool} {ours} → {newest}");
             report.updated.push(format!("{tool} {ours} → {newest}"));
+            return;
         },
         Ok(output) => {
-            eprintln!("lumen: {tool} {newest} is out, and go install failed: {}", last_lines(&output.stderr));
-            report.failed = true;
+            let why = format!("{tool} {newest} is out, and go install failed: {}", last_lines(&output.stderr));
+            let network =
+                ["dial tcp", "i/o timeout", "TLS handshake", "no such host", "connection re", "Temporary failure"];
+            let said = String::from_utf8_lossy(&output.stderr);
+            if network.iter().any(|sign| said.contains(sign)) { Failure::Again(why) } else { Failure::Lasting(why) }
         },
-        Err(e) => {
-            eprintln!("lumen: can't run go: {e}");
-            report.failed = true;
-        },
+        Err(e) => Failure::Again(format!("can't run go: {e}")),
+    };
+    if let Failure::Lasting(why) = &failure {
+        told.note(failed.clone());
+        report.waiting.push((failed, why.clone()));
     }
+    report.failure(&failure);
 }
 
-/// The program file of a tool: the first on `PATH` or in Go's folders, with links followed,
-/// so that `go install` replaces the file itself and not a link to it.
-fn find_tool(tool: &str, go: Option<&Path>) -> Option<PathBuf> {
-    let found = find(tool, &tool_folders(go))?;
-    Some(std::fs::canonicalize(&found).unwrap_or(found))
+/// The program file of a tool and its version: the first on `PATH` or in Go's folders
+/// that is the tool, with links followed, so that `go install` replaces the file itself
+/// and not a link to it.
+fn find_tool(tool: &str, go: Option<&Path>) -> Option<(PathBuf, Version)> {
+    let mut seen = BTreeSet::new();
+    find(tool, &tool_folders(go))
+        .into_iter()
+        .map(|found| std::fs::canonicalize(&found).unwrap_or(found))
+        .filter(|program| seen.insert(program.clone()))
+        .find_map(|program| tool_version(tool, &program, go).map(|version| (program, version)))
 }
 
 /// The version of a tool that Go built from its module, github.com/Vaspyyy/<tool>; None
@@ -524,16 +638,17 @@ fn tool_version(tool: &str, program: &Path, go: Option<&Path>) -> Option<Version
     field("mod").and_then(|fields| fields.get(1).and_then(|version| Version::parse(version))).or_else(|| said(program))
 }
 
-/// The first program of this name on `PATH` or in the folders named after it. The timer
-/// runs with systemd's `PATH`, which has no folder of the user's own.
-fn find(program: &str, extra: &[PathBuf]) -> Option<PathBuf> {
+/// Every program of this name on `PATH` and in the folders named after it, in that order.
+/// The timer runs with systemd's `PATH`, which has no folder of the user's own.
+fn find(program: &str, extra: &[PathBuf]) -> Vec<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
     let path = std::env::var_os("PATH").unwrap_or_default();
     std::env::split_paths(&path)
         .filter(|dir| dir.is_absolute())
         .chain(extra.iter().cloned())
         .map(|dir| dir.join(program))
-        .find(|file| file.metadata().is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0))
+        .filter(|file| file.metadata().is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0))
+        .collect()
 }
 
 /// Where `go install` puts programs, as Go says (`go env -w` may have set it) and as the
@@ -571,7 +686,7 @@ fn go_folders() -> Vec<PathBuf> {
 }
 
 /// Says on the desktop what the update did, and what is out but waits for the owner, each
-/// once. What couldn't be shown is said again next time.
+/// once. A notice that couldn't be shown is shown next time.
 fn tell(report: &Report, told: &mut Told) {
     let news: Vec<&(String, String)> = report.waiting.iter().filter(|(key, _)| !told.knows(key)).collect();
     let mut lines = report.updated.clone();
@@ -615,7 +730,8 @@ mod tests {
         let v = |text| Version::parse(text).unwrap();
         assert!(v("0.6.0-rc.1") < v("0.6.0"));
         assert!(v("0.6.0-rc.1") > v("0.5.2"));
-        assert!(v("0.6.0-rc.2") > v("0.6.0-rc.1"));
+        assert!(v("0.6.0-rc.10") > v("0.6.0-rc.9"));
+        assert!(v("0.6.0-rc.1") > v("0.6.0-beta.2"));
         assert_eq!(v("0.6.0-rc.1").to_string(), "0.6.0-rc.1");
     }
 
@@ -629,15 +745,19 @@ mod tests {
     #[test]
     fn a_lumen_in_a_system_folder_or_a_cargo_build_is_not_replaced() {
         assert!(matches!(kind(Path::new("/usr/bin/lumen")), Kind::Package));
-        let build = std::env::temp_dir().join(format!("lumen-kind-{}/target/release", std::process::id()));
-        std::fs::create_dir_all(&build).unwrap();
-        std::fs::write(build.join("lumen"), "").unwrap();
-        assert!(matches!(kind(&build.join("lumen")), Kind::Build));
-        let bin = build.parent().unwrap().parent().unwrap().join("bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        std::fs::write(bin.join("lumen"), "").unwrap();
-        assert!(matches!(kind(&bin.join("lumen")), Kind::Ours(dir) if dir.ends_with("bin")));
-        std::fs::remove_dir_all(build.parent().unwrap().parent().unwrap()).unwrap();
+        let root = std::env::temp_dir().join(format!("lumen-kind-{}", std::process::id()));
+        let file = |path: &str| {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "").unwrap();
+            path
+        };
+        file("cache/CACHEDIR.TAG");
+        assert!(matches!(kind(&file("cache/release/lumen")), Kind::Build));
+        assert!(matches!(kind(&file("cache/x86_64-unknown-linux-gnu/debug/lumen")), Kind::Build));
+        // a folder named target is no build without cargo's mark
+        assert!(matches!(kind(&file("target/bin/lumen")), Kind::Ours(dir) if dir.ends_with("target/bin")));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
