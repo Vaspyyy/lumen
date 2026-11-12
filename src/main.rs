@@ -8,6 +8,7 @@ mod editor;
 mod element;
 mod fonts;
 mod graphics;
+mod instance;
 mod integration;
 mod keys;
 mod links;
@@ -21,10 +22,13 @@ mod view;
 mod workspace;
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use gpui::{
-    App, AppContext, AssetSource, Bounds, SharedString, WindowBounds, WindowDecorations, WindowOptions, px, size,
+    App, AppContext, AssetSource, Bounds, QuitMode, SharedString, WindowBounds, WindowDecorations, WindowHandle,
+    WindowOptions, WindowingRequest, px, size,
 };
 
 use crate::config::Config;
@@ -68,6 +72,9 @@ USAGE
 OPTIONS
     -e, --command <program> [args...]   run this instead of the shell (takes the rest of the line)
     -d, --working-directory <dir>       start in this folder
+        --new-window                    a window of its own, where a lumen runs already
+        --new-process                   a lumen of its own, that starts from nothing
+        --daemon                        wait without a window, so that windows open at once
         --config-path                   print where the config file is read from
     -V, --version                       print the version
     -h, --help                          print this help
@@ -98,10 +105,30 @@ fn help_text(color: bool) -> String {
     text
 }
 
+/// How this lumen comes to show what was asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum How {
+    /// Through the lumen that runs, if one does: a tab, or a window, as its config says.
+    Join,
+    /// A window of the lumen that runs, if one does (`--new-window`).
+    Window,
+    /// On its own, as if no lumen ran (`--new-process`).
+    Process,
+    /// No window: waits for launches (`--daemon`).
+    Daemon,
+}
+
+/// What the command line asked for.
+struct Started {
+    spawn: Spawn,
+    how: How,
+}
+
 /// What the command line asked for, or the exit status when it asked for
 /// something that needs no window.
-fn parse_args(args: impl Iterator<Item = String>) -> Result<Spawn, i32> {
+fn parse_args(args: impl Iterator<Item = String>) -> Result<Started, i32> {
     let mut spawn = Spawn::default();
+    let mut how = How::Join;
     let mut args = args.peekable();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -120,8 +147,12 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Spawn, i32> {
                 println!("{}", Config::path().display());
                 return Err(0);
             },
+            "--new-window" => how = How::Window,
+            "--new-process" => how = How::Process,
+            "--daemon" => how = How::Daemon,
             "-d" | "--working-directory" => match args.next() {
-                Some(dir) => spawn.cwd = Some(PathBuf::from(dir)),
+                // a running lumen is somewhere else: the folder is made whole here
+                Some(dir) => spawn.cwd = Some(std::path::absolute(&dir).unwrap_or_else(|_| PathBuf::from(dir))),
                 None => {
                     eprintln!("lumen: {arg} wants a folder\nTry 'lumen --help'.");
                     return Err(2);
@@ -145,10 +176,16 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Spawn, i32> {
             },
         }
     }
-    Ok(spawn)
+    if how == How::Daemon && (spawn.cwd.is_some() || spawn.command.is_some()) {
+        eprintln!("lumen: --daemon opens nothing itself: it takes no -d or -e\nTry 'lumen --help'.");
+        return Err(2);
+    }
+    Ok(Started { spawn, how })
 }
 
-fn open_window(spawn: Spawn, cx: &mut App) {
+/// Opens a window with a terminal: the first one of a lumen, `Ctrl+Shift+N`, or one a
+/// launch asked for.
+pub fn open_window(spawn: Spawn, cx: &mut App) -> Result<WindowHandle<Workspace>, String> {
     let config = cx.global::<Config>().clone();
     // room for the configured grid at a typical cell size; the grid follows the window from then on
     let bounds = Bounds::centered(
@@ -165,19 +202,28 @@ fn open_window(spawn: Spawn, cx: &mut App) {
         app_id: Some("lumen".into()),
         ..Default::default()
     };
-    let opened = cx.open_window(options, |window, cx| {
-        cx.new(|cx| match Workspace::new(spawn, window, cx) {
-            Ok(workspace) => workspace,
-            Err(e) => {
-                eprintln!("lumen: can't start the shell: {e}");
-                std::process::exit(1);
-            },
-        })
+    // a terminal that doesn't start leaves the window empty, and it closes again
+    let failed = Rc::new(RefCell::new(None));
+    let opened = cx.open_window(options, {
+        let failed = failed.clone();
+        move |window, cx| {
+            cx.new(|cx| match Workspace::new(spawn, window, cx) {
+                Ok(workspace) => workspace,
+                Err(e) => {
+                    *failed.borrow_mut() = Some(e);
+                    Workspace::empty(&Spawn::default(), window, cx)
+                },
+            })
+        }
     });
-    if let Err(e) = opened {
-        eprintln!("lumen: can't open a window: {e}");
-        std::process::exit(1);
+    let window = opened.map_err(|e| format!("can't open a window: {e}"))?;
+    if let Some(e) = failed.take() {
+        let _ = window.update(cx, |_, window, _| window.remove_window());
+        return Err(format!("can't start the shell: {e}"));
     }
+    instance::note_active(window.into(), cx);
+    pulse::begin_after_first_frame(cx);
+    Ok(window)
 }
 
 /// Takes on the config file whenever it is saved, without a restart.
@@ -207,10 +253,18 @@ fn main() {
     if let Some(status) = phone::run(&args).or_else(|| integration::run(&args)) {
         std::process::exit(status);
     }
-    let spawn = match parse_args(args.into_iter()) {
-        Ok(spawn) => spawn,
+    let Started { spawn, how } = match parse_args(args.into_iter()) {
+        Ok(started) => started,
         Err(status) => std::process::exit(status),
     };
+    // A lumen that runs already opens what was asked for, in a fraction of the time this
+    // one would take to start: before anything of the GPU, the config or the fonts.
+    if matches!(how, How::Join | How::Window)
+        && let Some(status) = instance::hand_over(&spawn, how == How::Window)
+    {
+        std::process::exit(status);
+    }
+    let daemon = how == How::Daemon;
     // Loading the GPU driver and making a device is a good part of the time before the
     // first frame: it starts now, on a thread of its own, while the config, the fonts and
     // the window are made. The window takes the device when it opens.
@@ -220,14 +274,44 @@ fn main() {
         eprintln!("lumen: {}: {problem}\nlumen: using the defaults", Config::path().display());
     }
 
-    gpui_platform::application().with_assets(Assets).run(move |cx: &mut App| {
+    let mut application = gpui_platform::application().with_assets(Assets);
+    if daemon {
+        // no display until a launch names one: the daemon outlives the sessions it serves,
+        // and stays when its last window closes
+        application = application.with_windowing(WindowingRequest::Headless).with_quit_mode(QuitMode::Explicit);
+    }
+    application.run(move |cx: &mut App| {
         cx.set_global(config);
         fonts::init(cx);
         actions::bind(cx);
-        cx.on_action(|_: &actions::Quit, cx| cx.quit());
-        cx.on_action(|_: &actions::NewWindow, cx| open_window(Spawn::default(), cx));
-        cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
+        cx.on_action(move |_: &actions::Quit, cx| {
+            if !daemon {
+                cx.quit();
+                return;
+            }
+            // the daemon closes its windows and goes back to waiting
+            for window in cx.windows() {
+                let _ = window.update(cx, |_, window, _| window.remove_window());
+            }
+        });
+        cx.on_action(|_: &actions::NewWindow, cx| {
+            // in the folder the window it is pressed in was opened in, with its environment
+            let from = cx.active_window().and_then(|window| window.downcast::<Workspace>());
+            let spawn = from.and_then(|window| window.read_with(cx, |workspace, _| workspace.spawn_window()).ok());
+            if let Err(e) = open_window(spawn.unwrap_or_default(), cx) {
+                eprintln!("lumen: {e}");
+            }
+        });
+        cx.on_window_closed(move |cx, _| {
+            if !cx.windows().is_empty() {
+                return;
+            }
+            if daemon {
+                // back to waiting: off the display, which may end with its session, and with
+                // a GPU started for the next window
+                cx.request_windowing(WindowingRequest::Headless).detach();
+                gpui_wgpu::prewarm();
+            } else {
                 cx.quit();
             }
         })
@@ -243,11 +327,18 @@ fn main() {
             }
         });
         pulse::init(cx);
-        open_window(spawn, cx);
-        pulse::begin_after_first_frame(cx);
+        instance::serve(daemon, cx);
+        if !daemon {
+            if let Err(e) = open_window(spawn, cx) {
+                eprintln!("lumen: {e}");
+                gpui_wgpu::finish_prewarm();
+                std::process::exit(1);
+            }
+            cx.activate(true);
+        }
         watch_config(cx);
-        cx.activate(true);
     });
+    gpui_wgpu::finish_prewarm();
 }
 
 #[cfg(test)]
@@ -274,5 +365,24 @@ mod tests {
         assert!(matches!(parse_args(args(&["--bogus"])), Err(2)));
         assert!(matches!(parse_args(args(&["bogus"])), Err(2)));
         assert!(matches!(parse_args(args(&["-d"])), Err(2)));
+        assert!(matches!(parse_args(args(&["--daemon", "-e", "htop"])), Err(2)));
+    }
+
+    #[test]
+    fn a_launch_joins_the_running_lumen_unless_told_otherwise() {
+        let how = |list: &[&str]| parse_args(args(list)).ok().map(|started| started.how);
+        assert_eq!(how(&[]), Some(How::Join));
+        assert_eq!(how(&["-e", "--new-window"]), Some(How::Join));
+        assert_eq!(how(&["--new-window", "-d", "/tmp"]), Some(How::Window));
+        assert_eq!(how(&["--new-process"]), Some(How::Process));
+        assert_eq!(how(&["--daemon"]), Some(How::Daemon));
+    }
+
+    #[test]
+    fn a_folder_is_made_whole_for_the_running_lumen() {
+        let started = parse_args(args(&["-d", "notes"])).ok().unwrap();
+        let cwd = started.spawn.cwd.unwrap();
+        assert!(cwd.is_absolute());
+        assert!(cwd.ends_with("notes"));
     }
 }

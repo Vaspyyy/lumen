@@ -70,7 +70,7 @@ fn unknown_arg(arg: &str) -> i32 {
 /// folder systemd makes for the user is taken if it is there, so that
 /// `lumen pair` in a desktop terminal and `lumen pair-enroll` under sshd
 /// find each other; else a folder of the user's own in `/tmp`.
-fn runtime_dir() -> io::Result<PathBuf> {
+pub(crate) fn runtime_dir() -> io::Result<PathBuf> {
     let uid = sys::uid();
     let base = match std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
         Some(dir) => PathBuf::from(dir),

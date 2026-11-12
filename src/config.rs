@@ -56,6 +56,19 @@ pub enum CursorShape {
     Underline,
 }
 
+/// What `lumen` does when a lumen is already running.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Launch {
+    /// A new tab in the window used last.
+    #[default]
+    Tab,
+    /// A new window of the running lumen.
+    Window,
+    /// A lumen of its own, which starts from nothing.
+    Process,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Font {
@@ -293,6 +306,8 @@ pub struct Config {
     /// there at once instead of after the shell's own startup. The shell's
     /// startup files run for it before the tab is asked for.
     pub prewarm: bool,
+    /// What starting lumen again does while one runs: see [`Launch`].
+    pub launch: Launch,
     /// What was wrong with the file when it was last read, while lumen is
     /// running: the settings from before stay, and the window says why.
     #[serde(skip)]
@@ -313,6 +328,7 @@ impl Default for Config {
             copy_on_select: false,
             shell: None,
             prewarm: false,
+            launch: Launch::default(),
             problem: None,
         }
     }

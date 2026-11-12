@@ -3564,6 +3564,7 @@ dependencies = [
  "flate2",
  "futures",
  "gpui-fast",
+ "gpui-fast-linux",
  "gpui-fast-platform",
  "gpui-fast-wgpu",
  "image",

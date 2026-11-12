@@ -309,9 +309,17 @@ fn uri_list(paths: &[PathBuf]) -> String {
 
 /// Puts files on the clipboard, as a file manager does: pasting them
 /// somewhere copies them. This goes through wl-copy or xclip, which stay
-/// behind to hold the clipboard.
-pub fn copy_files(paths: &[PathBuf]) -> Result<(), String> {
-    let set = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
+/// behind to hold the clipboard. `display` is the session lumen's windows
+/// are on, which a lumen started without one (the daemon) doesn't have in
+/// its own environment.
+pub fn copy_files(paths: &[PathBuf], display: Option<gpui::GraphicalEnvironment>) -> Result<(), String> {
+    let set = |name: &str| match &display {
+        Some(display) => {
+            let value = if name == "WAYLAND_DISPLAY" { &display.wayland_display } else { &display.x11_display };
+            value.as_ref().is_some_and(|v| !v.is_empty())
+        },
+        None => std::env::var_os(name).is_some_and(|v| !v.is_empty()),
+    };
     let (tool, args): (&str, &[&str]) = if set("WAYLAND_DISPLAY") {
         ("wl-copy", &["--type", "text/uri-list"])
     } else if set("DISPLAY") {
@@ -319,18 +327,19 @@ pub fn copy_files(paths: &[PathBuf]) -> Result<(), String> {
     } else {
         return Err("no desktop session to copy to".into());
     };
-    let mut child = Command::new(tool)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound if tool == "wl-copy" => {
-                "copying files needs wl-copy (wl-clipboard)".to_string()
-            },
-            std::io::ErrorKind::NotFound => format!("copying files needs {tool}"),
-            _ => format!("{tool}: {e}"),
+    let mut command = Command::new(tool);
+    if let Some(display) = &display {
+        display.apply_to(&mut command);
+    }
+    let mut child =
+        command.args(args).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map_err(|e| {
+            match e.kind() {
+                std::io::ErrorKind::NotFound if tool == "wl-copy" => {
+                    "copying files needs wl-copy (wl-clipboard)".to_string()
+                },
+                std::io::ErrorKind::NotFound => format!("copying files needs {tool}"),
+                _ => format!("{tool}: {e}"),
+            }
         })?;
     let wrote = child.stdin.take().map(|mut stdin| stdin.write_all(uri_list(paths).as_bytes()));
     // the tool exits once it has left its clipboard holder behind: wait for that elsewhere

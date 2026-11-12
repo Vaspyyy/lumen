@@ -21,6 +21,8 @@ gpui = { package = "gpui-fast", version = "0.1.14" }
 gpui_platform = { package = "gpui-fast-platform", version = "0.1.14", features = ["wayland", "x11", "font-kit"] }
 # GPUI's renderer (vendored, see vendor/README.md): main starts the GPU early with it.
 gpui_wgpu = { package = "gpui-fast-wgpu", version = "0.1.14" }
+# GPUI's Linux platform (vendored too): a running lumen hands it a launcher's focus token.
+gpui_linux = { package = "gpui-fast-linux", version = "0.1.14", default-features = false }
 # The terminal itself: escape sequences, the grid, scrollback, selection, the PTY.
 alacritty_terminal = "0.26"
 serde = { version = "1", features = ["derive"] }

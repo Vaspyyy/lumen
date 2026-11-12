@@ -23,7 +23,7 @@ use crate::config::Config;
 use crate::editor;
 use crate::element::Metrics;
 use crate::pulse::{Pulse, Use};
-use crate::terminal::{CommandEvent, Spawn, Terminal};
+use crate::terminal::{CommandEvent, Env, Spawn, Terminal};
 use crate::view::{TerminalView, ViewEvent};
 
 type Pane = Entity<TerminalView>;
@@ -287,6 +287,11 @@ pub struct Workspace {
     shells: Vec<u32>,
     /// The notifications each pane had on the desktop.
     noted: HashMap<EntityId, Noted>,
+    /// The folder the window was opened in: where `Ctrl+Shift+N` opens the next one.
+    home: Option<PathBuf>,
+    /// The environment of the launch that opened the window, which every terminal in it
+    /// gets: None for lumen's own.
+    env: Option<Env>,
     _observers: Vec<Subscription>,
 }
 
@@ -297,6 +302,8 @@ struct Spare {
     pane: Pane,
     /// The folder it was started in. It only fits a tab that would start there.
     cwd: Option<PathBuf>,
+    /// The environment it was started with. It only fits a tab with the same one.
+    env: Option<Env>,
     born: Instant,
     /// The window's size when it was started, which its output is laid out for.
     viewport: Size<Pixels>,
@@ -309,6 +316,15 @@ const TAB_BAR: f32 = 40.;
 
 impl Workspace {
     pub fn new(spawn: Spawn, window: &mut Window, cx: &mut Context<Self>) -> std::io::Result<Self> {
+        let mut this = Self::empty(&spawn, window, cx);
+        let pane = this.open(spawn, (1., 1.), window, cx)?;
+        this.push_tab(pane, window, cx);
+        this.refresh_spare_soon(window, cx);
+        Ok(this)
+    }
+
+    /// A window without a tab yet: what `new` starts from.
+    pub fn empty(spawn: &Spawn, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut this = Workspace {
             tabs: Vec::new(),
             active: 0,
@@ -323,6 +339,8 @@ impl Workspace {
             title: String::new(),
             shells: Vec::new(),
             noted: HashMap::new(),
+            home: spawn.cwd.clone(),
+            env: spawn.env.clone(),
             _observers: vec![
                 // a spare is laid out for the window's size: a resized window wants a new one
                 cx.observe_window_bounds(window, |this, window, cx| this.refresh_spare_soon(window, cx)),
@@ -332,6 +350,8 @@ impl Workspace {
                     if !window.is_window_active() {
                         return;
                     }
+                    // the window a launch opens its tab in
+                    crate::instance::note_active(window.window_handle(), cx);
                     this.looked_at(this.active);
                     if let Some(tab) = this.tabs.get_mut(this.active)
                         && tab.news.take().is_some()
@@ -354,10 +374,7 @@ impl Workspace {
                 }
             }));
         }
-        let pane = this.open(spawn, (1., 1.), window, cx)?;
-        this.push_tab(pane, window, cx);
-        this.refresh_spare_soon(window, cx);
-        Ok(this)
+        this
     }
 
     /// Starts a terminal and wires it to this window.
@@ -421,18 +438,30 @@ impl Workspace {
     /// goes to whatever the desktop opens it with.
     fn edit(&mut self, path: &Path, line: u32, column: Option<u32>, window: &mut Window, cx: &mut Context<Self>) {
         let editor = cx.global::<Config>().editor.clone();
-        let env = |name: &str| std::env::var(name).ok();
+        let launched = self.env.clone();
+        let env = |name: &str| match &launched {
+            Some(env) => env.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone()),
+            None => std::env::var(name).ok(),
+        };
         let Some(launch) = editor::launch(editor.command.as_deref(), editor.terminal, env, path, line, column) else {
             cx.open_with_system(path);
             return;
         };
         let program = launch.argv[0].clone();
         let started = if launch.terminal {
-            let spawn = Spawn { cwd: path.parent().map(Path::to_path_buf), command: Some(launch.argv) };
+            let spawn =
+                Spawn { cwd: path.parent().map(Path::to_path_buf), command: Some(launch.argv), env: self.env.clone() };
             self.open(spawn, (1., 1.), window, cx).map(|pane| self.push_tab(pane, window, cx))
         } else {
             let mut command = std::process::Command::new(&program);
             command.args(&launch.argv[1..]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+            // on the display this window is on: a lumen started without one (the daemon) has none of its own
+            if let Some(env) = &self.env {
+                command.envs(env.iter().map(|(key, value)| (key, value)));
+            }
+            if let Some(graphical) = cx.graphical_environment() {
+                graphical.apply_to(&mut command);
+            }
             command.spawn().map(|mut child| {
                 // someone has to hear of its end, or it stays behind as a dead process
                 std::thread::spawn(move || child.wait());
@@ -566,7 +595,7 @@ impl Workspace {
     fn open_monitor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let program = cx.try_global::<Pulse>().and_then(|pulse| pulse.0.read(cx).program().map(Path::to_path_buf));
         let program = program.map_or_else(|| "pulse".to_string(), |program| program.to_string_lossy().into_owned());
-        let spawn = Spawn { cwd: dirs::home_dir(), command: Some(vec![program]) };
+        let spawn = Spawn { cwd: dirs::home_dir(), command: Some(vec![program]), env: self.env.clone() };
         match self.open(spawn, (1., 1.), window, cx) {
             Ok(pane) => self.push_tab(pane, window, cx),
             Err(e) => self.say(format!("Can't start pulse: {e}"), cx),
@@ -601,7 +630,36 @@ impl Workspace {
     /// Where a terminal opened from here starts: the folder of the active pane.
     fn spawn_here(&self, cx: &App) -> Spawn {
         let cwd = self.tabs.get(self.active).and_then(|tab| tab.active.read(cx).terminal.read(cx).cwd());
-        Spawn { cwd, command: None }
+        Spawn { cwd, command: None, env: self.env.clone() }
+    }
+
+    /// What `Ctrl+Shift+N` opens from here: a window in the folder this one was opened in,
+    /// with its environment.
+    pub fn spawn_window(&self) -> Spawn {
+        Spawn { cwd: self.home.clone(), command: None, env: self.env.clone() }
+    }
+
+    /// The pane that is in front.
+    pub fn active_pane(&self) -> Option<Entity<TerminalView>> {
+        self.tabs.get(self.active).map(|tab| tab.active.clone())
+    }
+
+    /// A tab for a launch of lumen: what `lumen` started while this one runs asked for. A
+    /// shell that was started ahead of time is taken where it fits, as for `Ctrl+Shift+T`.
+    pub fn open_launched(
+        &mut self,
+        spawn: Spawn,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> std::io::Result<Entity<TerminalView>> {
+        let ready = if spawn.command.is_none() { self.take_spare(&spawn, window, cx) } else { None };
+        let pane = match ready {
+            Some(pane) => pane,
+            None => self.open(spawn, (1., 1.), window, cx)?,
+        };
+        self.push_tab(pane.clone(), window, cx);
+        self.refresh_spare_soon(window, cx);
+        Ok(pane)
     }
 
     fn report(&self, what: &str, error: std::io::Error) {
@@ -653,7 +711,7 @@ impl Workspace {
     /// `spawn` would start one.
     fn take_spare(&mut self, spawn: &Spawn, window: &mut Window, cx: &mut Context<Self>) -> Option<Pane> {
         let spare = self.spare.take()?;
-        if spare.cwd == spawn.cwd {
+        if spare.cwd == spawn.cwd && spare.env == spawn.env {
             return Some(spare.pane);
         }
         self.forget(&spare.pane, window, cx);
@@ -688,7 +746,10 @@ impl Workspace {
         let spawn = self.spawn_here(cx);
         let viewport = window.viewport_size();
         let fits = self.spare.as_ref().is_some_and(|spare| {
-            spare.cwd == spawn.cwd && spare.born.elapsed() < SPARE_MAX_AGE && spare.viewport == viewport
+            spare.cwd == spawn.cwd
+                && spare.env == spawn.env
+                && spare.born.elapsed() < SPARE_MAX_AGE
+                && spare.viewport == viewport
         });
         if fits {
             return;
@@ -696,9 +757,9 @@ impl Workspace {
         if let Some(old) = self.spare.take() {
             self.forget(&old.pane, window, cx);
         }
-        let cwd = spawn.cwd.clone();
+        let (cwd, env) = (spawn.cwd.clone(), spawn.env.clone());
         match self.open(spawn, (1., 1.), window, cx) {
-            Ok(pane) => self.spare = Some(Spare { pane, cwd, born: Instant::now(), viewport }),
+            Ok(pane) => self.spare = Some(Spare { pane, cwd, env, born: Instant::now(), viewport }),
             Err(e) => self.report("can't start a shell ahead of time", e),
         }
     }

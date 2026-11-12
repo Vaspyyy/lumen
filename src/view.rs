@@ -647,7 +647,7 @@ impl TerminalView {
         let notice = if !path.exists() {
             format!("{name} is gone")
         } else {
-            match links::copy_files(std::slice::from_ref(path)) {
+            match links::copy_files(std::slice::from_ref(path), cx.graphical_environment()) {
                 Ok(()) => format!("Copied {name}{}", folder.unwrap_or_default()),
                 Err(e) => e,
             }

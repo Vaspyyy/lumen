@@ -119,7 +119,13 @@ pub struct Spawn {
     pub cwd: Option<PathBuf>,
     /// A program and its arguments, instead of the shell.
     pub command: Option<Vec<String>>,
+    /// The environment of the launch it is for, laid over lumen's own: see [`crate::instance`].
+    /// None for lumen's own environment.
+    pub env: Option<Env>,
 }
+
+/// An environment, sorted by name. Shared: every terminal of a window gets the same one.
+pub type Env = std::sync::Arc<Vec<(String, String)>>;
 
 /// A terminal whose program is running, before it is an entity.
 pub struct Started {
@@ -143,7 +149,7 @@ impl Terminal {
             Some(mut argv) if !argv.is_empty() => Some(Shell::new(argv.remove(0), argv)),
             _ => config.shell.clone().map(|program| Shell::new(program, Vec::new())),
         };
-        let mut env = HashMap::new();
+        let mut env: HashMap<String, String> = spawn.env.iter().flat_map(|env| env.iter().cloned()).collect();
         env.insert("TERM".into(), "xterm-256color".into());
         env.insert("COLORTERM".into(), "truecolor".into());
         env.insert("TERM_PROGRAM".into(), "lumen".into());

@@ -903,6 +903,13 @@ pub fn prewarm() {
     }
 }
 
+/// Waits for a [`prewarm`] that is still starting the GPU, and drops what it made. For a
+/// process about to exit: tearing the driver down under a thread that is in it crashes.
+#[cfg(not(target_family = "wasm"))]
+pub fn finish_prewarm() {
+    drop(take_prewarmed());
+}
+
 /// The device [`prewarm`] made, once it is there; None without one.
 #[cfg(not(target_family = "wasm"))]
 fn take_prewarmed() -> Option<Prewarmed> {
