@@ -56,6 +56,7 @@ Usually a user has one lumen at a time. The first one listens on a socket, `lume
 src/
   main.rs       command line, window
   instance.rs   one lumen for all windows: launches and the daemon
+  update.rs     lumen update: lumen and its tools at their newest releases
   config.rs     the config file
   terminal.rs   a running terminal: the program, its PTY, its grid
   pty.rs        the thread that reads what the program prints

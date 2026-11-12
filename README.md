@@ -24,6 +24,8 @@ On Linux, without root (x86_64, on a system as new as Ubuntu 22.04 or Debian 12)
 curl -fsSL https://vaspyyy.github.io/lumen/install.sh | sh
 ```
 
+From then on lumen updates itself and its tools (glint, crux, recap, seek, pulse) once a day, in the background; `lumen update` does it by hand. See [Updates](https://vaspyyy.github.io/lumen/docs/install/#updates).
+
 Every [release](https://github.com/Vaspyyy/lumen/releases/latest) also has a package for Debian and Ubuntu (`.deb`), for Fedora and openSUSE (`.rpm`) and for Arch (`.pkg.tar.zst`). [Install](https://vaspyyy.github.io/lumen/docs/install/) has the commands for each, and says how to check what you fetched. lumen runs on Wayland and X11.
 
 To build it yourself, with a recent Rust toolchain:
@@ -34,7 +36,7 @@ cd lumen
 scripts/install.sh
 ```
 
-The script builds lumen into Cargo's bin folder (`~/.cargo/bin`), adds the launcher entry and icons to `~/.local/share`, and turns on the systemd user service that keeps lumen waiting from login on (`LUMEN_DAEMON=0` leaves it out). To only try it, `cargo run --release` is enough.
+The script builds lumen into Cargo's bin folder (`~/.cargo/bin`), adds the launcher entry and icons to `~/.local/share`, and turns on the systemd user service that keeps lumen waiting from login on and the timer that updates lumen and its tools once a day (`LUMEN_DAEMON=0` and `LUMEN_AUTO_UPDATE=0` leave them out). To only try it, `cargo run --release` is enough.
 
 ```sh
 lumen                       # a window with your shell
@@ -167,6 +169,7 @@ An image occupies cells like text does. lumen marks each of those cells with a l
 src/
   main.rs       command line, window
   instance.rs   one lumen for all windows: launches and the daemon
+  update.rs     lumen update: lumen and its tools at their newest releases
   config.rs     the config file
   terminal.rs   a running terminal: the program, its PTY, its grid
   pty.rs        the thread that reads what the program prints and writes what is typed
@@ -186,7 +189,7 @@ crates/
   lumen-mobile/ the app's core: the SSH connection and the terminal, as a library for Android
 android/        the Android app
 site/           the website: the front page, the docs, the release notes
-packaging/      what a release offers: the install script, the packages and the daemon's service
+packaging/      what a release offers: the install script, the packages, the daemon's service and the update's timer
 ```
 
 The phone app has no terminal of its own design either: its core is the same `alacritty_terminal`, fed over SSH ([russh](https://crates.io/crates/russh)) by a terminal the PC keeps running (`lumen keeper`). The screen is drawn by the app, in Kotlin.

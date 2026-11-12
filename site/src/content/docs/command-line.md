@@ -65,6 +65,15 @@ These need no window. They run in any terminal, and over SSH.
 
 [lumen on your phone](/docs/phone/) is where to start, [How the phone logs in](/docs/phone-security/) says what pairing changes on the PC, and [Terminals that keep running](/docs/kept-terminals/) is about `attach` and `sessions`.
 
+## Updates
+
+| Command | Does |
+| --- | --- |
+| `lumen update` | Brings lumen and its tools (glint, crux, recap, seek, pulse) to their newest releases. A timer runs it once a day |
+| `lumen update --check` | Only says what is out |
+
+[Updates](/docs/install/#updates) says where each comes from, and how to turn the daily update off.
+
 ## Shells
 
 | Command | Does |

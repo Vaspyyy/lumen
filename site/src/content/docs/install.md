@@ -5,7 +5,7 @@ description: Packages for Debian, Ubuntu, Fedora, openSUSE and Arch, one command
 
 lumen runs on Linux, on Wayland and X11. Every release comes as a package for the big distributions and as one command for the others. They are built for 64-bit Intel and AMD machines (`x86_64`); on any other machine, [build lumen from source](#build-it-from-source).
 
-Each way installs the program, the launcher entry and the icons, so lumen shows up in your desktop's application menu, and a systemd service that keeps lumen waiting from login on, so that its first window opens at once. The install scripts turn that service on where systemd runs for your user, the packages leave it off: see [The daemon](#the-daemon).
+Each way installs the program, the launcher entry and the icons, so lumen shows up in your desktop's application menu, a systemd service that keeps lumen waiting from login on, so that its first window opens at once, and a timer that [updates](#updates) lumen and its tools once a day. The install scripts turn both on where systemd runs for your user, the packages leave them off.
 
 lumen is drawn by the graphics card, so it needs a working graphics driver, with Vulkan or OpenGL. Any Mesa driver of the last few years will do.
 
@@ -55,7 +55,7 @@ One command for every system with a C library as new as the one in Ubuntu 22.04 
 curl -fsSL https://vaspyyy.github.io/lumen/install.sh | sh
 ```
 
-This needs no root. The script fetches the newest release, checks that it arrived whole against the checksum in the release, and puts the program into `~/.local/bin` and the launcher entry and the icons into `~/.local/share`. Where systemd runs for your user, it also installs the [daemon](#the-daemon)'s service into `~/.config/systemd/user` and turns it on; `LUMEN_DAEMON=0` in front of `sh` leaves it out. If you like to know what you run, [read it first](https://github.com/Vaspyyy/lumen/blob/main/packaging/install.sh): it is about 300 lines.
+This needs no root. The script fetches the newest release, checks that it arrived whole against the checksum in the release, and puts the program into `~/.local/bin` and the launcher entry and the icons into `~/.local/share`. Where systemd runs for your user, it also installs the [daemon](#the-daemon)'s service and the [daily update](#updates)'s timer into `~/.config/systemd/user` and turns them on; `LUMEN_DAEMON=0` or `LUMEN_AUTO_UPDATE=0` in front of `sh` leaves one out. If you like to know what you run, [read it first](https://github.com/Vaspyyy/lumen/blob/main/packaging/install.sh): it is about 300 lines.
 
 lumen needs a few libraries that a desktop has anyway:
 
@@ -112,11 +112,30 @@ systemctl --user enable --now lumen
 
 `systemctl --user disable --now lumen` turns it off again, and closes the windows it has open. [Opening lumen again](/docs/launching/#the-daemon-a-quick-first-window) says what it costs and how it behaves.
 
-## Update
+## Updates
 
-lumen doesn't update itself, and no distribution has it in its repositories yet, so your system's updates don't bring new versions. To update, run the commands you installed it with again: they always fetch the newest release.
+lumen updates itself, and the tools made for it, once a day:
 
-A lumen that is running keeps running the old version until you close its windows. The daemon then makes way for the new version by itself. The [release notes](/releases/) say what changed, and have a [feed](/rss.xml) to follow.
+```sh
+lumen update           # the same by hand, now
+lumen update --check   # only say what is out
+```
+
+- **lumen** comes from its newest release: the archive is fetched, checked against the release's checksums, and installed into the folder lumen is in, with its launcher entry, icons and services. A lumen you built from source is replaced by the release once a release newer than it is out.
+- **A package** (apt, dnf, zypper, pacman) can only be updated by its package manager, with root. lumen tells you once when a new version is out: install the new package the way you installed the first one. No distribution has lumen in its repositories yet, so your system's own updates don't bring it.
+- **The tools** ([glint](https://github.com/Vaspyyy/glint), crux, recap, seek and pulse) are updated where they are installed, with `go install`, the way they were installed. That needs Go. A tool that isn't installed stays so.
+
+Nothing is ever replaced by an older version, so a build of your own that is newer than the newest release stays as it is.
+
+The install script and `scripts/install.sh` turn the daily update on, where systemd runs for your user: a timer, `lumen-update.timer`, starts `lumen update` once a day at the lowest priority, so a game or a build doesn't notice it, and you get a notification of what changed. `LUMEN_AUTO_UPDATE=0` in front of the install command leaves it out. With a package, the timer is installed but off; turn it on to have the tools updated and to hear of new versions:
+
+```sh
+systemctl --user enable --now lumen-update.timer
+```
+
+`systemctl --user disable --now lumen-update.timer` turns it off again, and stays so through updates.
+
+A lumen that is running keeps running the old version until you close its windows. The [daemon](#the-daemon) then makes way for the new version by itself. The [release notes](/releases/) say what changed, and have a [feed](/rss.xml) to follow.
 
 ## Remove it
 
@@ -126,10 +145,10 @@ A lumen that is running keeps running the old version until you close its window
 | `dnf` | `sudo dnf remove lumen-terminal` |
 | `zypper` | `sudo zypper remove lumen-terminal` |
 | `pacman` | `sudo pacman -R lumen-terminal` |
-| The script | `curl -fsSL https://vaspyyy.github.io/lumen/install.sh \| sh -s -- --uninstall`. This stops the daemon and removes its service too |
+| The script | `curl -fsSL https://vaspyyy.github.io/lumen/install.sh \| sh -s -- --uninstall`. This stops the daemon and removes its service and the update's timer too |
 | A build from source | see [Remove a build from source](#remove-a-build-from-source) |
 
-If you turned the [daemon](#the-daemon) on for a package, turn it off before you remove the package: `systemctl --user disable --now lumen`. The install script's `--uninstall` does that itself.
+If you turned the [daemon](#the-daemon) or the [daily update](#updates) on for a package, turn them off before you remove the package: `systemctl --user disable --now lumen lumen-update.timer`. The install script's `--uninstall` does that itself.
 
 Your settings are in `~/.config/lumen`. Remove that folder too if you want nothing left.
 
@@ -185,9 +204,9 @@ The script does two things:
 
 1. It builds lumen and puts the program into Cargo's bin folder, `~/.cargo/bin`. rustup adds that folder to your `PATH`.
 2. It adds the launcher entry and the icons to `~/.local/share`, so lumen shows up in your desktop's application menu.
-3. Where systemd runs for your user, it installs the [daemon](#the-daemon)'s service into `~/.config/systemd/user` and turns it on, unless `LUMEN_DAEMON=0` is in front of it.
+3. Where systemd runs for your user, it installs the [daemon](#the-daemon)'s service and the [daily update](#updates)'s timer into `~/.config/systemd/user` and turns them on. `LUMEN_DAEMON=0` or `LUMEN_AUTO_UPDATE=0` in front of it leaves one out.
 
-To update, get the newest source with `git pull` and run the script again.
+Once a release newer than your build is out, the [daily update](#updates) replaces it with that release. To keep building from source instead, get the newest source with `git pull` and run the script again, or turn the daily update off.
 
 ### Try it without installing
 
@@ -205,8 +224,9 @@ Nothing is copied anywhere. The first build takes the longest.
 cargo uninstall lumen
 rm ~/.local/share/applications/lumen.desktop
 rm ~/.local/share/icons/hicolor/*/apps/lumen.png
+systemctl --user disable --now lumen-update.timer
 systemctl --user disable lumen
-rm ~/.config/systemd/user/lumen.service
+rm ~/.config/systemd/user/lumen.service ~/.config/systemd/user/lumen-update.*
 systemctl --user daemon-reload
 systemctl --user stop lumen
 ```
