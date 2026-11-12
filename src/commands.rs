@@ -783,8 +783,9 @@ fn marks_on<L>(term: &Term<L>, line: Line) -> impl Iterator<Item = (u32, Part)> 
 ///
 /// Lines that are marked for no command lie between the copies where a
 /// program has printed with links of its own, or where the shell left lines
-/// empty. They don't end the search. A line of another command does: the
-/// command is older, and nothing of this one stands above it. Without one,
+/// empty. They don't end the search. A line that another command has part
+/// in does: the command is older, and nothing of this one stands above it.
+/// Without one,
 /// the search goes `reach` lines up: as far as a copy can have been moved
 /// by what was written since. (A program that scrolls the screen again and
 /// again while a prompt is open can move a copy further than that. Shells
@@ -797,19 +798,27 @@ fn forget_above<L>(term: &mut Term<L>, line: Line, id: u32, part: Option<Part>, 
     let left = alacritty_terminal::term::cell::Hyperlink::new(Some(uri.clone()), uri);
     let mut above = line - 1;
     while above >= top {
-        match owner(term, above) {
-            Some(other) if other == id => {
-                let row = &mut term.grid_mut()[above];
-                for column in (0..columns).map(Column) {
-                    let marked = row[column].hyperlink().and_then(|link| cell_of(link.uri()));
-                    let wanted = |of: Part| of != Part::Left && part.is_none_or(|part| part == of);
-                    if marked.is_some_and(|(other, of)| other == id && wanted(of)) {
-                        row[column].set_hyperlink(Some(left.clone()));
-                    }
+        // Lines that were made narrower can have joined the end of an older
+        // command's line and the beginning of this one's: what is this command's
+        // on such a line is left over as on any other.
+        let (mut ours, mut others) = (false, false);
+        for (other, of) in marks_on(term, above) {
+            if of != Part::Left {
+                *if other == id { &mut ours } else { &mut others } = true;
+            }
+        }
+        if ours {
+            let row = &mut term.grid_mut()[above];
+            for column in (0..columns).map(Column) {
+                let marked = row[column].hyperlink().and_then(|link| cell_of(link.uri()));
+                let wanted = |of: Part| of != Part::Left && part.is_none_or(|part| part == of);
+                if marked.is_some_and(|(other, of)| other == id && wanted(of)) {
+                    row[column].set_hyperlink(Some(left.clone()));
                 }
-            },
-            Some(_) => break,
-            None => {},
+            }
+        }
+        if others {
+            break;
         }
         above -= 1;
     }
@@ -1293,6 +1302,32 @@ mod tests {
         let copy = (screen.term.topmost_line().0..0).find(|&line| screen.line(line) == "$ c").unwrap();
         assert_eq!((copy, owner(&screen.term, Line(copy))), (-3998, None));
         assert_eq!(screen.places(), [(0, 5, 7)]);
+    }
+
+    /// Typed in characters two cells wide, given up, and the window made
+    /// narrower twice: the terminal joins the end of what was typed and the
+    /// beginning of the next prompt into one line.
+    #[test]
+    fn a_line_that_two_commands_have_part_in() {
+        let mut screen = Screen::new();
+        let prompt = "\x1b]133;A\x07~/x\r\n> \x1b]133;B\x07";
+        screen.resize(53).print(prompt).print(&"\u{4e2d}\u{6587}\u{4e2d}".repeat(5));
+        screen.resize(104).resize(7);
+        // given up: a new prompt, and something typed at it
+        screen.print("\r\n\x1b]133;L\x07").print(prompt).print(&"y".repeat(2000));
+        screen.resize(5);
+        let shared = (screen.term.topmost_line().0..0).map(Line).find(|&line| {
+            marks_on(&screen.term, line).map(|(id, _)| id).collect::<Vec<_>>().windows(2).any(|w| w == [0, 1])
+        });
+        assert!(shared.is_some());
+        // the screen is cleared and the prompt written again, in a window made narrower again
+        screen.print("\x1b[H\x1b[2J").print(prompt).resize(7).resize(3).print("\r\x1b[J").print(prompt);
+        // nothing above the prompt is still this command's prompt, or typed at it
+        let prompt_at = screen.places().last().unwrap().1;
+        let stale = (screen.term.topmost_line().0..prompt_at)
+            .flat_map(|line| marks_on(&screen.term, Line(line)))
+            .filter(|&(id, part)| id == 1 && part != Part::Left);
+        assert_eq!(stale.count(), 0);
     }
 
     /// How far up what is left of a prompt is looked for.
