@@ -30,10 +30,14 @@ if [[ $- == *i* ]]; then
         # The prompt begins on a line of its own (L), also after output that
         # ended without a line break. bash itself doesn't see to that.
         printf '\e]133;L\a' >&2
-        if [[ ${PS1-} != *"$before"*"$after" ]]; then
-            # A prompt that was set anew, or added to at its end, since it was
-            # last marked. What was put in front of it stays in front: whoever
-            # put it there may take it off again.
+        # What was put in front of a marked prompt stays in front: whoever put
+        # it there may take it off again. But not what has a $ or a ` in it:
+        # that may run a command when the prompt is written, and after it $?
+        # is that command's.
+        local front=${PS1-}
+        front=${front%%"$before"*}
+        if [[ ${PS1-} != *"$before"*"$after" || $front == *'$'* || $front == *'`'* ]]; then
+            # A prompt that was set anew, or added to, since it was last marked.
             local inner=${PS1-}
             inner=${inner//"$ended"/}
             inner=${inner//"$plain"/}
