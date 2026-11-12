@@ -169,24 +169,26 @@ fn program(spawn: &Spawn, config: &Config, ours: impl Iterator<Item = String>) -
     Ok(Some(Shell::new("/usr/bin/env".into(), wrapped)))
 }
 
-/// Whether a program can be started, as `env` looks for it: by its path where it has a
-/// slash, else in the folders of `path`.
+/// Whether a program can be started, as `env` looks for it from the terminal's folder
+/// `cwd`: by its path where it has a slash, else in the folders of `path`, where a
+/// relative folder is one from `cwd` and an empty one is `cwd` itself.
 fn runnable(program: &str, path: Option<&str>, cwd: Option<&std::path::Path>) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    let executable = |file: &std::path::Path| {
-        file.metadata().is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    use std::path::Path;
+    let executable =
+        |file: &Path| file.metadata().is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0);
+    // from the terminal's folder, not lumen's
+    let from_cwd = |file: &Path| match cwd {
+        Some(cwd) if file.is_relative() => cwd.join(file),
+        _ => file.to_path_buf(),
     };
     if program.contains('/') {
-        let file = std::path::Path::new(program);
-        return match cwd {
-            Some(cwd) if file.is_relative() => executable(&cwd.join(file)),
-            _ => executable(file),
-        };
+        return executable(&from_cwd(Path::new(program)));
     }
     path.unwrap_or("/usr/local/bin:/usr/bin:/bin")
         .split(':')
-        .filter(|dir| !dir.is_empty())
-        .any(|dir| executable(&std::path::Path::new(dir).join(program)))
+        .map(|dir| if dir.is_empty() { "." } else { dir })
+        .any(|dir| executable(&from_cwd(&Path::new(dir).join(program))))
 }
 
 /// A terminal whose program is running, before it is an entity.
@@ -494,5 +496,20 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
         assert!(program(&missing("/nowhere/sh"), &config, ours()).is_err());
         assert!(program(&missing("sh"), &config, ours()).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_relative_folder_on_the_path_is_one_from_the_terminals_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        let cwd = std::env::temp_dir().join(format!("lumen-runnable-{}", std::process::id()));
+        std::fs::create_dir_all(cwd.join("bin")).unwrap();
+        let tool = cwd.join("bin/lumen-test-tool");
+        std::fs::write(&tool, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(runnable("lumen-test-tool", Some("bin"), Some(&cwd)));
+        assert!(runnable("bin/lumen-test-tool", Some(""), Some(&cwd)));
+        assert!(runnable("lumen-test-tool", Some("/nowhere::"), Some(&cwd.join("bin"))));
+        assert!(!runnable("lumen-test-tool", Some("bin"), Some(std::path::Path::new("/"))));
+        std::fs::remove_dir_all(&cwd).unwrap();
     }
 }

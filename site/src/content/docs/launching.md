@@ -25,9 +25,9 @@ With `-e`, the `lumen` command waits until the program in the tab ends, as it wo
 `launch` in the [config](/docs/configuration/) says what a launch opens:
 
 ```toml
-launch = "tab"       # a tab in the window you used last (the default)
-launch = "window"    # a window of its own, of the lumen that runs
-launch = "process"   # a lumen of its own every time, as lumen did before
+launch = "tab"         # a tab in the window you used last (the default)
+# launch = "window"    # a window of its own, of the lumen that runs
+# launch = "process"   # a lumen of its own every time, as lumen did before
 ```
 
 A window of the lumen that runs opens at once too, it only skips the wait for the GPU, the fonts and the config. `--new-window` and `--new-process` on the command line say the same for one launch, whatever the config says. The launcher entry's *New Window* action uses `--new-window`.

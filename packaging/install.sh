@@ -51,9 +51,11 @@ our_entry() {
     grep -q '^Icon=lumen$' "$1" 2>/dev/null && grep -q '^Categories=.*TerminalEmulator' "$1" 2>/dev/null
 }
 
-# The same question for a service.
+# The same question for a service: the one lumen ships starts with this line. A
+# service written by hand, for lumen too, stays as it is.
 our_unit() {
-    grep -q '^ExecStart=.*lumen"\{0,1\} --daemon$' "$1" 2>/dev/null
+    grep -q '^# Keeps a lumen running without a window from login on' "$1" 2>/dev/null &&
+        grep -q '^ExecStart=.*lumen"\{0,1\} --daemon$' "$1" 2>/dev/null
 }
 
 # Whether systemd runs for this user, so that a service can be started.
@@ -125,7 +127,7 @@ uninstall() {
             rm -f -- "$unit"
             found=1
         else
-            say "$unit belongs to another program of the same name. It stays."
+            say "$unit is not the one lumen comes with. It stays."
             other=1
         fi
     fi
@@ -268,7 +270,7 @@ install_daemon() {
     # a release from before the service
     [ -f "$1/lumen.service" ] || return 0
     if [ -e "$unit" ] && ! our_unit "$unit"; then
-        say "$unit belongs to another program of the same name. It stays, and lumen has no service."
+        say "$unit is not the one lumen comes with. It stays as it is."
         return 0
     fi
     # Without systemd for this user (over SSH, say) the service couldn't be turned

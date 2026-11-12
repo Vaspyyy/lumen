@@ -10,9 +10,17 @@ program=${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin/lumen
 data=${XDG_DATA_HOME:-$HOME/.local/share}
 install -Dm644 packaging/lumen.desktop "$data/applications/lumen.desktop"
 # without systemd for this user (over SSH, say) there is nothing to turn it on with
+units=
 if [ "${LUMEN_DAEMON:-1}" != 0 ] && command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
     units=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
-    # a service you turned off stays off
+    # a service you wrote yourself stays as it is, and one you turned off stays off
+    unit=$units/lumen.service
+    if [ -e "$unit" ] && ! grep -q '^# Keeps a lumen running without a window from login on' "$unit"; then
+        echo "$unit is not the one lumen comes with: it stays as it is"
+        units=
+    fi
+fi
+if [ -n "$units" ]; then
     off=
     if [ -e "$units/lumen.service" ] && [ "$(systemctl --user is-enabled lumen.service 2>/dev/null)" = disabled ]; then
         off=1
