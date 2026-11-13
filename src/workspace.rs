@@ -293,6 +293,9 @@ pub struct Workspace {
     /// The environment of the launch that opened the window, which every terminal in it
     /// gets: None for lumen's own.
     env: Option<Env>,
+    /// The frame the desktop was last asked for. What it has may be another: a desktop
+    /// that can't do what was asked does what it can.
+    asked: WindowDecorations,
     _observers: Vec<Subscription>,
 }
 
@@ -342,6 +345,8 @@ impl Workspace {
             noted: HashMap::new(),
             home: spawn.cwd.clone(),
             env: spawn.env.clone(),
+            // what main asked for when it opened the window
+            asked: cx.global::<Config>().decorations(),
             _observers: vec![
                 // a spare is laid out for the window's size: a resized window wants a new one
                 cx.observe_window_bounds(window, |this, window, cx| this.refresh_spare_soon(window, cx)),
@@ -726,13 +731,11 @@ impl Workspace {
     fn config_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let config = cx.global::<Config>();
         window.set_background_appearance(config.appearance());
-        // asked again only when it changed: a desktop that draws no frames keeps saying so
-        let has = match window.window_decorations() {
-            Decorations::Server => WindowDecorations::Server,
-            Decorations::Client { .. } => WindowDecorations::Client,
-        };
-        if config.decorations() != has {
-            window.request_decorations(config.decorations());
+        // asked again only when the config changed it: what the window has is no guide,
+        // as a desktop that can't draw frames, or must, has the other one whatever is asked
+        if config.decorations() != self.asked {
+            self.asked = config.decorations();
+            window.request_decorations(self.asked);
         }
         let said = match &config.problem {
             Some(problem) => problem.clone(),

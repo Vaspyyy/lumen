@@ -208,6 +208,10 @@ pub fn parse(keys: &str) -> Result<Vec<(Modifiers, String)>, String> {
     for part in keys.split_whitespace() {
         let stroke = Keystroke::parse_with_os(part, OperatingSystem::Linux)
             .map_err(|_| format!("keys: {keys:?} is not a key (write them as \"ctrl-shift-t\")"))?;
+        // GPUI knows an fn modifier, which no key on Linux comes with
+        if stroke.modifiers.function {
+            return Err(format!("keys: lumen can't see the fn key, in {keys:?}"));
+        }
         let key = stroke.key.as_str();
         let function = key.strip_prefix('f').is_some_and(|n| n.parse::<u8>().is_ok_and(|n| (1..=35).contains(&n)));
         if key.chars().count() != 1 && !function && !KEY_NAMES.contains(&key) {
@@ -310,5 +314,6 @@ mod tests {
         assert!(check_keys("f12").is_ok());
         assert!(check_keys("alt-[").is_ok());
         assert!(check_keys("super-t").is_ok());
+        assert!(check_keys("fn-f1").is_err());
     }
 }

@@ -143,7 +143,7 @@ More in [Fonts](/docs/fonts/).
 | `blur` | `true` | Blurs what is behind a see-through window, where the desktop can do that |
 | `padding` | `10` | Space between a pane's edge and its text, in pixels, from 0 to 200. One number is the same on every side. `{ x = 10, y = 4 }` sets left and right (`x`) apart from top and bottom (`y`), as in Alacritty. The [marks of commands](/docs/commands/) stand in the space at the left, and need 4 pixels of it |
 | `dynamic_padding` | `false` | A pane is seldom a whole number of cells wide and high. What is left over is at the right and the bottom; with `true` it is split between both sides, so the text sits in the middle |
-| `decorations` | `"lumen"` | Who draws the window's frame. `"lumen"`: round corners, a shadow, and the window's buttons in the tab bar. `"desktop"`: the desktop's own title bar and frame, where it has them (KDE Plasma and most tiling desktops; on GNOME lumen draws its own). `"none"`: no frame, no shadow, no buttons and no edges to drag, and the window fills all the space the desktop gives it. On a tiling desktop that leaves a gap around lumen, `"none"` takes it away |
+| `decorations` | `"lumen"` | Who draws the window's frame. `"lumen"`: round corners, a shadow, and the window's buttons in the tab bar. `"desktop"`: the desktop's own title bar and frame, where it has them (KDE Plasma and most tiling desktops; on GNOME lumen draws its own). `"none"`: no frame, no shadow, no buttons and no edges to drag, and the window fills all the space the desktop gives it (on X11 without a compositor, the window manager draws its frame whatever lumen asks). On a tiling desktop that leaves a gap around lumen, `"none"` takes it away |
 | `startup_mode` | `"windowed"` | How a new window opens: `"windowed"`, `"maximized"` or `"fullscreen"` |
 | `columns` | `100` | The width of a new window, counted in cells of the default 12 point font. With larger text, fewer fit. From 20 to 1000 |
 | `lines` | `30` | The height of a new window, counted the same way. From 5 to 500 |
@@ -200,7 +200,7 @@ What lumen shows of the machine's load, where pulse is installed. See [The machi
 
 ## `[env]`
 
-Variables every new terminal gets in its environment, as text:
+Variables every new tab and pane gets in its environment, as text (the terminals a [phone](/docs/kept-terminals/) opens don't):
 
 ```toml
 [env]

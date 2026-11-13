@@ -84,10 +84,11 @@ The `[keys]` table in the [config](/docs/configuration/) gives a key to one of l
 "alt-t" = "new_tab"                    # an action, by its name below
 "ctrl-shift-t" = "none"                # lumen leaves the key to the program
 "shift-enter" = { send = "\u001b\r" }  # text for the program, as if typed
-"ctrl-k ctrl-c" = "copy"               # two keys, one after the other
 ```
 
-A key named in `[keys]` no longer does what lumen gave it, and the other keys stay as they are. So does a key of lumen's that begins one of yours, such as `ctrl-shift-t` for `"ctrl-shift-t ctrl-c"`: lumen would otherwise wait after it for the rest. Saving the file is enough.
+A key named in `[keys]` no longer does what lumen gave it, and the other keys stay as they are. Saving the file is enough.
+
+Several keys one after the other are one binding too: `"ctrl-shift-k c" = "copy_output"`. lumen waits after the first key for the rest, so the first is no longer the program's: take one that programs don't use (with `Shift`, as lumen's own keys have). A key of lumen's that begins such a binding, such as `ctrl-shift-t` for `"ctrl-shift-t c"`, gives up its action, or it would wait too.
 
 A key is written as GPUI writes it: the modifiers `ctrl`, `alt`, `shift` and `super`, each followed by a dash, then the key. Letters, digits and signs are themselves (`ctrl-shift-t`, `alt-1`, `ctrl-=`, `ctrl--` for the minus key). The other keys have names: `enter`, `tab`, `space`, `backspace`, `delete`, `escape`, `insert`, `home`, `end`, `pageup`, `pagedown`, `up`, `down`, `left`, `right`, `menu`, `print`, `pause`, `back`, `forward`, and `f1` to `f35`. A key lumen doesn't know, or an action it doesn't have, is a mistake, and lumen says so.
 
