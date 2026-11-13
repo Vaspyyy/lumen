@@ -830,10 +830,12 @@ impl Raw {
             unsafe { libc::signal(signal, give_back as *const () as libc::sighandler_t) };
         }
         let mut raw = saved;
-        // SAFETY: cfmakeraw and tcsetattr on a termios this function owns
+        // SAFETY: cfmakeraw and tcsetattr on a termios this function owns. TCSAFLUSH drops
+        // what was typed before the menu was there: a second Enter after /settings lands
+        // in this tab before the menu starts, and isn't meant for it.
         unsafe {
             libc::cfmakeraw(&mut raw);
-            if libc::tcsetattr(0, libc::TCSANOW, &raw) != 0 {
+            if libc::tcsetattr(0, libc::TCSAFLUSH, &raw) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
         }
