@@ -297,6 +297,7 @@ impl Element for TerminalElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Layout {
+        let started = Instant::now();
         let config = cx.global::<Config>().clone();
         let colors = &config.colors;
         let text_system = window.text_system().clone();
@@ -639,6 +640,16 @@ impl Element for TerminalElement {
             );
             marks.push((line, accent));
         }
+        // what the frame shows, for a record of the lag: the text and where the cursor is
+        let content = crate::lag::enabled().then(|| {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::hash::DefaultHasher::new();
+            for run in &runs {
+                (run.row, run.col, &run.text).hash(&mut hasher);
+            }
+            cursor.map(|(row, col, ..)| (row, col)).hash(&mut hasher);
+            hasher.finish()
+        });
         let mut lines = Vec::with_capacity(runs.len());
         for run in runs {
             let glyphs = run.text.chars().count();
@@ -679,6 +690,8 @@ impl Element for TerminalElement {
         if cursor.is_none() {
             motion.shown = false;
         }
+        let cell_of_cursor = cursor.map(|(row, col, ..)| (col, row));
+        let mut glide = false;
         let cursor = cursor.map(|(row, col, cells, shape, c, flags)| {
             // the blink fades between its halves; a pane without the keyboard doesn't blink
             let since = now.duration_since(self.blink_at).as_secs_f32() / FADE.as_secs_f32();
@@ -701,6 +714,7 @@ impl Element for TerminalElement {
                 let target = (f32::from(bounds.origin.x - origin.x), f32::from(bounds.origin.y - origin.y));
                 let ((x, y), moving) = motion.toward(target, now);
                 bounds.origin = point(origin.x + px(x), origin.y + px(y));
+                glide = moving;
                 if moving {
                     window.request_animation_frame();
                 }
@@ -727,6 +741,20 @@ impl Element for TerminalElement {
             CursorLayout { bounds, shape, color, glow, text, block }
         });
         self.motion.set(motion);
+
+        if let Some(content) = content {
+            crate::lag::paint(&crate::lag::Paint {
+                pane: self.terminal.entity_id().as_u64(),
+                start: started,
+                cursor: cell_of_cursor,
+                drawn: cursor.as_ref().map(|cursor| {
+                    let (x, y) = (cursor.bounds.origin.x - origin.x, cursor.bounds.origin.y - origin.y);
+                    (f32::from(x) / f32::from(cell_width), f32::from(y) / f32::from(cell_height))
+                }),
+                moving: glide,
+                content,
+            });
+        }
 
         let ground = ground.map(|ground| ground.hsla());
         Layout { hitbox, cell, ground, rects, pills, images, fills, lines, marks, composing, cursor, pointer }

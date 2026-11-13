@@ -183,6 +183,7 @@ src/
   palette.rs    from the colors a program asks for to the theme's
   workspace.rs  tabs and splits
   actions.rs    everything a key can be bound to
+  lag.rs        a record of where the time goes from a key to its frame (--features lag)
   phone/        the PC's side of the phone app: pairing, and the terminals the PC keeps
 crates/
   lumen-link/   what the PC and the phone say to each other: the pairing code, the messages

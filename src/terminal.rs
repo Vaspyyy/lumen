@@ -291,6 +291,7 @@ impl Terminal {
     fn handle(&mut self, event: TermEvent, cx: &mut Context<Self>) {
         match event {
             TermEvent::Wakeup => {
+                crate::lag::woke();
                 self.notice_commands(cx);
                 cx.notify();
             },
