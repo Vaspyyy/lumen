@@ -441,11 +441,14 @@ impl Menu {
                 if text.is_empty() {
                     return;
                 }
-                if let Err(why) = TabFolder::parse(&text) {
-                    return self.say(why, false);
-                }
-                if TabFolder::parse(&text).ok().and_then(|folder| folder.folder()).is_none() {
-                    return self.say(format!("there is no folder {text}"), false);
+                match TabFolder::parse(&text) {
+                    Err(why) => return self.say(why, false),
+                    // the two words have no folder to look for
+                    Ok(TabFolder::Current | TabFolder::Home) => {},
+                    Ok(folder) if folder.folder().is_none() => {
+                        return self.say(format!("there is no folder {text}"), false);
+                    },
+                    Ok(_) => {},
                 }
                 toml_edit::value(text)
             },
@@ -896,6 +899,14 @@ mod tests {
         menu.key(Key::Enter);
         let config: Config = toml::from_str(&std::fs::read_to_string(dir.join("lumen.toml")).unwrap()).unwrap();
         assert_eq!(config.new_tab_folder, TabFolder::Folder("/".into()));
+        // the words the help line names can be typed too (over the folder it starts with)
+        menu.key(Key::Enter);
+        menu.key(Key::ClearLine);
+        for c in "home".chars() {
+            menu.key(Key::Char(c));
+        }
+        menu.key(Key::Enter);
+        assert_eq!(menu.config().new_tab_folder, TabFolder::Home);
         menu.key(Key::Char('r'));
         assert!(!std::fs::read_to_string(dir.join("lumen.toml")).unwrap().contains("new_tab_folder"));
         std::fs::remove_dir_all(dir).unwrap();
