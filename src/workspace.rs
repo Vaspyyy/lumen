@@ -606,8 +606,6 @@ impl Workspace {
 
     /// `lumen settings`, in a tab that closes when it ends: what `/settings` at a prompt
     /// opens. The window behind it shows each change as it is made.
-    /// `lumen settings`, in a tab that closes when it ends: what `/settings` at a prompt
-    /// opens. The window behind it shows each change as it is made.
     fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // after an update, the program this lumen runs from is gone: the new one is there
         let program = std::fs::read_link("/proc/self/exe")
