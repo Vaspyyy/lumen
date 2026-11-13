@@ -241,8 +241,8 @@ fn update(how: How) -> i32 {
     update_lumen(how, &mut told, &mut report);
     let go = find("go", &go_folders()).first().cloned();
     for tool in tools() {
-        if let Some((before, now)) = update_tool(&tool, go.as_deref(), how, &mut told, &mut report) {
-            update_skill(&tool, &before, &now, go.as_deref(), how, &mut told, &mut report);
+        if let Some(now) = update_tool(&tool, go.as_deref(), how, &mut told, &mut report) {
+            update_skill(&tool, &now, go.as_deref(), how, &mut told, &mut report);
         }
     }
     if how == How::Timer {
@@ -341,7 +341,12 @@ fn fetch_within(url: &str, seconds: u32, tries: u32) -> Result<Vec<u8>, Failure>
         Err(e) => return Err(Failure::Again(format!("can't run curl: {e}"))),
     };
     if !output.status.success() {
-        return Err(Failure::Again(format!("could not fetch {url}: {}", last_lines(&output.stderr))));
+        let why = format!("could not fetch {url}: {}", last_lines(&output.stderr));
+        // not there (curl's "returned error: 404"): fetching again won't change that.
+        // wget says the same for a server that is down for a while, so it isn't trusted.
+        let said = String::from_utf8_lossy(&output.stderr);
+        let missing = output.status.code() == Some(22) && said.contains("404");
+        return Err(if missing { Failure::Lasting(why) } else { Failure::Again(why) });
     }
     Ok(output.stdout)
 }
@@ -594,38 +599,31 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// Updates a tool where it is installed, and gives the version it was at and the one it
-/// is at now.
-fn update_tool(
-    tool: &str,
-    go: Option<&Path>,
-    how: How,
-    told: &mut Told,
-    report: &mut Report,
-) -> Option<(Version, Version)> {
+/// Updates a tool where it is installed, and gives the version it is at then.
+fn update_tool(tool: &str, go: Option<&Path>, how: How, told: &mut Told, report: &mut Report) -> Option<Version> {
     // a tool that isn't installed stays so, and so does another program of its name
     let (program, ours) = find_tool(tool, go)?;
     let (tag, newest) = match newest_tool(tool, go) {
         Ok(found) => found,
         Err(failure) => {
             report.failure(&failure);
-            return Some((ours.clone(), ours));
+            return Some(ours);
         },
     };
     if pseudo(&tag) {
         println!("{tool} has no release yet, so it stays as it is");
-        return Some((ours.clone(), ours));
+        return Some(ours);
     }
     if newest <= ours {
         println!("{tool} {ours} is the newest");
-        return Some((ours.clone(), ours));
+        return Some(ours);
     }
     let Some(go) = go else {
         println!("{tool} {newest} is out (this is {ours}); updating it needs Go, which isn't installed");
         report
             .waiting
             .push((format!("{tool} {newest} needs Go"), format!("{tool} {newest} is out: updating it needs Go")));
-        return Some((ours.clone(), ours));
+        return Some(ours);
     };
     let folder = program.parent().unwrap_or(Path::new("/")).to_path_buf();
     if !writable(&folder) {
@@ -634,17 +632,17 @@ fn update_tool(
             format!("{tool} {newest} not writable"),
             format!("{tool} {newest} is out: {} is not yours to write to", folder.display()),
         ));
-        return Some((ours.clone(), ours));
+        return Some(ours);
     }
     let failed = format!("failed {tool} {newest}");
     if how == How::Timer && told.knows(&failed) {
         println!("{tool} {newest} is out, and could not be installed here; `lumen update` tries again");
         report.still_failing(&failed, &format!("{tool} {newest}"));
-        return Some((ours.clone(), ours));
+        return Some(ours);
     }
     if how == How::Check {
         println!("{tool} {ours} → {newest}");
-        return Some((ours.clone(), ours));
+        return Some(ours);
     }
     let installed = Command::new(go)
         .args(["install", &format!("github.com/Vaspyyy/{tool}@{tag}")])
@@ -660,7 +658,7 @@ fn update_tool(
         {
             println!("{tool} {ours} → {newest}");
             report.updated.push(format!("{tool} {ours} → {newest}"));
-            return Some((ours, newest));
+            return Some(newest);
         },
         Ok(output) => {
             let why = format!("{tool} {newest} is out, and go install failed: {}", last_lines(&output.stderr));
@@ -672,7 +670,7 @@ fn update_tool(
         Err(e) => Failure::Again(format!("can't run go: {e}")),
     };
     report.failed(&failure, failed, how, told);
-    Some((ours.clone(), ours))
+    Some(ours)
 }
 
 /// The tools made for lumen: the list in lumen's repository, or where it can't be read,
@@ -718,18 +716,10 @@ fn skill_folders() -> Vec<PathBuf> {
     .collect()
 }
 
-/// Brings a tool's agent skill, wherever an agent has one, from the skill of version
-/// `before` (or of another release) to the one of version `now`. Only a skill that is
-/// the one of a release is replaced: one changed by hand stays as it is.
-fn update_skill(
-    tool: &str,
-    before: &Version,
-    now: &Version,
-    go: Option<&Path>,
-    how: How,
-    told: &mut Told,
-    report: &mut Report,
-) {
+/// Brings a tool's agent skill, wherever an agent has one, to the skill of the tool's
+/// version `now`. Only a skill that is the one of a release is replaced: one changed by
+/// hand stays as it is.
+fn update_skill(tool: &str, now: &Version, go: Option<&Path>, how: How, told: &mut Told, report: &mut Report) {
     // as the files are: links followed, so that a home behind a link is known as one
     let home = dirs::home_dir().map(|home| std::fs::canonicalize(&home).unwrap_or(home)).unwrap_or_default();
     let mut seen = BTreeSet::new();
@@ -751,15 +741,30 @@ fn update_skill(
     // a version without a skill, or one that can't be fetched now: next time
     let Some(wanted) = skill_of(tool, now, cache.as_deref()) else { return };
     let mut released = cached_skills(tool, cache.as_deref());
-    // the module cache may have lost the version that was installed: fetched then
-    if before != now
-        && before.released
-        && let Some(skill) = skill_of(tool, before, cache.as_deref())
-    {
-        released.push(skill);
-    }
+    let mut looked_up = false;
     let mut updated = false;
     for file in files {
+        // A skill that is none of the module cache's may be a release's all the same (the
+        // cache was cleaned, or never had it): looked up among all the tool's releases.
+        // One that is none of them either is remembered by its content, so that a skill
+        // changed by hand isn't looked up again every day.
+        if !looked_up
+            && let Ok(have) = std::fs::read(&file)
+            && have != wanted
+            && !released.contains(&have)
+        {
+            let mark = format!("{tool}'s skill {} is no release's", hex(&Sha256::digest(&have)));
+            if !told.knows(&mark) {
+                looked_up = true;
+                // where one couldn't be fetched, it is looked up again next time
+                if let Some(skills) = release_skills(tool, go, cache.as_deref()) {
+                    released.extend(skills);
+                    if !released.contains(&have) && how != How::Check {
+                        told.note(mark);
+                    }
+                }
+            }
+        }
         match put_skill(&file, &wanted, &released, how) {
             Skill::Current => {},
             Skill::Changed => {
@@ -873,15 +878,52 @@ fn module_cache(go: Option<&Path>) -> Option<PathBuf> {
 }
 
 /// The skill of a tool's version: from Go's module cache, or fetched by its tag. None
-/// for a version without one.
+/// for a version without one, or one that can't be fetched now.
 fn skill_of(tool: &str, version: &Version, cache: Option<&Path>) -> Option<Vec<u8>> {
-    let tag = format!("v{version}");
+    skill_at(tool, &format!("v{version}"), cache).ok().flatten()
+}
+
+/// The skill of a tool at a tag: Ok(None) for a tag without one, Err where it couldn't be
+/// fetched.
+fn skill_at(tool: &str, tag: &str, cache: Option<&Path>) -> Result<Option<Vec<u8>>, Failure> {
     if let Some(cache) = cache
         && let Ok(skill) = std::fs::read(cache.join(format!("github.com/!vaspyyy/{tool}@{tag}/skill/SKILL.md")))
     {
-        return Some(skill);
+        return Ok(Some(skill));
     }
-    fetch_small(&format!("{RAW}/{tool}/{tag}/skill/SKILL.md")).ok()
+    match fetch_small(&format!("{RAW}/{tool}/{tag}/skill/SKILL.md")) {
+        Ok(skill) => Ok(Some(skill)),
+        Err(Failure::Lasting(_)) => Ok(None),
+        Err(failure) => Err(failure),
+    }
+}
+
+/// The skills of all the tool's releases, pre-releases too, from its list of tags (Go's,
+/// or the Go proxy's). None where the list or one of them couldn't be fetched.
+fn release_skills(tool: &str, go: Option<&Path>, cache: Option<&Path>) -> Option<Vec<Vec<u8>>> {
+    let tags: Vec<String> = match go {
+        Some(go) => {
+            let output = Command::new(go)
+                .args(["list", "-m", "-versions", &format!("github.com/Vaspyyy/{tool}")])
+                .current_dir("/")
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+                .ok()
+                .filter(|output| output.status.success())?;
+            // "github.com/Vaspyyy/glint v0.1.0 v0.2.0 …"
+            String::from_utf8_lossy(&output.stdout).split_whitespace().skip(1).map(str::to_string).collect()
+        },
+        None => String::from_utf8_lossy(&fetch_small(&format!("{PROXY}/{tool}/@v/list")).ok()?)
+            .split_whitespace()
+            .map(str::to_string)
+            .collect(),
+    };
+    let mut skills = Vec::new();
+    for tag in tags.iter().filter(|tag| Version::parse(tag).is_some() && !pseudo(tag)) {
+        skills.extend(skill_at(tool, tag, cache).ok()?);
+    }
+    Some(skills)
 }
 
 /// The skills of every release of a tool in Go's module cache (not of commits without a
