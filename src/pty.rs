@@ -34,6 +34,13 @@ const EIO: i32 = 5;
 const PTY_READ_WRITE: usize = 0;
 const PTY_CHILD_EVENT: usize = 1;
 
+/// Sends an answer to the program the way the parser sends its own: by the
+/// window, which writes them in the order they were asked for. A program
+/// that asks several things at once tells the answers apart by that order.
+fn answer<L: EventListener>(listener: &L, text: String) {
+    listener.send_event(Event::PtyWrite(text));
+}
+
 pub enum Msg {
     /// Bytes for the program.
     Input(Cow<'static, [u8]>),
@@ -151,12 +158,33 @@ impl<L: EventListener + Send + 'static> IoLoop<L> {
             for piece in pieces {
                 match piece {
                     Piece::Text(bytes) => {
-                        // answered from here, as an image's answer is: before the device
-                        // attributes a program asks for last, whose answer comes by the window
-                        let cell = self.cell;
-                        self.queries.feed(bytes, |query| state.queue.push_back(query.answer(cell).into()));
+                        let mut queries = Vec::new();
+                        self.queries.feed(bytes, |end, query| queries.push((end, query)));
                         let term = terminal.get_or_insert_with(|| self.terminal.lock_unfair());
-                        commands::advance(&mut self.marks, &self.commands, &mut state.parser, &mut **term, bytes);
+                        let mut done = 0;
+                        for (end, query) in queries {
+                            commands::advance(
+                                &mut self.marks,
+                                &self.commands,
+                                &mut state.parser,
+                                &mut **term,
+                                &bytes[done..end],
+                            );
+                            done = end;
+                            // the parser answers what was asked before this when it gets to it,
+                            // which is at the end of a synchronized update: that is now
+                            if state.parser.sync_bytes_count() > 0 {
+                                state.parser.stop_sync(&mut **term);
+                            }
+                            answer(&self.listener, query.answer(self.cell));
+                        }
+                        commands::advance(
+                            &mut self.marks,
+                            &self.commands,
+                            &mut state.parser,
+                            &mut **term,
+                            &bytes[done..],
+                        );
                     },
                     Piece::Command(command) => {
                         // reading an image takes a while: the window may have the grid meanwhile
@@ -172,8 +200,8 @@ impl<L: EventListener + Send + 'static> IoLoop<L> {
                             if state.parser.sync_bytes_count() > 0 {
                                 state.parser.stop_sync(&mut **term);
                             }
-                            if let Some(answer) = self.graphics.apply(step, &mut **term, self.cell) {
-                                state.queue.push_back(answer.into());
+                            if let Some(said) = self.graphics.apply(step, &mut **term, self.cell) {
+                                answer(&self.listener, String::from_utf8_lossy(&said).into_owned());
                             }
                             // an image moves what stands above it up by its rows, for a few bytes
                             self.commands.lock().unwrap().wrote(crate::graphics::MAX_ROWS);
