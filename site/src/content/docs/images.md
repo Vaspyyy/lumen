@@ -51,7 +51,7 @@ Both have been tested with lumen. Pictures are sent with the [kitty graphics pro
 
 ## How a program knows
 
-lumen sets `TERM_PROGRAM=lumen`. A program can also ask: lumen answers the query the kitty graphics protocol defines for that. See [For programs](/docs/for-programs/).
+lumen sets `TERM_PROGRAM=lumen`. A program can also ask: lumen answers the query the kitty graphics protocol defines for that, XTVERSION with its name and version, and `CSI 16 t` with the size of a cell in pixels, which works over SSH too. See [For programs](/docs/for-programs/).
 
 ## Files a program names
 

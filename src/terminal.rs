@@ -15,7 +15,7 @@ use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point as GridPoint, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::{Config as TermConfig, Term, TermMode};
+use alacritty_terminal::term::{Config as TermConfig, Osc52, Term, TermMode};
 use alacritty_terminal::tty::{self, Options as PtyOptions, Shell};
 use alacritty_terminal::vte::ansi::{CursorShape as VteCursorShape, CursorStyle, Rgb as VteRgb};
 use futures::StreamExt;
@@ -23,7 +23,7 @@ use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use gpui::{ClipboardItem, Context, EventEmitter, Task};
 
 use crate::commands;
-use crate::config::{Config, CursorShape};
+use crate::config::{Clipboard, Config, CursorShape};
 use crate::graphics;
 use crate::palette;
 use crate::pty::{IoLoop, Msg, Sender};
@@ -146,9 +146,15 @@ fn program(spawn: &Spawn, config: &Config, ours: impl Iterator<Item = String>) -
     let Some(env) = &spawn.env else { return Ok(program.map(|program| Shell::new(program, args))) };
     let theirs = |name: &str| env.iter().find(|(key, _)| key == name).map(|(_, value)| value);
     let program = program.or_else(|| theirs("SHELL").filter(|shell| !shell.is_empty()).cloned());
-    // a launch without SHELL runs lumen's, and keeps it named
-    let unset: Vec<String> =
-        ours.filter(|name| theirs(name).is_none() && name != "SHELL" && !SET_HERE.contains(&name.as_str())).collect();
+    // a launch without SHELL runs lumen's, and keeps it named; what the config sets stays set
+    let unset: Vec<String> = ours
+        .filter(|name| {
+            theirs(name).is_none()
+                && name != "SHELL"
+                && !SET_HERE.contains(&name.as_str())
+                && !config.env.contains_key(name)
+        })
+        .collect();
     if unset.is_empty() {
         return Ok(program.map(|program| Shell::new(program, args)));
     }
@@ -217,6 +223,8 @@ impl Terminal {
         env.insert("COLORTERM".into(), "truecolor".into());
         env.insert("TERM_PROGRAM".into(), "lumen".into());
         env.insert("TERM_PROGRAM_VERSION".into(), env!("CARGO_PKG_VERSION").into());
+        // the config's own variables, which may change lumen's (TERM, for a system without its terminfo)
+        env.extend(config.env.iter().map(|(name, value)| (name.clone(), value.clone())));
         let options = PtyOptions { shell, working_directory: spawn.cwd, drain_on_exit: true, env };
         let pty = tty::new(&options, size.into(), 0)?;
         let shell_pid = pty.child().id();
@@ -446,6 +454,13 @@ fn term_options(config: &Config) -> TermConfig {
         },
         // programs may ask for keys in the kitty keyboard protocol
         kitty_keyboard: true,
+        semantic_escape_chars: config.selection.word_separators.clone(),
+        osc52: match config.clipboard {
+            Clipboard::Copy => Osc52::OnlyCopy,
+            Clipboard::Paste => Osc52::OnlyPaste,
+            Clipboard::Both => Osc52::CopyPaste,
+            Clipboard::Off => Osc52::Disabled,
+        },
         ..TermConfig::default()
     }
 }

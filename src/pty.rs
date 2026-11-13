@@ -22,8 +22,8 @@ use alacritty_terminal::tty::{self, EventedPty, EventedReadWrite};
 use alacritty_terminal::vte::ansi;
 use polling::{Event as Interest, Events, PollMode, Poller};
 
-use crate::commands;
 use crate::graphics::{Filter, Graphics, Piece, Shared};
+use crate::{commands, queries};
 
 const READ_BUFFER: usize = 0x10_0000;
 /// How much is parsed in one go before the window gets a turn at the grid.
@@ -68,6 +68,8 @@ pub struct IoLoop<L: EventListener> {
     graphics: Graphics,
     /// What finds a shell's marks in the output, and the commands they tell of.
     marks: commands::Scanner,
+    /// What finds the questions the parser leaves unanswered.
+    queries: queries::Scanner,
     commands: commands::Shared,
     /// A cell's size in pixels, which an image's size in cells follows from.
     cell: (f32, f32),
@@ -101,6 +103,7 @@ impl<L: EventListener + Send + 'static> IoLoop<L> {
             filter: Filter::default(),
             graphics: Graphics::new(images),
             marks: commands::Scanner::default(),
+            queries: queries::Scanner::default(),
             commands,
             cell,
         })
@@ -148,6 +151,10 @@ impl<L: EventListener + Send + 'static> IoLoop<L> {
             for piece in pieces {
                 match piece {
                     Piece::Text(bytes) => {
+                        // answered from here, as an image's answer is: before the device
+                        // attributes a program asks for last, whose answer comes by the window
+                        let cell = self.cell;
+                        self.queries.feed(bytes, |query| state.queue.push_back(query.answer(cell).into()));
                         let term = terminal.get_or_insert_with(|| self.terminal.lock_unfair());
                         commands::advance(&mut self.marks, &self.commands, &mut state.parser, &mut **term, bytes);
                     },

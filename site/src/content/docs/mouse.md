@@ -14,6 +14,8 @@ description: Selecting, pasting, scrolling, and what the mouse does on tabs and 
 
 What you select can be pasted with a middle click right away, in lumen and in other programs. To put it on the clipboard, press `Ctrl+Shift+C`, or set `copy_on_select = true` in the [config](/docs/configuration/) and every selection is copied.
 
+Where a double click stops is `word_separators` in the [`[selection]`](/docs/configuration/#selection) table.
+
 ## Pasting
 
 | | |
@@ -25,7 +27,9 @@ Programs that ask for it are told where a paste starts and ends, so a shell or a
 
 ## Scrolling
 
-The wheel scrolls through what the pane has printed.
+The wheel scrolls through what the pane has printed. `scroll_multiplier` in the [`[mouse]`](/docs/configuration/#mouse) table makes it go faster or slower.
+
+The pointer goes out of sight while you type, and comes back when the mouse moves. `hide_while_typing = false` in the same table keeps it in sight.
 
 In a full-screen program that has no scrollback of its own to offer, such as `less` or `man`, the wheel moves through the program's text instead: lumen sends it the arrow keys.
 

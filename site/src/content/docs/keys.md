@@ -1,9 +1,9 @@
 ---
 title: Keys
-description: Every key lumen takes for itself. Everything else goes to the program in the pane.
+description: Every key lumen takes for itself, and how to change them. Everything else goes to the program in the pane.
 ---
 
-lumen keeps few keys for itself. Where a program is likely to want a key, lumen's has `Shift` in it as well: `Ctrl+C` stops a program, `Ctrl+Shift+C` copies. A few plain ones, such as `Alt+1` to `Alt+9` and `Ctrl+Tab`, are keys that some programs use too. The keys can't be changed yet.
+lumen keeps few keys for itself. Where a program is likely to want a key, lumen's has `Shift` in it as well: `Ctrl+C` stops a program, `Ctrl+Shift+C` copies. A few plain ones, such as `Alt+1` to `Alt+9` and `Ctrl+Tab`, are keys that some programs use too. Every key can be changed: see [Changing the keys](#changing-the-keys).
 
 ## Tabs
 
@@ -74,6 +74,52 @@ The size is per pane, lasts until the pane closes, and goes from less than half 
 | Key | Does |
 | --- | --- |
 | `Ctrl+Shift+N` | New window, in the folder the current window was opened in |
+
+## Changing the keys
+
+The `[keys]` table in the [config](/docs/configuration/) gives a key to one of lumen's actions, to text, or back to the program:
+
+```toml
+[keys]
+"alt-t" = "new_tab"                    # an action, by its name below
+"ctrl-shift-t" = "none"                # lumen leaves the key to the program
+"shift-enter" = { send = "\u001b\r" }  # text for the program, as if typed
+"ctrl-k ctrl-c" = "copy"               # two keys, one after the other
+```
+
+A key named in `[keys]` no longer does what lumen gave it, and the other keys stay as they are. Saving the file is enough.
+
+A key is written as GPUI writes it: the modifiers `ctrl`, `alt`, `shift` and `super`, each followed by a dash, then the key. Letters, digits and signs are themselves (`ctrl-shift-t`, `alt-1`, `ctrl-=`, `ctrl--` for the minus key). The other keys have names: `enter`, `tab`, `space`, `backspace`, `delete`, `escape`, `insert`, `home`, `end`, `pageup`, `pagedown`, `up`, `down`, `left`, `right`, `menu`, `print`, `pause`, `back`, `forward`, and `f1` to `f35`. A key lumen doesn't know, or an action it doesn't have, is a mistake, and lumen says so.
+
+`send` takes text as TOML writes it: `\u001b` is `Esc`, `\r` is `Enter`, `\t` is `Tab`.
+
+The actions, with lumen's keys for them:
+
+| Action | Does | Key |
+| --- | --- | --- |
+| `copy` | Copy the selection | `Ctrl+Shift+C` |
+| `paste` | Paste | `Ctrl+Shift+V`, `Shift+Insert` |
+| `search` | Search what the pane has printed | `Ctrl+Shift+F` |
+| `scroll_page_up`, `scroll_page_down` | Scroll a page | `Shift+PageUp`, `Shift+PageDown` |
+| `scroll_line_up`, `scroll_line_down` | Scroll a line | |
+| `scroll_top`, `scroll_bottom` | Scroll to the top or the bottom | `Shift+Home`, `Shift+End` |
+| `zoom_in`, `zoom_out`, `zoom_reset` | Text size of the pane | `Ctrl+Plus`, `Ctrl+Minus`, `Ctrl+0` |
+| `previous_command`, `next_command` | Go to the command before or after | `Ctrl+Shift+Up`, `Ctrl+Shift+Down` |
+| `copy_output` | Copy what the last command printed | `Ctrl+Shift+O` |
+| `new_tab` | New tab | `Ctrl+Shift+T` |
+| `close_tab` | Close the tab | `Ctrl+Shift+Q` |
+| `next_tab`, `previous_tab` | Next and previous tab | `Ctrl+Tab`, `Ctrl+Shift+Tab`, `Ctrl+PageDown`, `Ctrl+PageUp` |
+| `move_tab_left`, `move_tab_right` | Move the tab | `Ctrl+Shift+PageUp`, `Ctrl+Shift+PageDown` |
+| `tab_1` to `tab_8` | Go to a tab by its place | `Alt+1` to `Alt+8` |
+| `last_tab` | Go to the last tab | `Alt+9` |
+| `split_right`, `split_down` | Split the pane | `Ctrl+Shift+D`, `Ctrl+Shift+E` |
+| `close_pane` | Close the pane | `Ctrl+Shift+W` |
+| `focus_left`, `focus_right`, `focus_up`, `focus_down` | Move to the pane in that direction | `Ctrl+Alt+Arrow` |
+| `zoom_pane` | Let the pane fill the tab, and back | `Ctrl+Shift+Enter` |
+| `new_window` | New window | `Ctrl+Shift+N` |
+| `quit` | Close every window | |
+
+The keys for commands (`previous_command`, `next_command`, `copy_output`) stay lumen's only where a shell marks its commands, outside full-screen programs, whatever key they are given. The ones for a pane work where a pane has the keyboard, the rest anywhere in the window.
 
 ## Keys for the program
 

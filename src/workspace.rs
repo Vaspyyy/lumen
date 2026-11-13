@@ -11,7 +11,7 @@ use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Axis, Bounds, BoxShadow, Context, Corners, CursorStyle, Decorations, Entity, EntityId, Focusable,
     Hsla, MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, ResizeEdge, SharedString, Size, Subscription,
-    SystemNotification, Task, Tiling, Window, canvas, div, point, px, size, svg,
+    SystemNotification, Task, Tiling, Window, WindowDecorations, canvas, div, point, px, size, svg,
 };
 
 use crate::actions::{
@@ -313,7 +313,7 @@ struct Spare {
 /// A spare older than this shows a greeting that has gone stale.
 const SPARE_MAX_AGE: Duration = Duration::from_secs(300);
 
-const TAB_BAR: f32 = 40.;
+pub const TAB_BAR: f32 = 40.;
 
 impl Workspace {
     pub fn new(spawn: Spawn, window: &mut Window, cx: &mut Context<Self>) -> std::io::Result<Self> {
@@ -390,7 +390,9 @@ impl Workspace {
     ) -> std::io::Result<Pane> {
         let config = cx.global::<Config>();
         let viewport = window.viewport_size();
-        let area = size(viewport.width * share.0, (viewport.height - px(TAB_BAR)) * share.1);
+        // a pane opened from here is one for a new tab, at the most
+        let bar = if config.tab_bar(self.tabs.len() + 1) { px(TAB_BAR) } else { px(0.) };
+        let area = size(viewport.width * share.0, (viewport.height - bar) * share.1);
         let grid = Metrics::new(config, 1., window).grid(area, config);
         let started = Terminal::start(spawn, config, grid)?;
         let pane = cx.new(|cx| TerminalView::new(started, window, cx));
@@ -723,6 +725,14 @@ impl Workspace {
     fn config_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let config = cx.global::<Config>();
         window.set_background_appearance(config.appearance());
+        // asked again only when it changed: a desktop that draws no frames keeps saying so
+        let has = match window.window_decorations() {
+            Decorations::Server => WindowDecorations::Server,
+            Decorations::Client { .. } => WindowDecorations::Client,
+        };
+        if config.decorations() != has {
+            window.request_decorations(config.decorations());
+        }
         let said = match &config.problem {
             Some(problem) => problem.clone(),
             None => "Config reloaded".to_string(),
@@ -1186,7 +1196,8 @@ impl Workspace {
 
     fn render_tab_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let accent = cx.global::<Config>().accent();
-        let client = Frame::of(window).client;
+        let frame = Frame::of(window, cx);
+        let client = frame.client;
         let controls = window.window_controls();
         let icon = gpui::white().opacity(0.6);
         let soft = gpui::white().opacity(0.08);
@@ -1203,7 +1214,7 @@ impl Workspace {
                 .child(svg().path(path).size(px(12.)).text_color(icon))
         };
         let mut bar = div().id("tab-bar").flex().flex_none().items_center().gap(px(4.)).h(px(TAB_BAR)).px(px(8.)).when(
-            client,
+            frame.moves,
             |this| {
                 this.on_mouse_down(MouseButton::Left, |event, window, _| {
                     if event.click_count == 2 {
@@ -1305,6 +1316,9 @@ impl Workspace {
 struct Frame {
     /// lumen draws the title bar's buttons and the window's edges.
     client: bool,
+    /// The desktop draws no title bar: the tab bar is where the window is
+    /// taken to move it, whether lumen draws a frame or none.
+    moves: bool,
     /// The edges that are against a screen edge or another tiled window:
     /// no margin, shadow or rounding there.
     tiling: Tiling,
@@ -1316,15 +1330,18 @@ const SHADOW: f32 = 12.;
 const RADIUS: f32 = 12.;
 
 impl Frame {
-    fn of(window: &Window) -> Frame {
-        match window.window_decorations() {
+    fn of(window: &Window, cx: &App) -> Frame {
+        let none = cx.global::<Config>().window.decorations == crate::config::Decorations::None;
+        let frame = match window.window_decorations() {
             Decorations::Client { tiling } => {
                 let tiling = if window.is_maximized() || window.is_fullscreen() { Tiling::tiled() } else { tiling };
-                Frame { client: true, tiling }
+                Frame { client: true, moves: true, tiling }
             },
-            Decorations::Server if crate::preview() => Frame { client: true, tiling: Tiling::default() },
-            Decorations::Server => Frame { client: false, tiling: Tiling::tiled() },
-        }
+            Decorations::Server if crate::preview() => Frame { client: true, moves: true, tiling: Tiling::default() },
+            Decorations::Server => Frame { client: false, moves: false, tiling: Tiling::tiled() },
+        };
+        // a window without a frame is drawn as one against every edge: no margin, no corners
+        if none { Frame { client: false, tiling: Tiling::tiled(), ..frame } } else { frame }
     }
 
     fn floating(&self) -> bool {
@@ -1417,7 +1434,7 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let config = cx.global::<Config>();
         let background = Hsla { a: config.window.opacity, ..config.colors.primary.background.hsla() };
-        let frame = Frame::of(window);
+        let frame = Frame::of(window, cx);
         let t = frame.tiling;
         // the corners that are free are round; the desktop is told, so that what it
         // draws behind the window (the blur) has the window's shape
@@ -1451,7 +1468,7 @@ impl Render for Workspace {
             Some(tab) => self.render_node(&tab.root, tab, cx),
             None => div().into_any_element(),
         };
-        let bar = self.render_tab_bar(window, cx);
+        let bar = cx.global::<Config>().tab_bar(self.tabs.len()).then(|| self.render_tab_bar(window, cx));
 
         let surface = div()
             .id("workspace")
@@ -1521,7 +1538,7 @@ impl Render for Workspace {
                     this.drag = None;
                 }),
             )
-            .child(bar)
+            .children(bar)
             .child(div().flex_1().min_h_0().child(content))
             .children(self.notice.clone().map(|text| {
                 div()

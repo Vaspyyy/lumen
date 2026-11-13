@@ -18,6 +18,7 @@ mod palette;
 mod phone;
 mod pty;
 mod pulse;
+mod queries;
 mod settings;
 mod slash;
 mod terminal;
@@ -31,11 +32,11 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui::{
-    App, AppContext, AssetSource, Bounds, QuitMode, SharedString, WindowBounds, WindowDecorations, WindowHandle,
+    App, AppContext, AssetSource, Bounds, CursorHideMode, QuitMode, SharedString, WindowBounds, WindowHandle,
     WindowOptions, WindowingRequest, px, size,
 };
 
-use crate::config::Config;
+use crate::config::{Config, StartupMode};
 use crate::terminal::Spawn;
 use crate::workspace::Workspace;
 
@@ -209,17 +210,27 @@ impl std::fmt::Display for Unopened {
 /// launch asked for.
 pub fn open_window(spawn: Spawn, cx: &mut App) -> Result<WindowHandle<Workspace>, Unopened> {
     let config = cx.global::<Config>().clone();
-    // room for the configured grid at a typical cell size; the grid follows the window from then on
+    // room for the configured grid at a typical cell size, its padding, the tab bar and the
+    // window's border; the grid follows the window from then on
+    let pad = config.window.padding;
+    let bar = if config.tab_bar(1) { workspace::TAB_BAR } else { 0. };
     let bounds = Bounds::centered(
         None,
-        size(px(config.window.columns as f32 * 9.7 + 24.), px(config.window.lines as f32 * 21. + 64.)),
+        size(
+            px(config.window.columns as f32 * 9.7 + pad.x * 2. + 4.),
+            px(config.window.lines as f32 * 21. + pad.y * 2. + bar + 4.),
+        ),
         cx,
     );
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_bounds: Some(match config.window.startup_mode {
+            StartupMode::Windowed => WindowBounds::Windowed(bounds),
+            StartupMode::Maximized => WindowBounds::Maximized(bounds),
+            StartupMode::Fullscreen => WindowBounds::Fullscreen(bounds),
+        }),
         window_min_size: Some(size(px(320.), px(180.))),
         titlebar: None,
-        window_decorations: Some(WindowDecorations::Client),
+        window_decorations: Some(config.decorations()),
         window_background: config.appearance(),
         app_id: Some("lumen".into()),
         // GPUI holds a window to 30 frames a second in the power-saver profile: typing
@@ -253,6 +264,17 @@ pub fn open_window(spawn: Spawn, cx: &mut App) -> Result<WindowHandle<Workspace>
     Ok(window)
 }
 
+/// What the config sets for all of lumen at once: the keys, and whether typing hides the pointer.
+fn apply_config(cx: &mut App) {
+    actions::bind(cx);
+    let hide = if cx.global::<Config>().mouse.hide_while_typing {
+        CursorHideMode::OnTypingAndAction
+    } else {
+        CursorHideMode::Never
+    };
+    cx.set_cursor_hide_mode(hide);
+}
+
 /// Takes on the config file whenever it is saved, without a restart.
 fn watch_config(cx: &mut App) {
     cx.spawn(async move |cx| {
@@ -267,6 +289,7 @@ fn watch_config(cx: &mut App) {
             cx.update(|cx| {
                 let config = cx.global::<Config>().reloaded();
                 cx.set_global(config);
+                apply_config(cx);
                 cx.refresh_windows();
             });
         }
@@ -320,7 +343,7 @@ fn main() {
         lag::start(cx);
         cx.set_global(config);
         fonts::init(cx);
-        actions::bind(cx);
+        apply_config(cx);
         cx.on_action(move |_: &actions::Quit, cx| {
             if !daemon {
                 cx.quit();

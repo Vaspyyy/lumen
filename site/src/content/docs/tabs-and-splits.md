@@ -21,6 +21,8 @@ With the mouse: click a tab to go to it, click the `+` for a new one, and click 
 
 A new tab opens to the right of the one you are in.
 
+The tab bar can show only while there is more than one tab, or never: `bar` in the [`[tabs]`](/docs/configuration/#tabs) table.
+
 A tab is named after the title its program sets. Most shells set one: the folder, or the command that is running. Where a program sets none, the tab shows the name of the folder the shell is in.
 
 ## Panes
