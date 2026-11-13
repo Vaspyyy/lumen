@@ -22,8 +22,10 @@
 
 use std::collections::BTreeSet;
 use std::fs::File;
+use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -47,6 +49,8 @@ const DOCS: &str = "https://vaspyyy.github.io/lumen/docs/install/#updates";
 /// ([`TOOL_LIST`]) has the say, so that a new tool is updated without a new lumen.
 const TOOLS: &[&str] = &["glint", "crux", "recap", "seek", "pulse", "splice"];
 const TOOL_LIST: &str = "https://raw.githubusercontent.com/Vaspyyy/lumen/main/packaging/tools.txt";
+/// How the list of tools starts.
+const LIST_HEADER: &str = "# The tools made for lumen";
 /// The tools' files by version, for their agent skills: `<RAW>/<tool>/<tag>/skill/SKILL.md`.
 const RAW: &str = "https://raw.githubusercontent.com/Vaspyyy";
 /// The archive of a release, for the one machine releases are built for.
@@ -237,8 +241,8 @@ fn update(how: How) -> i32 {
     update_lumen(how, &mut told, &mut report);
     let go = find("go", &go_folders()).first().cloned();
     for tool in tools() {
-        if let Some(version) = update_tool(&tool, go.as_deref(), how, &mut told, &mut report) {
-            update_skill(&tool, &version, go.as_deref(), how, &mut report);
+        if let Some((before, now)) = update_tool(&tool, go.as_deref(), how, &mut told, &mut report) {
+            update_skill(&tool, &before, &now, go.as_deref(), how, &mut told, &mut report);
         }
     }
     if how == How::Timer {
@@ -315,11 +319,22 @@ fn curl() -> Command {
 
 /// Fetches a URL with curl, or with wget where there is no curl.
 fn fetch(url: &str) -> Result<Vec<u8>, Failure> {
-    let fetched = curl().args(["-L", "--max-time", "300", url]).stderr(Stdio::piped()).output();
+    fetch_within(url, 300, 3)
+}
+
+/// A small file, the list of tools or a skill: given up on soon, so that a network
+/// that loses what is sent doesn't hold the update for long.
+fn fetch_small(url: &str) -> Result<Vec<u8>, Failure> {
+    fetch_within(url, 20, 1)
+}
+
+fn fetch_within(url: &str, seconds: u32, tries: u32) -> Result<Vec<u8>, Failure> {
+    let (seconds, retries) = (seconds.to_string(), (tries - 1).to_string());
+    let fetched = curl().args(["--retry", &retries, "-L", "--max-time", &seconds, url]).stderr(Stdio::piped()).output();
     let output = match fetched {
         Ok(output) => output,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Command::new("wget")
-            .args(["-q", "--https-only", "--tries=3", "--timeout=300", "-O", "-", url])
+            .args(["-q", "--https-only", &format!("--tries={tries}"), &format!("--timeout={seconds}"), "-O", "-", url])
             .stderr(Stdio::piped())
             .output()
             .map_err(|_| Failure::Lasting("curl or wget is needed to fetch updates".into()))?,
@@ -396,6 +411,8 @@ fn newest_tool(tool: &str, go: Option<&Path>) -> Result<(String, Version), Failu
 /// without releases is): `v0.0.0-20261113214351-05cf82c0ff12`. Only releases are
 /// installed, never the work on main.
 fn pseudo(tag: &str) -> bool {
+    // "+incompatible" after a v2 or later without /v2 in the module path
+    let tag = tag.split('+').next().unwrap_or_default();
     let mut parts = tag.rsplitn(2, '-');
     let (Some(commit), Some(rest)) = (parts.next(), parts.next()) else { return false };
     let time = rest.rsplit(['-', '.']).next().unwrap_or_default();
@@ -577,31 +594,38 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// Updates a tool where it is installed, and gives the version it is at then.
-fn update_tool(tool: &str, go: Option<&Path>, how: How, told: &mut Told, report: &mut Report) -> Option<Version> {
+/// Updates a tool where it is installed, and gives the version it was at and the one it
+/// is at now.
+fn update_tool(
+    tool: &str,
+    go: Option<&Path>,
+    how: How,
+    told: &mut Told,
+    report: &mut Report,
+) -> Option<(Version, Version)> {
     // a tool that isn't installed stays so, and so does another program of its name
     let (program, ours) = find_tool(tool, go)?;
     let (tag, newest) = match newest_tool(tool, go) {
         Ok(found) => found,
         Err(failure) => {
             report.failure(&failure);
-            return Some(ours);
+            return Some((ours.clone(), ours));
         },
     };
     if pseudo(&tag) {
         println!("{tool} has no release yet, so it stays as it is");
-        return Some(ours);
+        return Some((ours.clone(), ours));
     }
     if newest <= ours {
         println!("{tool} {ours} is the newest");
-        return Some(ours);
+        return Some((ours.clone(), ours));
     }
     let Some(go) = go else {
         println!("{tool} {newest} is out (this is {ours}); updating it needs Go, which isn't installed");
         report
             .waiting
             .push((format!("{tool} {newest} needs Go"), format!("{tool} {newest} is out: updating it needs Go")));
-        return Some(ours);
+        return Some((ours.clone(), ours));
     };
     let folder = program.parent().unwrap_or(Path::new("/")).to_path_buf();
     if !writable(&folder) {
@@ -610,17 +634,17 @@ fn update_tool(tool: &str, go: Option<&Path>, how: How, told: &mut Told, report:
             format!("{tool} {newest} not writable"),
             format!("{tool} {newest} is out: {} is not yours to write to", folder.display()),
         ));
-        return Some(ours);
+        return Some((ours.clone(), ours));
     }
     let failed = format!("failed {tool} {newest}");
     if how == How::Timer && told.knows(&failed) {
         println!("{tool} {newest} is out, and could not be installed here; `lumen update` tries again");
         report.still_failing(&failed, &format!("{tool} {newest}"));
-        return Some(ours);
+        return Some((ours.clone(), ours));
     }
     if how == How::Check {
         println!("{tool} {ours} → {newest}");
-        return Some(ours);
+        return Some((ours.clone(), ours));
     }
     let installed = Command::new(go)
         .args(["install", &format!("github.com/Vaspyyy/{tool}@{tag}")])
@@ -636,7 +660,7 @@ fn update_tool(tool: &str, go: Option<&Path>, how: How, told: &mut Told, report:
         {
             println!("{tool} {ours} → {newest}");
             report.updated.push(format!("{tool} {ours} → {newest}"));
-            return Some(newest);
+            return Some((ours, newest));
         },
         Ok(output) => {
             let why = format!("{tool} {newest} is out, and go install failed: {}", last_lines(&output.stderr));
@@ -648,13 +672,13 @@ fn update_tool(tool: &str, go: Option<&Path>, how: How, told: &mut Told, report:
         Err(e) => Failure::Again(format!("can't run go: {e}")),
     };
     report.failed(&failure, failed, how, told);
-    Some(ours)
+    Some((ours.clone(), ours))
 }
 
 /// The tools made for lumen: the list in lumen's repository, or where it can't be read,
 /// the ones this lumen knows.
 fn tools() -> Vec<String> {
-    fetch(TOOL_LIST)
+    fetch_small(TOOL_LIST)
         .ok()
         .map(|list| tool_names(&String::from_utf8_lossy(&list)))
         .filter(|names| !names.is_empty())
@@ -662,9 +686,13 @@ fn tools() -> Vec<String> {
 }
 
 /// The names in the list of tools: one a line, `#` starts a remark. Only a plain name
-/// counts, since it becomes `github.com/Vaspyyy/<name>`, and lumen is updated apart.
+/// counts, since it becomes `github.com/Vaspyyy/<name>`, and lumen is updated apart. A
+/// page that doesn't start as the list does (a network's login page, say) has none.
 fn tool_names(list: &str) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
+    if !list.starts_with(LIST_HEADER) {
+        return names;
+    }
     for line in list.lines() {
         let name = line.split('#').next().unwrap_or_default().trim();
         let plain = name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
@@ -690,10 +718,19 @@ fn skill_folders() -> Vec<PathBuf> {
     .collect()
 }
 
-/// Brings a tool's agent skill, wherever an agent has one, to the skill of the tool's
-/// version. Only a skill that is the one of a release is replaced: one changed by hand
-/// stays as it is.
-fn update_skill(tool: &str, version: &Version, go: Option<&Path>, how: How, report: &mut Report) {
+/// Brings a tool's agent skill, wherever an agent has one, from the skill of version
+/// `before` (or of another release) to the one of version `now`. Only a skill that is
+/// the one of a release is replaced: one changed by hand stays as it is.
+fn update_skill(
+    tool: &str,
+    before: &Version,
+    now: &Version,
+    go: Option<&Path>,
+    how: How,
+    told: &mut Told,
+    report: &mut Report,
+) {
+    let home = dirs::home_dir().unwrap_or_default();
     let mut seen = BTreeSet::new();
     let files: Vec<PathBuf> = skill_folders()
         .into_iter()
@@ -701,8 +738,9 @@ fn update_skill(tool: &str, version: &Version, go: Option<&Path>, how: How, repo
         .filter(|file| file.is_file())
         // links followed, so that a skill linked from another agent's folder is one file
         .map(|file| std::fs::canonicalize(&file).unwrap_or(file))
-        // one in a git checkout (the tool's own, where it is worked on) is the checkout's
-        .filter(|file| !file.ancestors().skip(1).any(|dir| dir.join(".git").exists()))
+        // one in a git checkout (the tool's own, where it is worked on) is the checkout's;
+        // a home that is a checkout of its own (of dotfiles) doesn't count
+        .filter(|file| !in_checkout(file, &home))
         .filter(|file| seen.insert(file.clone()))
         .collect();
     if files.is_empty() {
@@ -710,8 +748,15 @@ fn update_skill(tool: &str, version: &Version, go: Option<&Path>, how: How, repo
     }
     let cache = module_cache(go);
     // a version without a skill, or one that can't be fetched now: next time
-    let Some(wanted) = skill_of(tool, version, cache.as_deref()) else { return };
-    let released = cached_skills(tool, cache.as_deref());
+    let Some(wanted) = skill_of(tool, now, cache.as_deref()) else { return };
+    let mut released = cached_skills(tool, cache.as_deref());
+    // the module cache may have lost the version that was installed: fetched then
+    if before != now
+        && before.released
+        && let Some(skill) = skill_of(tool, before, cache.as_deref())
+    {
+        released.push(skill);
+    }
     let mut updated = false;
     for file in files {
         match put_skill(&file, &wanted, &released, how) {
@@ -719,17 +764,31 @@ fn update_skill(tool: &str, version: &Version, go: Option<&Path>, how: How, repo
             Skill::Changed => {
                 println!("{tool}'s skill in {} is none that a release had, so it stays as it is", file.display())
             },
-            Skill::Old => println!("{tool}'s skill in {} → {version}", file.display()),
+            Skill::Pinned => println!("{tool}'s skill in {} is read-only, so it stays as it is", file.display()),
+            Skill::Old => println!("{tool}'s skill in {} → {now}", file.display()),
             Skill::Replaced => {
-                println!("{tool}'s skill in {} → {version}", file.display());
+                println!("{tool}'s skill in {} → {now}", file.display());
                 updated = true;
             },
-            Skill::Failed(why) => eprintln!("lumen: can't write {tool}'s skill in {}: {why}", file.display()),
+            Skill::Failed(why) => {
+                eprintln!("lumen: can't write {tool}'s skill in {}: {why}", file.display());
+                let key = format!("{tool}'s skill {now} not written: {}", file.display());
+                if how == How::ByHand {
+                    told.note(key.clone());
+                }
+                report.waiting.push((key, format!("{tool}'s skill in {} can't be updated: {why}", file.display())));
+            },
         }
     }
     if updated {
-        report.updated.push(format!("{tool}'s skill → {version}"));
+        report.updated.push(format!("{tool}'s skill → {now}"));
     }
+}
+
+/// Whether a file is in a git checkout below `home`: a folder above it, but not `home`
+/// itself or what is above that, has a `.git` (a folder, or a worktree's file).
+fn in_checkout(file: &Path, home: &Path) -> bool {
+    file.ancestors().skip(1).take_while(|dir| !home.starts_with(dir)).any(|dir| dir.join(".git").exists())
 }
 
 /// What became of one skill file.
@@ -739,6 +798,8 @@ enum Skill {
     Current,
     /// It is no released skill: changed by hand, so it stays.
     Changed,
+    /// It is read-only: kept as it is on purpose.
+    Pinned,
     /// It is an older release's, and only checked.
     Old,
     /// It was an older release's, and is the new one now.
@@ -756,14 +817,26 @@ fn put_skill(file: &Path, wanted: &[u8], released: &[Vec<u8>], how: How) -> Skil
     if !released.contains(&have) {
         return Skill::Changed;
     }
+    let Ok(meta) = std::fs::metadata(file) else { return Skill::Failed("can't read it".into()) };
+    if meta.permissions().readonly() {
+        return Skill::Pinned;
+    }
     if how == How::Check {
         return Skill::Old;
     }
     let next = file.with_file_name(".SKILL.md.lumen-update");
-    let put = std::fs::write(&next, wanted)
-        .and_then(|()| match std::fs::metadata(file) {
-            Ok(meta) => std::fs::set_permissions(&next, meta.permissions()),
-            Err(e) => Err(e),
+    // made anew, never through a link that someone left in its place
+    let _ = std::fs::remove_file(&next);
+    let put = File::options()
+        .write(true)
+        .create_new(true)
+        .mode(meta.permissions().mode() & 0o7777)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&next)
+        .and_then(|mut new| {
+            new.write_all(wanted)?;
+            new.set_permissions(meta.permissions())?;
+            new.sync_all()
         })
         .and_then(|()| std::fs::rename(&next, file));
     match put {
@@ -800,10 +873,11 @@ fn skill_of(tool: &str, version: &Version, cache: Option<&Path>) -> Option<Vec<u
     {
         return Some(skill);
     }
-    fetch(&format!("{RAW}/{tool}/{tag}/skill/SKILL.md")).ok()
+    fetch_small(&format!("{RAW}/{tool}/{tag}/skill/SKILL.md")).ok()
 }
 
-/// The skills of every version of a tool in Go's module cache.
+/// The skills of every release of a tool in Go's module cache (not of commits without a
+/// tag, which `go install …@main` leaves there too).
 fn cached_skills(tool: &str, cache: Option<&Path>) -> Vec<Vec<u8>> {
     let Some(entries) = cache.and_then(|cache| std::fs::read_dir(cache.join("github.com/!vaspyyy")).ok()) else {
         return Vec::new();
@@ -811,7 +885,10 @@ fn cached_skills(tool: &str, cache: Option<&Path>) -> Vec<Vec<u8>> {
     let prefix = format!("{tool}@");
     entries
         .flatten()
-        .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            name.strip_prefix(&prefix).is_some_and(|tag| !pseudo(tag))
+        })
         .filter_map(|entry| std::fs::read(entry.path().join("skill/SKILL.md")).ok())
         .collect()
 }
@@ -1013,13 +1090,17 @@ mod tests {
         assert!(!pseudo("v0.5.2"));
         assert!(!pseudo("v1.0.0-rc.1"));
         assert!(!pseudo("v1.0.0-beta-05cf82c0ff12"));
+        assert!(pseudo("v2.0.0-20261113214351-05cf82c0ff12+incompatible"));
     }
 
     #[test]
     fn the_list_of_tools_takes_plain_names_once() {
-        let list = "# the tools\nglint\ncrux  # remark\n\nglint\nlumen\n../evil\nBig\n-x\nnew-tool2\n";
-        assert_eq!(tool_names(list), ["glint", "crux", "new-tool2"]);
+        let list = format!("{LIST_HEADER}, …\nglint\ncrux  # remark\n\nglint\nlumen\n../evil\nBig\n-x\nnew-tool2\n");
+        assert_eq!(tool_names(&list), ["glint", "crux", "new-tool2"]);
         assert!(tool_names("<html>Not Found</html>").is_empty());
+        assert!(tool_names("404\nglint\n").is_empty(), "a page that isn't the list");
+        let shipped = include_str!("../packaging/tools.txt");
+        assert_eq!(tool_names(shipped), TOOLS, "the list in the repository and the one built in");
     }
 
     #[test]
@@ -1042,6 +1123,35 @@ mod tests {
         assert_eq!(put_skill(&file, b"new skill\n", &released, How::Timer), Skill::Replaced);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "new skill\n");
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "the file beside it is gone");
+
+        // a link where the file beside it goes is not written through
+        let elsewhere = dir.join("elsewhere");
+        std::fs::write(&elsewhere, "mine\n").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.join(".SKILL.md.lumen-update")).unwrap();
+        std::fs::write(&file, "old skill\n").unwrap();
+        assert_eq!(put_skill(&file, b"new skill\n", &released, How::Timer), Skill::Replaced);
+        assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "mine\n");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "new skill\n");
+
+        // a read-only skill is kept on purpose
+        std::fs::write(&file, "old skill\n").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o444)).unwrap();
+        assert_eq!(put_skill(&file, b"new skill\n", &released, How::Timer), Skill::Pinned);
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_skill_in_a_checkout_is_the_checkouts_but_a_home_that_is_one_doesnt_count() {
+        let home = Path::new("/h");
+        let dir = std::env::temp_dir().join(format!("lumen-checkout-test-{}", std::process::id()));
+        let file = dir.join("repo/skill/SKILL.md");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        assert!(!in_checkout(&file, home));
+        std::fs::write(dir.join("repo/.git"), "gitdir: elsewhere\n").unwrap(); // a worktree's
+        assert!(in_checkout(&file, home));
+        // the same with the folder above as home: a home's own .git doesn't count
+        assert!(!in_checkout(&file, &dir.join("repo")));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
