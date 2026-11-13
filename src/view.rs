@@ -184,8 +184,9 @@ pub struct TerminalView {
     motion: Rc<Cell<Motion>>,
     /// Text an input method is still composing.
     composing: Option<String>,
-    /// When a slash word was last taken at the prompt: an Enter right after, while the
-    /// line the shell is clearing still shows it, isn't taken again.
+    /// When a slash word was last taken at the prompt: an Enter right after, with no
+    /// other key between, while the line the shell is clearing still shows it, isn't
+    /// taken again.
     slash_at: Option<Instant>,
     /// Where the mouse is, while it is over this pane.
     mouse: Option<Point<Pixels>>,
@@ -349,6 +350,10 @@ impl TerminalView {
                 cx.stop_propagation();
             }
             return;
+        }
+        // any other key: what comes next is typed anew, and its Enter is the user's
+        if event.keystroke.key != "enter" {
+            self.slash_at = None;
         }
         // `/settings` and Enter at a prompt is lumen's: the shell never sees the line,
         // which is taken back as Ctrl+U takes it in fish, bash and zsh.

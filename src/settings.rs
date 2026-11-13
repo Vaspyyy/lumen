@@ -304,13 +304,20 @@ impl Menu {
                 }
                 continue;
             }
-            let mut buf = [0u8; 4096];
-            // SAFETY: read into a buffer of its own length
-            let n = unsafe { libc::read(0, buf.as_mut_ptr().cast(), buf.len()) };
-            if n <= 0 {
+            let mut input = Vec::new();
+            if !read_more(&mut input) {
                 return;
             }
-            let keys = parse_keys(&buf[..n as usize]);
+            // a key whose bytes came in two reads (an arrow over a slow link, ü): the
+            // rest is there in a moment, and an Esc with nothing after it is the key
+            while unfinished(&input) {
+                let mut more = [libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 }];
+                // SAFETY: poll on one descriptor this array holds
+                if unsafe { libc::poll(more.as_mut_ptr(), 1, 30) } <= 0 || !read_more(&mut input) {
+                    break;
+                }
+            }
+            let keys = parse_keys(&input);
             for key in keys {
                 if !self.key(key) {
                     return;
@@ -672,8 +679,11 @@ fn write_file(path: &Path, text: &str) -> std::io::Result<()> {
     }
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
     let next = path.with_file_name(format!(".lumen.toml.settings-{}-{stamp}", std::process::id()));
+    // only a file this made is cleared away after a failure: never one that was there
+    let mut made = false;
     let put = (|| {
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&next)?;
+        made = true;
         file.write_all(text.as_bytes())?;
         if let Ok(meta) = std::fs::metadata(path) {
             file.set_permissions(meta.permissions())?;
@@ -681,7 +691,7 @@ fn write_file(path: &Path, text: &str) -> std::io::Result<()> {
         file.sync_all()?;
         std::fs::rename(&next, path)
     })();
-    if put.is_err() {
+    if put.is_err() && made {
         let _ = std::fs::remove_file(&next);
     }
     put
@@ -727,9 +737,6 @@ fn parse_keys(bytes: &[u8]) -> Vec<Key> {
                     chars.next();
                     continue;
                 },
-                // Esc alone; one at the very end of a full read is the start of a
-                // sequence cut in two, not a key
-                (None, _) if bytes.len() >= 4096 => continue,
                 _ => Key::Escape,
             },
             '\r' | '\n' => Key::Enter,
@@ -743,6 +750,32 @@ fn parse_keys(bytes: &[u8]) -> Vec<Key> {
         keys.push(key);
     }
     keys
+}
+
+/// Reads what the terminal has sent onto `input`; false when it is gone.
+fn read_more(input: &mut Vec<u8>) -> bool {
+    let mut buf = [0u8; 4096];
+    // SAFETY: read into a buffer of its own length
+    let n = unsafe { libc::read(0, buf.as_mut_ptr().cast(), buf.len()) };
+    if n <= 0 {
+        return false;
+    }
+    input.extend_from_slice(&buf[..n as usize]);
+    true
+}
+
+/// Whether `input` ends in the middle of a key: an Esc that may begin a sequence, a
+/// sequence without its last byte, or a character cut between its bytes.
+fn unfinished(input: &[u8]) -> bool {
+    if std::str::from_utf8(input).is_err_and(|e| e.error_len().is_none()) {
+        return true;
+    }
+    let Some(at) = input.iter().rposition(|&b| b == 0x1b) else { return false };
+    match &input[at + 1..] {
+        [] | [b'[' | b'O'] => true,
+        [b'[', rest @ ..] => !rest.iter().any(|b| b.is_ascii_alphabetic() || *b == b'~'),
+        _ => false,
+    }
 }
 
 fn terminal_size() -> (usize, usize) {
@@ -781,23 +814,28 @@ struct Raw {
 
 impl Raw {
     fn enter() -> std::io::Result<Raw> {
-        // SAFETY: tcgetattr and tcsetattr on stdin with termios structs this function owns
+        // SAFETY: tcgetattr on stdin into a termios this function owns
         let saved = unsafe {
             let mut saved: libc::termios = std::mem::zeroed();
             if libc::tcgetattr(0, &mut saved) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            let mut raw = saved;
-            libc::cfmakeraw(&mut raw);
-            if libc::tcsetattr(0, libc::TCSANOW, &raw) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
             saved
         };
+        // the way back is in place before the terminal is taken: a signal at any moment
+        // after this gives it back
         let _ = SAVED.set(saved);
         for signal in [libc::SIGTERM, libc::SIGHUP, libc::SIGINT, libc::SIGQUIT] {
             // SAFETY: a handler that only does what is safe in one
             unsafe { libc::signal(signal, give_back as *const () as libc::sighandler_t) };
+        }
+        let mut raw = saved;
+        // SAFETY: cfmakeraw and tcsetattr on a termios this function owns
+        unsafe {
+            libc::cfmakeraw(&mut raw);
+            if libc::tcsetattr(0, libc::TCSANOW, &raw) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
         }
         print!("\x1b[?1049h\x1b[?25l");
         let _ = std::io::stdout().flush();
@@ -989,6 +1027,13 @@ mod tests {
     fn keys_are_read_in_both_forms() {
         assert_eq!(parse_keys(b"\x1b[A\x1bOB\x1b[C\x1b[D"), [Key::Up, Key::Down, Key::Right, Key::Left]);
         assert_eq!(parse_keys(b"\x1b"), [Key::Escape]);
+        // a key cut between two reads waits for its rest; a whole one doesn't
+        for cut in [&b"\x1b"[..], b"\x1b[", b"\x1bO", b"\x1b[5", "ü".as_bytes().split_at(1).0] {
+            assert!(unfinished(cut), "{cut:?}");
+        }
+        for whole in [&b"\x1b[A"[..], b"\x1b[5~", b"j", "ü".as_bytes(), b"\x1bx"] {
+            assert!(!unfinished(whole), "{whole:?}");
+        }
         assert_eq!(parse_keys(b"\x1b[5~j"), [Key::Char('j')]);
         assert_eq!(parse_keys("ü \r".as_bytes()), [Key::Char('ü'), Key::Space, Key::Enter]);
     }
