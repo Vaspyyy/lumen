@@ -270,9 +270,8 @@ struct Menu {
 
 impl Menu {
     fn open() -> Result<Menu, String> {
-        let path = Config::path();
-        // the file a link points at, so that the link stays
-        let path = std::fs::canonicalize(&path).unwrap_or(path);
+        // the file a link points at, so that the link stays, also where it isn't made yet
+        let path = followed(Config::path());
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -491,9 +490,13 @@ impl Menu {
     /// Makes a change to the file and writes it, if what comes out is a config lumen
     /// takes. A file changed by hand since it was read is read again first.
     fn write(&mut self, change: impl FnOnce(&mut DocumentMut)) {
-        if let Ok(on_disk) = std::fs::read_to_string(&self.path)
-            && on_disk != self.text
-        {
+        let on_disk = match std::fs::read_to_string(&self.path) {
+            Ok(text) => text,
+            // removed meanwhile: the change goes into a file of its own
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return self.say(format!("can't read {} again: {e}", self.path.display()), false),
+        };
+        if on_disk != self.text {
             match on_disk.parse::<DocumentMut>() {
                 Ok(doc) => (self.doc, self.text) = (doc, on_disk),
                 Err(e) => return self.say(format!("the file was changed and isn't valid TOML now: {e}"), false),
@@ -634,21 +637,43 @@ fn clip(text: &str, most: usize) -> String {
     clipped
 }
 
+/// The file `path` names, through links, also one that a link names but that isn't made
+/// yet: writing there keeps the link.
+fn followed(path: PathBuf) -> PathBuf {
+    let mut path = path;
+    // as many links as the system follows itself
+    for _ in 0..40 {
+        let Ok(target) = std::fs::read_link(&path) else { break };
+        path = match path.parent() {
+            Some(dir) if target.is_relative() => dir.join(target),
+            _ => target,
+        };
+    }
+    path
+}
+
 /// Writes the file through one beside it that takes its place at once, so that a
-/// running lumen never reads half of it, with the mode the file had.
+/// running lumen never reads half of it, with the mode the file had. The file beside it
+/// has a name of its own, made anew: never one that was there.
 fn write_file(path: &Path, text: &str) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let next = path.with_file_name(".lumen.toml.settings");
-    let _ = std::fs::remove_file(&next);
-    std::fs::write(&next, text)?;
-    if let Ok(meta) = std::fs::metadata(path) {
-        std::fs::set_permissions(&next, meta.permissions())?;
-    }
-    std::fs::rename(&next, path).inspect_err(|_| {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let next = path.with_file_name(format!(".lumen.toml.settings-{}-{stamp}", std::process::id()));
+    let put = (|| {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&next)?;
+        file.write_all(text.as_bytes())?;
+        if let Ok(meta) = std::fs::metadata(path) {
+            file.set_permissions(meta.permissions())?;
+        }
+        file.sync_all()?;
+        std::fs::rename(&next, path)
+    })();
+    if put.is_err() {
         let _ = std::fs::remove_file(&next);
-    })
+    }
+    put
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -716,6 +741,25 @@ fn terminal_size() -> (usize, usize) {
     }
 }
 
+/// The terminal as it was before the menu took it, for a signal that ends the menu
+/// before [`Raw`] is dropped.
+static SAVED: std::sync::OnceLock<libc::termios> = std::sync::OnceLock::new();
+
+/// Gives the terminal back, then ends as the signal would have: `kill` (SIGTERM), a
+/// closed terminal (SIGHUP), or the other ends of a process.
+extern "C" fn give_back(signal: libc::c_int) {
+    const BACK: &[u8] = b"\x1b[?25h\x1b[?1049l";
+    // SAFETY: write, tcsetattr and _exit are async-signal-safe; SAVED is set before this
+    // handler is installed and never changes
+    unsafe {
+        libc::write(1, BACK.as_ptr().cast(), BACK.len());
+        if let Some(saved) = SAVED.get() {
+            libc::tcsetattr(0, libc::TCSANOW, saved);
+        }
+        libc::_exit(128 + signal);
+    }
+}
+
 /// The terminal in raw mode, on its other screen, without a cursor, until dropped.
 struct Raw {
     saved: libc::termios,
@@ -736,6 +780,11 @@ impl Raw {
             }
             saved
         };
+        let _ = SAVED.set(saved);
+        for signal in [libc::SIGTERM, libc::SIGHUP, libc::SIGINT, libc::SIGQUIT] {
+            // SAFETY: a handler that only does what is safe in one
+            unsafe { libc::signal(signal, give_back as *const () as libc::sighandler_t) };
+        }
         print!("\x1b[?1049h\x1b[?25l");
         let _ = std::io::stdout().flush();
         Ok(Raw { saved })
@@ -851,6 +900,35 @@ mod tests {
         assert_eq!(config.scrollback, 2000);
         assert!(config.copy_on_select);
         assert!(!config.cursor.glow);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_link_to_a_file_not_made_yet_stays_a_link() {
+        let (mut menu, dir) = menu_on("");
+        let real = dir.join("dotfiles/lumen.toml");
+        let link = dir.join("link.toml");
+        std::os::unix::fs::symlink("dotfiles/lumen.toml", &link).unwrap();
+        menu.path = followed(link.clone());
+        assert_eq!(menu.path, real);
+        go_to(&mut menu, Some("cursor"), "glow");
+        menu.key(Key::Enter);
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(std::fs::read_to_string(&real).unwrap().contains("glow = false"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_beside_the_config_is_never_touched_and_a_removed_file_starts_anew() {
+        let (mut menu, dir) = menu_on("scrollback = 1000\n");
+        std::fs::write(dir.join(".lumen.toml.settings"), "mine").unwrap();
+        std::fs::remove_file(dir.join("lumen.toml")).unwrap();
+        go_to(&mut menu, Some("cursor"), "glow");
+        menu.key(Key::Enter);
+        let written = std::fs::read_to_string(dir.join("lumen.toml")).unwrap();
+        assert!(!written.contains("scrollback"), "the removed file's settings came back: {written}");
+        assert_eq!(std::fs::read_to_string(dir.join(".lumen.toml.settings")).unwrap(), "mine");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "nothing else is left beside it");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

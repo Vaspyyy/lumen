@@ -885,34 +885,39 @@ fn typed<L>(term: &Term<L>, id: u32) -> Option<String> {
     any.then_some(text)
 }
 
-/// What is typed at the prompt that is open, up to the cursor: what Enter would send
-/// off. None while no prompt is open, and for a shell that doesn't mark what is typed.
+/// What is typed at the prompt that is open, with the cursor after all of it: what Enter
+/// would send off. None while no prompt is open, for a shell that doesn't mark what is
+/// typed, and where anything typed stands after the cursor (the cursor moved back into
+/// the line, or a suggestion of fish's), since what Enter sends then is more than what
+/// stands before the cursor.
 pub fn typing<L>(log: &Log, term: &Term<L>) -> Option<String> {
     let id = log.current.filter(|_| log.phase == Phase::Input)?;
     let cursor = term.grid().cursor.point;
     if owner(term, cursor.line) != Some(id) {
         return None;
     }
-    let (first, _) = own_lines(term, cursor.line, id);
+    let (first, last) = own_lines(term, cursor.line, id);
     let mut text = String::new();
-    for line in (first.0..=cursor.line.0).map(Line) {
+    for line in (first.0..=last.0).map(Line) {
         let row = &term.grid()[line];
         let mut wrapped = false;
         for (column, cell) in row.into_iter().enumerate() {
-            // what stands after the cursor (fish's suggestion, say) isn't sent off
-            if line == cursor.line && column >= cursor.column.0 {
-                break;
-            }
             wrapped = cell.flags.contains(Flags::WRAPLINE);
             if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
                 continue;
             }
             if cell.hyperlink().and_then(|link| cell_of(link.uri())) == Some((id, Part::Input)) {
-                text.push(cell.c);
-                text.extend(cell.zerowidth().into_iter().flatten());
+                let after = line > cursor.line || (line == cursor.line && column >= cursor.column.0);
+                if after && cell.c != ' ' {
+                    return None;
+                }
+                if !after {
+                    text.push(cell.c);
+                    text.extend(cell.zerowidth().into_iter().flatten());
+                }
             }
         }
-        if !wrapped && line != cursor.line {
+        if !wrapped && line < cursor.line {
             text.push('\n');
         }
     }
@@ -1153,8 +1158,11 @@ mod tests {
         screen.run("ls", "a b\r\n", 0);
         screen.print("\x1b]133;A\x07~> \x1b]133;B\x07/settings");
         assert_eq!(typing_on(&screen).as_deref(), Some("/settings"));
-        // a suggestion after the cursor (fish's, in grey) isn't what Enter sends
-        screen.print("-and-more\x1b[9D");
+        // with something typed after the cursor, Enter would send more than that
+        screen.print(" --help\x1b[7D");
+        assert_eq!(typing_on(&screen), None);
+        // taken back to the cursor, it is the word again
+        screen.print("\x1b[K");
         assert_eq!(typing_on(&screen).as_deref(), Some("/settings"));
         // once it runs, nothing is being typed
         screen.print("\r\n\x1b]133;C\x07");
