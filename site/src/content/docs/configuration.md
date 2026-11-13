@@ -141,7 +141,7 @@ More in [Fonts](/docs/fonts/).
 | --- | --- | --- |
 | `opacity` | `1.0` | How solid the background is, from 0 to 1. Text stays solid |
 | `blur` | `true` | Blurs what is behind a see-through window, where the desktop can do that |
-| `padding` | `10` | Space between a pane's edge and its text, in pixels, from 0 to 200. One number is the same on every side. `{ x = 10, y = 4 }` sets left and right (`x`) apart from top and bottom (`y`), as in Alacritty |
+| `padding` | `10` | Space between a pane's edge and its text, in pixels, from 0 to 200. One number is the same on every side. `{ x = 10, y = 4 }` sets left and right (`x`) apart from top and bottom (`y`), as in Alacritty. The [marks of commands](/docs/commands/) stand in the space at the left, and need 4 pixels of it |
 | `dynamic_padding` | `false` | A pane is seldom a whole number of cells wide and high. What is left over is at the right and the bottom; with `true` it is split between both sides, so the text sits in the middle |
 | `decorations` | `"lumen"` | Who draws the window's frame. `"lumen"`: round corners, a shadow, and the window's buttons in the tab bar. `"desktop"`: the desktop's own title bar and frame, where it has them (KDE Plasma and most tiling desktops; on GNOME lumen draws its own). `"none"`: no frame, no shadow, no buttons and no edges to drag, and the window fills all the space the desktop gives it. On a tiling desktop that leaves a gap around lumen, `"none"` takes it away |
 | `startup_mode` | `"windowed"` | How a new window opens: `"windowed"`, `"maximized"` or `"fullscreen"` |
@@ -152,7 +152,7 @@ More in [Fonts](/docs/fonts/).
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `bar` | `"always"` | When the tab bar is there. `"auto"`: while a window has two tabs or more. `"never"`: not at all; the keys in [Keys](/docs/keys/) still open, close and switch tabs. Where lumen draws the frame, the tab bar is also where the window's buttons are and where it is dragged: without it, your desktop's keys move and close the window |
+| `bar` | `"always"` | When the tab bar is there. `"auto"`: while a window has two tabs or more. `"never"`: not at all; the keys in [Keys](/docs/keys/) still open, close and switch tabs. Where lumen draws the frame, the tab bar is also where the window's buttons are and where it is dragged: without it, your desktop's keys move and close the window. The [machine's light](/docs/machine/) is in it too; `open_pulse` in [`[keys]`](/docs/keys/#changing-the-keys) opens pulse without it |
 
 ## `[cursor]`
 

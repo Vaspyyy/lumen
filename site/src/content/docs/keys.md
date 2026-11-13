@@ -87,7 +87,7 @@ The `[keys]` table in the [config](/docs/configuration/) gives a key to one of l
 "ctrl-k ctrl-c" = "copy"               # two keys, one after the other
 ```
 
-A key named in `[keys]` no longer does what lumen gave it, and the other keys stay as they are. Saving the file is enough.
+A key named in `[keys]` no longer does what lumen gave it, and the other keys stay as they are. So does a key of lumen's that begins one of yours, such as `ctrl-shift-t` for `"ctrl-shift-t ctrl-c"`: lumen would otherwise wait after it for the rest. Saving the file is enough.
 
 A key is written as GPUI writes it: the modifiers `ctrl`, `alt`, `shift` and `super`, each followed by a dash, then the key. Letters, digits and signs are themselves (`ctrl-shift-t`, `alt-1`, `ctrl-=`, `ctrl--` for the minus key). The other keys have names: `enter`, `tab`, `space`, `backspace`, `delete`, `escape`, `insert`, `home`, `end`, `pageup`, `pagedown`, `up`, `down`, `left`, `right`, `menu`, `print`, `pause`, `back`, `forward`, and `f1` to `f35`. A key lumen doesn't know, or an action it doesn't have, is a mistake, and lumen says so.
 
@@ -117,6 +117,7 @@ The actions, with lumen's keys for them:
 | `focus_left`, `focus_right`, `focus_up`, `focus_down` | Move to the pane in that direction | `Ctrl+Alt+Arrow` |
 | `zoom_pane` | Let the pane fill the tab, and back | `Ctrl+Shift+Enter` |
 | `new_window` | New window | `Ctrl+Shift+N` |
+| `open_pulse` | Open [pulse](/docs/machine/) in a tab, as a click on the light in the title bar does | |
 | `quit` | Close every window | |
 
 The keys for commands (`previous_command`, `next_command`, `copy_output`) stay lumen's only where a shell marks its commands, outside full-screen programs, whatever key they are given. The ones for a pane work where a pane has the keyboard, the rest anywhere in the window.

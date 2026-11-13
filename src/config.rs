@@ -399,9 +399,16 @@ impl<'de> Deserialize<'de> for Keys {
             send: String,
         }
         let table = BTreeMap::<String, toml::Value>::deserialize(d)?;
-        let mut keys = Vec::new();
+        let mut keys: Vec<(String, Binding)> = Vec::new();
+        let mut pressed = Vec::new();
         for (key, value) in table {
-            crate::actions::check_keys(&key).map_err(serde::de::Error::custom)?;
+            let strokes = crate::actions::parse(&key).map_err(serde::de::Error::custom)?;
+            // the same keys written two ways would leave which one counts to chance
+            if let Some(at) = pressed.iter().position(|other| *other == strokes) {
+                let first: &str = &keys[at].0;
+                return Err(serde::de::Error::custom(format!("keys: {first:?} and {key:?} are the same keys")));
+            }
+            pressed.push(strokes);
             let value = Value::deserialize(value).map_err(|_| {
                 serde::de::Error::custom(format!(
                     "keys: {key:?} is given neither an action's name nor {{ send = \"text\" }}"
@@ -687,19 +694,24 @@ impl Config {
     }
 
     fn checked(mut self) -> Config {
+        // TOML can write a number that is none (nan), which no range holds: it is the default
+        let within = |value: f32, least: f32, most: f32, default: f32| {
+            if value.is_nan() { default } else { value.clamp(least, most) }
+        };
+        let (font, window, mouse) = (Font::default(), Window::default(), Mouse::default());
         self.font.family = installed_family(&self.font.family);
-        self.font.size = self.font.size.clamp(4., 96.);
-        self.font.line_height = self.font.line_height.clamp(0.8, 3.);
+        self.font.size = within(self.font.size, 4., 96., font.size);
+        self.font.line_height = within(self.font.line_height, 0.8, 3., font.line_height);
         self.font.weight = self.font.weight.clamp(100, 900);
         self.font.bold_weight = self.font.bold_weight.clamp(100, 900);
-        self.window.opacity = self.window.opacity.clamp(0., 1.);
-        self.window.padding.x = self.window.padding.x.clamp(0., 200.);
-        self.window.padding.y = self.window.padding.y.clamp(0., 200.);
+        self.window.opacity = within(self.window.opacity, 0., 1., window.opacity);
+        self.window.padding.x = within(self.window.padding.x, 0., 200., window.padding.x);
+        self.window.padding.y = within(self.window.padding.y, 0., 200., window.padding.y);
         self.window.columns = self.window.columns.clamp(20, 1000);
         self.window.lines = self.window.lines.clamp(5, 500);
         self.cursor.blink_interval = self.cursor.blink_interval.clamp(100, 5000);
-        self.cursor.thickness = self.cursor.thickness.map(|thickness| thickness.clamp(1., 20.));
-        self.mouse.scroll_multiplier = self.mouse.scroll_multiplier.clamp(0.1, 20.);
+        self.cursor.thickness = self.cursor.thickness.filter(|t| !t.is_nan()).map(|t| t.clamp(1., 20.));
+        self.mouse.scroll_multiplier = within(self.mouse.scroll_multiplier, 0.1, 20., mouse.scroll_multiplier);
         self.pulse.every = self.pulse.every.clamp(1, 60);
         self
     }
@@ -913,6 +925,15 @@ mod tests {
             ..Config::default()
         };
         assert_eq!(huge.checked().window.padding, Padding { x: 0., y: 200. });
+        // a number that is none is the default, and infinity the largest allowed
+        let none: Config = toml::from_str("[window]\npadding = nan\n[mouse]\nscroll_multiplier = nan\n").unwrap();
+        let none = none.checked();
+        assert_eq!(none.window.padding, Padding::default());
+        assert_eq!(none.mouse.scroll_multiplier, 1.);
+        let endless: Config = toml::from_str("[mouse]\nscroll_multiplier = inf\n[cursor]\nthickness = nan\n").unwrap();
+        let endless = endless.checked();
+        assert_eq!(endless.mouse.scroll_multiplier, 20.);
+        assert_eq!(endless.cursor.thickness, None);
     }
 
     #[test]
@@ -1001,6 +1022,8 @@ mod tests {
         assert!(toml::from_str::<Config>("[keys]\n\"ctrl-c\" = \"cpoy\"\n").is_err());
         assert!(toml::from_str::<Config>("[keys]\n\"ctrl-c\" = { sned = \"x\" }\n").is_err());
         assert!(toml::from_str::<Config>("[keys]\n\"ctrl-c\" = 3\n").is_err());
+        let twice = toml::from_str::<Config>("[keys]\n\"ctrl-shift-t\" = \"none\"\n\"shift-ctrl-t\" = \"copy\"\n");
+        assert!(twice.unwrap_err().message().contains("are the same keys"));
         assert!(toml::from_str::<Config>("clipboard = \"always\"\n").is_err());
         assert!(toml::from_str::<Config>("[env]\nN = 1\n").is_err());
     }

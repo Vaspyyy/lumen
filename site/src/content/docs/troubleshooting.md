@@ -104,7 +104,7 @@ lumen keeps a few keys for itself, listed in [Keys](/docs/keys/). Everything els
 
 Where lumen draws its own frame, it keeps a margin around the window for its shadow, and rounds its corners. A desktop says when a window is tiled, and lumen then leaves both out; some tiling desktops don't say so. `decorations = "none"` in the `[window]` table takes the margin, the corners and the border away for good, and `decorations = "desktop"` lets a desktop that draws frames draw one.
 
-Inside each pane, `padding` is the space around the text: `padding = 0`, or `padding = { x = 4, y = 0 }`. See [Configuration](/docs/configuration/#window).
+Inside each pane, `padding` is the space around the text: `padding = 0`, or `padding = { x = 4, y = 0 }`, which keeps just enough room at the left for the marks of commands. See [Configuration](/docs/configuration/#window).
 
 ## A new tab opens in the wrong folder
 

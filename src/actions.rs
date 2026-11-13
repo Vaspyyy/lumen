@@ -40,6 +40,7 @@ actions!(
         FocusDown,
         ToggleZoomPane,
         NewWindow,
+        OpenPulse,
         Quit,
     ]
 );
@@ -120,6 +121,7 @@ static NAMED: &[(&str, Make, Scope)] = &[
     ("focus_down", || Box::new(FocusDown), Scope::Window),
     ("zoom_pane", || Box::new(ToggleZoomPane), Scope::Window),
     ("new_window", || Box::new(NewWindow), Scope::Window),
+    ("open_pulse", || Box::new(OpenPulse), Scope::Window),
     ("quit", || Box::new(Quit), Scope::Window),
 ];
 
@@ -200,8 +202,8 @@ pub fn named(name: &str) -> Option<&'static str> {
 }
 
 /// The keystrokes a binding is pressed with: one, or several one after
-/// another (`ctrl-k ctrl-c`).
-fn parse(keys: &str) -> Result<Vec<(Modifiers, String)>, String> {
+/// another (`ctrl-k ctrl-c`). Two ways of writing the same keys give the same.
+pub fn parse(keys: &str) -> Result<Vec<(Modifiers, String)>, String> {
     let mut strokes = Vec::new();
     for part in keys.split_whitespace() {
         let stroke = Keystroke::parse_with_os(part, OperatingSystem::Linux)
@@ -220,8 +222,18 @@ fn parse(keys: &str) -> Result<Vec<(Modifiers, String)>, String> {
 }
 
 /// Whether a key in `[keys]` is one lumen can bind.
-pub fn check_keys(keys: &str) -> Result<(), String> {
+#[cfg(test)]
+fn check_keys(keys: &str) -> Result<(), String> {
     parse(keys).map(|_| ())
+}
+
+/// Whether one binding's keys begin with the other's. GPUI waits after a key
+/// that begins a longer binding, to see whether the rest follows: a key of
+/// lumen's that begins a binding of the config's, or the other way round,
+/// would hold up the shorter one, and is left out.
+fn overlap(a: &[(Modifiers, String)], b: &[(Modifiers, String)]) -> bool {
+    let shorter = a.len().min(b.len());
+    a[..shorter] == b[..shorter]
 }
 
 /// Puts the keys in place: lumen's own, without those the config names, and
@@ -238,7 +250,7 @@ pub fn bind(cx: &mut App) {
         }
     };
     for &(keys, name) in DEFAULTS {
-        let taken = parse(keys).is_ok_and(|strokes| user_keys.contains(&strokes));
+        let taken = parse(keys).is_ok_and(|strokes| user_keys.iter().any(|user| overlap(user, &strokes)));
         if let (false, Some((action, scope))) = (taken, action(name)) {
             add(keys, action, scope, cx);
         }
@@ -276,6 +288,15 @@ mod tests {
         assert_eq!(parse("ctrl-shift-t"), parse("ctrl-T"));
         assert_ne!(parse("ctrl-t"), parse("ctrl-shift-t"));
         assert_eq!(parse("ctrl-k ctrl-c").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_key_that_begins_a_longer_binding_is_left_out() {
+        let keys = |text: &str| parse(text).unwrap();
+        assert!(overlap(&keys("ctrl-shift-t ctrl-c"), &keys("ctrl-shift-t")));
+        assert!(overlap(&keys("ctrl-shift-t"), &keys("ctrl-shift-t ctrl-c")));
+        assert!(overlap(&keys("ctrl-shift-t"), &keys("shift-ctrl-t")));
+        assert!(!overlap(&keys("ctrl-k ctrl-c"), &keys("ctrl-shift-t")));
     }
 
     #[test]
