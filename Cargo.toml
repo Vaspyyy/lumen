@@ -42,6 +42,12 @@ serde_json = "1"
 # Checking what `lumen update` fetched against the release's SHA256SUMS.
 sha2 = "0.10"
 
+[features]
+# A record of where the time goes between a key and the frame that shows it,
+# written while LUMEN_LAG names a file (see src/lag.rs). It turns on GPUI's
+# profiler, which costs a little on every frame: not for builds to keep.
+lag = ["gpui/profiler"]
+
 [profile.dev]
 # The grid is drawn every frame: unoptimized, a full screen of text stutters.
 opt-level = 1

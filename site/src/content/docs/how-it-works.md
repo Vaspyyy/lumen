@@ -69,6 +69,7 @@ src/
   palette.rs    from the colors a program asks for to the theme's
   workspace.rs  tabs and splits
   actions.rs    everything a key can be bound to
+  lag.rs        a record of where the time goes from a key to its frame
 ```
 
 The whole program is about 6,000 lines, and is meant to be read. See [Contributing](/docs/contributing/).

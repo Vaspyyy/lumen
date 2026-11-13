@@ -50,6 +50,42 @@ A few habits, so that a change fits in:
 
 [How it works](/docs/how-it-works/) says what is where.
 
+## Measure lag
+
+When typing or the cursor feels slow, measure before you change anything, and again after. A lumen built with `--features lag` records where the time goes between a key and the frame that shows it, and `scripts/lag.py` turns the record into a report.
+
+The quickest way runs on a display nobody sees, so it leaves your desktop alone and works over SSH. It needs [gamescope](https://github.com/ValveSoftware/gamescope):
+
+```sh
+scripts/lag.sh
+```
+
+It builds lumen with the recorder, starts it in a headless gamescope at 165 Hz, and lets it type a fixed scenario into your shell: about 15 seconds of fast typing, Ctrl+Backspace, key repeat and a held Backspace. It never presses Enter, so nothing is run. Then it prints the report. `LAG_HZ=60 scripts/lag.sh` measures at another refresh rate.
+
+To record your own typing in a real window:
+
+```sh
+cargo build --release --features lag
+LUMEN_LAG=~/lag.jsonl target/release/lumen
+scripts/lag.py ~/lag.jsonl
+```
+
+Type as you normally do, then close the window. The record keeps which keys were pressed (any key that types text is just `char`, so what you typed isn't in it), how many bytes went to the program and came back, where the cursor was in each frame, and GPUI's own journal of input, draws and presents. With `LUMEN_LAG_DRIVE=1` the window types the scripted scenario instead, and quits after it.
+
+To compare two builds, record each one and give both records to the report: `scripts/lag.py before.jsonl after.jsonl`.
+
+The report has three parts:
+
+- **From key to frame**: from lumen getting a key to the frame with the program's answer being handed to the compositor, split into the shell answering, the answer waiting for a frame, drawing and handing over. The compositor and the display add about one refresh on top.
+- **Cursor glides**: how many frames the cursor's 70 ms glide gets, and how far apart they are. On a 165 Hz display a smooth glide gets about 12, one every 6 ms.
+- **Frames**: how long a frame takes to draw, and the main thread's longest pauses with the line of code they were in.
+
+Before you trust a number:
+
+- Measure on an idle machine. `pulse load` says whether it is, and `scripts/lag.sh` won't measure on a busy one.
+- GPUI holds frames back: to 30 a second for a window without the focus, to 60 when the computer runs hot. The report says when frames came slower than the display's rate.
+- gamescope is not your desktop's compositor, and the scripted keys don't go through it. Use the hidden run to compare builds, and confirm a fix in a real window.
+
 ## This site
 
 The site is in the `site` folder of the same repository, and every page of these docs is a Markdown file in `site/src/content/docs`. Each page has a link at its end that opens it on GitHub for editing.

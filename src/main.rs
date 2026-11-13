@@ -11,6 +11,7 @@ mod graphics;
 mod instance;
 mod integration;
 mod keys;
+mod lag;
 mod links;
 mod mouse;
 mod palette;
@@ -270,10 +271,15 @@ fn main() {
     if let Some(status) = phone::run(&args).or_else(|| integration::run(&args)).or_else(|| update::run(&args)) {
         std::process::exit(status);
     }
-    let Started { spawn, how } = match parse_args(args.into_iter()) {
+    let Started { spawn, mut how } = match parse_args(args.into_iter()) {
         Ok(started) => started,
         Err(status) => std::process::exit(status),
     };
+    // a lumen that records its lag is one of its own (see lag.rs)
+    let measuring = cfg!(feature = "lag") && std::env::var_os("LUMEN_LAG").is_some_and(|path| !path.is_empty());
+    if measuring {
+        how = How::Process;
+    }
     // A lumen that runs already opens what was asked for, in a fraction of the time this
     // one would take to start: before anything of the GPU, the config or the fonts.
     if matches!(how, How::Join | How::Window)
@@ -298,6 +304,7 @@ fn main() {
         application = application.with_windowing(WindowingRequest::Headless).with_quit_mode(QuitMode::Explicit);
     }
     application.run(move |cx: &mut App| {
+        lag::start(cx);
         cx.set_global(config);
         fonts::init(cx);
         actions::bind(cx);
@@ -341,7 +348,9 @@ fn main() {
             }
         });
         pulse::init(cx);
-        instance::serve(daemon, cx);
+        if !measuring {
+            instance::serve(daemon, cx);
+        }
         if !daemon {
             if let Err(e) = open_window(spawn, cx) {
                 eprintln!("lumen: {e}");
@@ -349,6 +358,7 @@ fn main() {
                 std::process::exit(1);
             }
             cx.activate(true);
+            lag::drive(cx);
         }
         watch_config(cx);
     });

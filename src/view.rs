@@ -323,7 +323,8 @@ impl TerminalView {
     }
 
     /// Sends what was typed, and shows the prompt it went to.
-    fn send(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+    pub fn send(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        crate::lag::sent(bytes.len());
         let terminal = self.terminal.read(cx);
         terminal.clear_selection();
         terminal.scroll(Scroll::Bottom);
@@ -348,6 +349,7 @@ impl TerminalView {
             self.keys_down.push(event.keystroke.key.clone());
         }
         let press = if event.is_held { Press::Repeat } else { Press::Down };
+        crate::lag::key(&event.keystroke, event.is_held);
         if let Some(bytes) = keys::encode(&event.keystroke, self.mode(cx), press) {
             self.send(bytes, cx);
             cx.stop_propagation();

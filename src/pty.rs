@@ -115,6 +115,7 @@ impl<L: EventListener + Send + 'static> IoLoop<L> {
     fn read(&mut self, state: &mut State, buf: &mut [u8]) -> io::Result<()> {
         let mut unprocessed = 0;
         let mut processed = 0;
+        let started = Instant::now();
         // the next lock of the grid is this thread's
         let mut lease = Some(self.terminal.lease());
         let mut terminal = None;
@@ -182,6 +183,9 @@ impl<L: EventListener + Send + 'static> IoLoop<L> {
         }
         drop(terminal);
         drop(lease);
+        if processed > 0 {
+            crate::lag::read(started, processed);
+        }
 
         // nothing to draw if all of it was inside a synchronized update
         if state.parser.sync_bytes_count() < processed && processed > 0 {
@@ -201,8 +205,11 @@ impl<L: EventListener + Send + 'static> IoLoop<L> {
                     state.writing = Some((bytes, written));
                     return Ok(());
                 },
-                Ok(n) if written + n < bytes.len() => state.writing = Some((bytes, written + n)),
-                Ok(_) => {},
+                Ok(n) if written + n < bytes.len() => {
+                    crate::lag::written(n);
+                    state.writing = Some((bytes, written + n))
+                },
+                Ok(n) => crate::lag::written(n),
                 Err(e) => {
                     state.writing = Some((bytes, written));
                     return match e.kind() {
