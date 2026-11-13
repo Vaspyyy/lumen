@@ -31,9 +31,10 @@ use sha2::{Digest, Sha256};
 
 pub const USAGE: &str = "\
 UPDATES
-    lumen update                        bring lumen and its tools (glint, crux, recap, seek,
-                                        pulse) to their newest releases; a systemd timer
-                                        does it once a day
+    lumen update                        bring lumen, the tools made for it (glint, crux,
+                                        recap, seek, pulse and any later ones) and their
+                                        agent skills to their newest releases; a systemd
+                                        timer does it once a day
     lumen update --check                only say what is out
 ";
 
@@ -42,7 +43,12 @@ const GITHUB: &str = "https://github.com/Vaspyyy";
 /// module path's capitals as `!` and the letter.
 const PROXY: &str = "https://proxy.golang.org/github.com/!vaspyyy";
 const DOCS: &str = "https://vaspyyy.github.io/lumen/docs/install/#updates";
-const TOOLS: &[&str] = &["glint", "crux", "recap", "seek", "pulse"];
+/// The tools made for lumen, as this lumen knows them: the list in lumen's repository
+/// ([`TOOL_LIST`]) has the say, so that a new tool is updated without a new lumen.
+const TOOLS: &[&str] = &["glint", "crux", "recap", "seek", "pulse", "splice"];
+const TOOL_LIST: &str = "https://raw.githubusercontent.com/Vaspyyy/lumen/main/packaging/tools.txt";
+/// The tools' files by version, for their agent skills: `<RAW>/<tool>/<tag>/skill/SKILL.md`.
+const RAW: &str = "https://raw.githubusercontent.com/Vaspyyy";
 /// The archive of a release, for the one machine releases are built for.
 const ARCHIVE: &str = "lumen-x86_64-linux.tar.gz";
 /// Where an update unpacks a release, next to the program: one left by an update that
@@ -230,8 +236,10 @@ fn update(how: How) -> i32 {
     let mut report = Report::default();
     update_lumen(how, &mut told, &mut report);
     let go = find("go", &go_folders()).first().cloned();
-    for tool in TOOLS {
-        update_tool(tool, go.as_deref(), how, &mut told, &mut report);
+    for tool in tools() {
+        if let Some(version) = update_tool(&tool, go.as_deref(), how, &mut told, &mut report) {
+            update_skill(&tool, &version, go.as_deref(), how, &mut report);
+        }
     }
     if how == How::Timer {
         tell(&report, &mut told);
@@ -382,6 +390,19 @@ fn newest_tool(tool: &str, go: Option<&Path>) -> Result<(String, Version), Failu
     let version =
         Version::parse(&tag).ok_or_else(|| Failure::Again(format!("{tool} has no newest version: {tag:?}")))?;
     Ok((tag, version))
+}
+
+/// Whether a version is one Go made up for a commit without a tag (as @latest of a tool
+/// without releases is): `v0.0.0-20261113214351-05cf82c0ff12`. Only releases are
+/// installed, never the work on main.
+fn pseudo(tag: &str) -> bool {
+    let mut parts = tag.rsplitn(2, '-');
+    let (Some(commit), Some(rest)) = (parts.next(), parts.next()) else { return false };
+    let time = rest.rsplit(['-', '.']).next().unwrap_or_default();
+    commit.len() == 12
+        && commit.bytes().all(|b| b.is_ascii_hexdigit())
+        && time.len() == 14
+        && time.bytes().all(|b| b.is_ascii_digit())
 }
 
 fn update_lumen(how: How, told: &mut Told, report: &mut Report) {
@@ -556,23 +577,31 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn update_tool(tool: &str, go: Option<&Path>, how: How, told: &mut Told, report: &mut Report) {
+/// Updates a tool where it is installed, and gives the version it is at then.
+fn update_tool(tool: &str, go: Option<&Path>, how: How, told: &mut Told, report: &mut Report) -> Option<Version> {
     // a tool that isn't installed stays so, and so does another program of its name
-    let Some((program, ours)) = find_tool(tool, go) else { return };
+    let (program, ours) = find_tool(tool, go)?;
     let (tag, newest) = match newest_tool(tool, go) {
         Ok(found) => found,
-        Err(failure) => return report.failure(&failure),
+        Err(failure) => {
+            report.failure(&failure);
+            return Some(ours);
+        },
     };
+    if pseudo(&tag) {
+        println!("{tool} has no release yet, so it stays as it is");
+        return Some(ours);
+    }
     if newest <= ours {
         println!("{tool} {ours} is the newest");
-        return;
+        return Some(ours);
     }
     let Some(go) = go else {
         println!("{tool} {newest} is out (this is {ours}); updating it needs Go, which isn't installed");
         report
             .waiting
             .push((format!("{tool} {newest} needs Go"), format!("{tool} {newest} is out: updating it needs Go")));
-        return;
+        return Some(ours);
     };
     let folder = program.parent().unwrap_or(Path::new("/")).to_path_buf();
     if !writable(&folder) {
@@ -581,16 +610,17 @@ fn update_tool(tool: &str, go: Option<&Path>, how: How, told: &mut Told, report:
             format!("{tool} {newest} not writable"),
             format!("{tool} {newest} is out: {} is not yours to write to", folder.display()),
         ));
-        return;
+        return Some(ours);
     }
     let failed = format!("failed {tool} {newest}");
     if how == How::Timer && told.knows(&failed) {
         println!("{tool} {newest} is out, and could not be installed here; `lumen update` tries again");
-        return report.still_failing(&failed, &format!("{tool} {newest}"));
+        report.still_failing(&failed, &format!("{tool} {newest}"));
+        return Some(ours);
     }
     if how == How::Check {
         println!("{tool} {ours} → {newest}");
-        return;
+        return Some(ours);
     }
     let installed = Command::new(go)
         .args(["install", &format!("github.com/Vaspyyy/{tool}@{tag}")])
@@ -606,7 +636,7 @@ fn update_tool(tool: &str, go: Option<&Path>, how: How, told: &mut Told, report:
         {
             println!("{tool} {ours} → {newest}");
             report.updated.push(format!("{tool} {ours} → {newest}"));
-            return;
+            return Some(newest);
         },
         Ok(output) => {
             let why = format!("{tool} {newest} is out, and go install failed: {}", last_lines(&output.stderr));
@@ -618,6 +648,172 @@ fn update_tool(tool: &str, go: Option<&Path>, how: How, told: &mut Told, report:
         Err(e) => Failure::Again(format!("can't run go: {e}")),
     };
     report.failed(&failure, failed, how, told);
+    Some(ours)
+}
+
+/// The tools made for lumen: the list in lumen's repository, or where it can't be read,
+/// the ones this lumen knows.
+fn tools() -> Vec<String> {
+    fetch(TOOL_LIST)
+        .ok()
+        .map(|list| tool_names(&String::from_utf8_lossy(&list)))
+        .filter(|names| !names.is_empty())
+        .unwrap_or_else(|| TOOLS.iter().map(|name| name.to_string()).collect())
+}
+
+/// The names in the list of tools: one a line, `#` starts a remark. Only a plain name
+/// counts, since it becomes `github.com/Vaspyyy/<name>`, and lumen is updated apart.
+fn tool_names(list: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for line in list.lines() {
+        let name = line.split('#').next().unwrap_or_default().trim();
+        let plain = name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        if plain && !name.is_empty() && !name.starts_with('-') && name != "lumen" && !names.iter().any(|n| n == name) {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
+/// The folders agents keep their skills in: a tool's is `<folder>/<tool>/SKILL.md`.
+fn skill_folders() -> Vec<PathBuf> {
+    let home = dirs::home_dir().unwrap_or_default();
+    let config = dirs::config_dir().unwrap_or_else(|| home.join(".config"));
+    vec![
+        home.join(".claude/skills"),
+        config.join("opencode/skills"),
+        home.join(".agents/skills"),
+        home.join(".codex/skills"),
+    ]
+    .into_iter()
+    .filter(|dir| dir.is_absolute())
+    .collect()
+}
+
+/// Brings a tool's agent skill, wherever an agent has one, to the skill of the tool's
+/// version. Only a skill that is the one of a release is replaced: one changed by hand
+/// stays as it is.
+fn update_skill(tool: &str, version: &Version, go: Option<&Path>, how: How, report: &mut Report) {
+    let mut seen = BTreeSet::new();
+    let files: Vec<PathBuf> = skill_folders()
+        .into_iter()
+        .map(|dir| dir.join(tool).join("SKILL.md"))
+        .filter(|file| file.is_file())
+        // links followed, so that a skill linked from another agent's folder is one file
+        .map(|file| std::fs::canonicalize(&file).unwrap_or(file))
+        // one in a git checkout (the tool's own, where it is worked on) is the checkout's
+        .filter(|file| !file.ancestors().skip(1).any(|dir| dir.join(".git").exists()))
+        .filter(|file| seen.insert(file.clone()))
+        .collect();
+    if files.is_empty() {
+        return;
+    }
+    let cache = module_cache(go);
+    // a version without a skill, or one that can't be fetched now: next time
+    let Some(wanted) = skill_of(tool, version, cache.as_deref()) else { return };
+    let released = cached_skills(tool, cache.as_deref());
+    let mut updated = false;
+    for file in files {
+        match put_skill(&file, &wanted, &released, how) {
+            Skill::Current => {},
+            Skill::Changed => {
+                println!("{tool}'s skill in {} is none that a release had, so it stays as it is", file.display())
+            },
+            Skill::Old => println!("{tool}'s skill in {} → {version}", file.display()),
+            Skill::Replaced => {
+                println!("{tool}'s skill in {} → {version}", file.display());
+                updated = true;
+            },
+            Skill::Failed(why) => eprintln!("lumen: can't write {tool}'s skill in {}: {why}", file.display()),
+        }
+    }
+    if updated {
+        report.updated.push(format!("{tool}'s skill → {version}"));
+    }
+}
+
+/// What became of one skill file.
+#[derive(Debug, PartialEq)]
+enum Skill {
+    /// It is the skill of the tool's version already.
+    Current,
+    /// It is no released skill: changed by hand, so it stays.
+    Changed,
+    /// It is an older release's, and only checked.
+    Old,
+    /// It was an older release's, and is the new one now.
+    Replaced,
+    Failed(String),
+}
+
+/// Puts `wanted` in `file` if what is there is one of the `released` skills, through a
+/// file beside it that takes its place at once, so that no agent reads half a skill.
+fn put_skill(file: &Path, wanted: &[u8], released: &[Vec<u8>], how: How) -> Skill {
+    let Ok(have) = std::fs::read(file) else { return Skill::Failed("can't read it".into()) };
+    if have == wanted {
+        return Skill::Current;
+    }
+    if !released.contains(&have) {
+        return Skill::Changed;
+    }
+    if how == How::Check {
+        return Skill::Old;
+    }
+    let next = file.with_file_name(".SKILL.md.lumen-update");
+    let put = std::fs::write(&next, wanted)
+        .and_then(|()| match std::fs::metadata(file) {
+            Ok(meta) => std::fs::set_permissions(&next, meta.permissions()),
+            Err(e) => Err(e),
+        })
+        .and_then(|()| std::fs::rename(&next, file));
+    match put {
+        Ok(()) => Skill::Replaced,
+        Err(e) => {
+            let _ = std::fs::remove_file(&next);
+            Skill::Failed(e.to_string())
+        },
+    }
+}
+
+/// Go's module cache, where `go install` left the tools' files, each version's apart.
+fn module_cache(go: Option<&Path>) -> Option<PathBuf> {
+    if let Some(go) = go
+        && let Ok(output) = Command::new(go).args(["env", "GOMODCACHE"]).current_dir("/").stderr(Stdio::null()).output()
+    {
+        let said = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !said.is_empty() {
+            return Some(PathBuf::from(said));
+        }
+    }
+    std::env::var_os("GOMODCACHE")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join("go/pkg/mod")))
+        .filter(|dir| dir.is_absolute())
+}
+
+/// The skill of a tool's version: from Go's module cache, or fetched by its tag. None
+/// for a version without one.
+fn skill_of(tool: &str, version: &Version, cache: Option<&Path>) -> Option<Vec<u8>> {
+    let tag = format!("v{version}");
+    if let Some(cache) = cache
+        && let Ok(skill) = std::fs::read(cache.join(format!("github.com/!vaspyyy/{tool}@{tag}/skill/SKILL.md")))
+    {
+        return Some(skill);
+    }
+    fetch(&format!("{RAW}/{tool}/{tag}/skill/SKILL.md")).ok()
+}
+
+/// The skills of every version of a tool in Go's module cache.
+fn cached_skills(tool: &str, cache: Option<&Path>) -> Vec<Vec<u8>> {
+    let Some(entries) = cache.and_then(|cache| std::fs::read_dir(cache.join("github.com/!vaspyyy")).ok()) else {
+        return Vec::new();
+    };
+    let prefix = format!("{tool}@");
+    entries
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+        .filter_map(|entry| std::fs::read(entry.path().join("skill/SKILL.md")).ok())
+        .collect()
 }
 
 /// The program file of a tool and its version: the first on `PATH` or in Go's folders
@@ -807,6 +1003,46 @@ mod tests {
         let mut report = Report::default();
         report.still_failing("failed glint 1.0.0", "glint 1.0.0");
         assert!(report.news(&told).is_empty());
+    }
+
+    #[test]
+    fn a_commit_without_a_tag_is_no_release() {
+        assert!(pseudo("v0.0.0-20261113214351-05cf82c0ff12"));
+        assert!(pseudo("v0.5.3-0.20261113214351-05cf82c0ff12"));
+        assert!(pseudo("v1.2.0-rc.1.0.20261113214351-05cf82c0ff12"));
+        assert!(!pseudo("v0.5.2"));
+        assert!(!pseudo("v1.0.0-rc.1"));
+        assert!(!pseudo("v1.0.0-beta-05cf82c0ff12"));
+    }
+
+    #[test]
+    fn the_list_of_tools_takes_plain_names_once() {
+        let list = "# the tools\nglint\ncrux  # remark\n\nglint\nlumen\n../evil\nBig\n-x\nnew-tool2\n";
+        assert_eq!(tool_names(list), ["glint", "crux", "new-tool2"]);
+        assert!(tool_names("<html>Not Found</html>").is_empty());
+    }
+
+    #[test]
+    fn a_skill_is_replaced_only_when_a_release_had_it() {
+        let dir = std::env::temp_dir().join(format!("lumen-skill-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("SKILL.md");
+        let released = vec![b"old skill\n".to_vec(), b"older skill\n".to_vec()];
+
+        std::fs::write(&file, "new skill\n").unwrap();
+        assert_eq!(put_skill(&file, b"new skill\n", &released, How::ByHand), Skill::Current);
+
+        std::fs::write(&file, "old skill, and my own line\n").unwrap();
+        assert_eq!(put_skill(&file, b"new skill\n", &released, How::ByHand), Skill::Changed);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "old skill, and my own line\n");
+
+        std::fs::write(&file, "older skill\n").unwrap();
+        assert_eq!(put_skill(&file, b"new skill\n", &released, How::Check), Skill::Old);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "older skill\n");
+        assert_eq!(put_skill(&file, b"new skill\n", &released, How::Timer), Skill::Replaced);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "new skill\n");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "the file beside it is gone");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -1,0 +1,10 @@
+# The tools made for lumen, which `lumen update` keeps up to date where they are
+# installed, with their agent skills: one name a line, each the Go module
+# github.com/Vaspyyy/<name>. lumen update reads this file from GitHub's main
+# branch, so a tool added here is updated by every lumen from then on.
+glint
+crux
+recap
+seek
+pulse
+splice
