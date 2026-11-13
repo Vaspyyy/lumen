@@ -606,10 +606,16 @@ impl Workspace {
 
     /// `lumen settings`, in a tab that closes when it ends: what `/settings` at a prompt
     /// opens. The window behind it shows each change as it is made.
+    /// `lumen settings`, in a tab that closes when it ends: what `/settings` at a prompt
+    /// opens. The window behind it shows each change as it is made.
     fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let program = std::env::current_exe().map_or_else(|_| "lumen".into(), |exe| exe.to_string_lossy().into_owned());
-        let spawn =
-            Spawn { cwd: dirs::home_dir(), command: Some(vec![program, "settings".into()]), env: self.pane_env(cx) };
+        // after an update, the program this lumen runs from is gone: the new one is there
+        let program = std::fs::read_link("/proc/self/exe")
+            .or_else(|_| std::env::current_exe())
+            .map(|exe| exe.to_string_lossy().trim_end_matches(" (deleted)").to_string())
+            .unwrap_or_else(|_| "lumen".into());
+        let command = vec![program, "settings".into(), "--in-tab".into()];
+        let spawn = Spawn { cwd: dirs::home_dir(), command: Some(command), env: self.pane_env(cx) };
         match self.open(spawn, (1., 1.), window, cx) {
             Ok(pane) => self.push_tab(pane, window, cx),
             Err(e) => self.say(format!("Can't open the settings: {e}"), cx),
@@ -686,7 +692,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> std::io::Result<Entity<TerminalView>> {
-        let ready = if spawn.command.is_none() { self.take_spare(&spawn, window, cx) } else { None };
+        let ready = if spawn.command.is_none() { self.take_spare(&spawn) } else { None };
         let pane = match ready {
             Some(pane) => pane,
             None => self.open(spawn, (1., 1.), window, cx)?,
@@ -741,20 +747,17 @@ impl Workspace {
         }
     }
 
-    /// The shell that was started ahead of time, if it was started where
-    /// `spawn` would start one.
-    fn take_spare(&mut self, spawn: &Spawn, window: &mut Window, cx: &mut Context<Self>) -> Option<Pane> {
-        let spare = self.spare.take()?;
-        if spare.cwd == spawn.cwd && spare.env == spawn.env {
-            return Some(spare.pane);
-        }
-        self.forget(&spare.pane, window, cx);
-        None
+    /// The shell that was started ahead of time, if it was started where `spawn` would
+    /// start one. One that doesn't fit stays for the next tab, which it may fit (a split
+    /// starts in its pane's folder, a new tab where `new_tab_folder` says).
+    fn take_spare(&mut self, spawn: &Spawn) -> Option<Pane> {
+        let fits = self.spare.as_ref().is_some_and(|spare| spare.cwd == spawn.cwd && spare.env == spawn.env);
+        fits.then(|| self.spare.take().map(|spare| spare.pane)).flatten()
     }
 
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         let spawn = self.spawn_tab(cx);
-        let ready = self.take_spare(&spawn, window, cx);
+        let ready = self.take_spare(&spawn);
         match ready.map(Ok).unwrap_or_else(|| self.open(spawn, (1., 1.), window, cx)) {
             Ok(pane) => self.push_tab(pane, window, cx),
             Err(e) => self.report("can't open a tab", e),
@@ -815,7 +818,7 @@ impl Workspace {
         };
         // the spare was laid out for a whole tab; its shell is told the new size like any resized one
         let spawn = self.spawn_here(cx);
-        let ready = self.take_spare(&spawn, window, cx);
+        let ready = self.take_spare(&spawn);
         let pane = match ready.map(Ok).unwrap_or_else(|| self.open(spawn, share, window, cx)) {
             Ok(pane) => pane,
             Err(e) => return self.report("can't split", e),

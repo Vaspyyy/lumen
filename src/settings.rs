@@ -23,28 +23,31 @@ pub fn run(args: &[String]) -> Option<i32> {
     if command != "settings" {
         return None;
     }
-    if let Some(extra) = rest.first() {
+    // the tab /settings opens closes when the menu ends: a reason it can't start waits
+    let in_tab = rest.first().is_some_and(|flag| flag == "--in-tab");
+    if let Some(extra) = rest.get(usize::from(in_tab)) {
         eprintln!("lumen: settings takes nothing more, not {extra:?} (see lumen --help)");
         return Some(2);
     }
+    let fail = |why: String| {
+        eprintln!("lumen: {why}");
+        if in_tab {
+            eprintln!("\nEnter closes this tab.");
+            let _ = std::io::stdin().read_line(&mut String::new());
+        }
+        Some(1)
+    };
     // SAFETY: isatty on the process's own descriptors
     if unsafe { libc::isatty(0) == 0 || libc::isatty(1) == 0 } {
-        eprintln!("lumen: settings needs a terminal; the settings are in {}", Config::path().display());
-        return Some(1);
+        return fail(format!("settings needs a terminal; the settings are in {}", Config::path().display()));
     }
     let mut menu = match Menu::open() {
         Ok(menu) => menu,
-        Err(why) => {
-            eprintln!("lumen: {why}");
-            return Some(1);
-        },
+        Err(why) => return fail(why),
     };
     let raw = match Raw::enter() {
         Ok(raw) => raw,
-        Err(e) => {
-            eprintln!("lumen: can't take the terminal for the menu: {e}");
-            return Some(1);
-        },
+        Err(e) => return fail(format!("can't take the terminal for the menu: {e}")),
     };
     menu.run();
     drop(raw);
@@ -301,7 +304,7 @@ impl Menu {
                 }
                 continue;
             }
-            let mut buf = [0u8; 256];
+            let mut buf = [0u8; 4096];
             // SAFETY: read into a buffer of its own length
             let n = unsafe { libc::read(0, buf.as_mut_ptr().cast(), buf.len()) };
             if n <= 0 {
@@ -512,7 +515,7 @@ impl Menu {
             Ok(()) => {
                 (self.doc, self.text) = (doc, text);
                 let item = self.item();
-                let value = shown((item.get)(&self.config()));
+                let value = shown(item.kind, (item.get)(&self.config()));
                 self.say(format!("{} is {value} now", item.label), true);
             },
             Err(e) => self.say(format!("can't write {}: {e}", self.path.display()), false),
@@ -560,7 +563,7 @@ impl Menu {
             match row {
                 Row::Heading(name) => line(&mut out, &format!("  \x1b[1m{name}")),
                 Row::Setting(item) => {
-                    let value = shown((item.get)(&config));
+                    let value = shown(item.kind, (item.get)(&config));
                     let value = if self.is_set(item) { value } else { format!("\x1b[2m{value}") };
                     let label = format!("{:<label_width$}", item.label);
                     if index == self.at {
@@ -617,12 +620,17 @@ fn number(n: f64, min: f64, max: f64, decimals: usize) -> toml_edit::Item {
     if decimals == 0 && max > 1000. { toml_edit::value(n as i64) } else { toml_edit::value(n) }
 }
 
-fn shown(value: Value) -> String {
+/// A value as the menu shows it: a number to its setting's decimals (the config keeps
+/// it as an f32, whose 0.95 is 0.949999988… as an f64), without zeros at the end.
+fn shown(kind: Kind, value: Value) -> String {
     match value {
         Value::Bool(true) => "on".into(),
         Value::Bool(false) => "off".into(),
-        Value::Number(n) if n.fract() == 0. => format!("{n:.0}"),
-        Value::Number(n) => format!("{n}"),
+        Value::Number(n) => {
+            let decimals = if let Kind::Number { decimals, .. } = kind { decimals } else { 2 };
+            let text = format!("{n:.decimals$}");
+            if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.').to_string() } else { text }
+        },
         Value::Text(text) => text,
     }
 }
@@ -716,6 +724,9 @@ fn parse_keys(bytes: &[u8]) -> Vec<Key> {
                     chars.next();
                     continue;
                 },
+                // Esc alone; one at the very end of a full read is the start of a
+                // sequence cut in two, not a key
+                (None, _) if bytes.len() >= 4096 => continue,
                 _ => Key::Escape,
             },
             '\r' | '\n' => Key::Enter,
@@ -949,6 +960,18 @@ mod tests {
         menu.key(Key::Enter);
         assert_eq!(menu.config().window.opacity, 1.0, "7 is kept at the end, 1");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn numbers_are_shown_to_their_decimals() {
+        let opacity = Kind::Number { step: 0.05, min: 0., max: 1., decimals: 2 };
+        assert_eq!(shown(opacity, Value::Number(0.95f32.into())), "0.95");
+        assert_eq!(shown(opacity, Value::Number(1.0)), "1");
+        assert_eq!(shown(opacity, Value::Number(1.2f32.into())), "1.2");
+        let size = Kind::Number { step: 0.5, min: 4., max: 96., decimals: 1 };
+        assert_eq!(shown(size, Value::Number(12.5)), "12.5");
+        let lines = Kind::Number { step: 1000., min: 0., max: 1e6, decimals: 0 };
+        assert_eq!(shown(lines, Value::Number(10000.)), "10000");
     }
 
     #[test]

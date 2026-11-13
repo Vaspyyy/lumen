@@ -184,6 +184,9 @@ pub struct TerminalView {
     motion: Rc<Cell<Motion>>,
     /// Text an input method is still composing.
     composing: Option<String>,
+    /// When a slash word was last taken at the prompt: an Enter right after, while the
+    /// line the shell is clearing still shows it, isn't taken again.
+    slash_at: Option<Instant>,
     /// Where the mouse is, while it is over this pane.
     mouse: Option<Point<Pixels>>,
     modifiers: Modifiers,
@@ -291,6 +294,7 @@ impl TerminalView {
             motion: Rc::default(),
             // for a screenshot of composed text, where there is no input method to compose it
             composing: std::env::var("LUMEN_COMPOSING").ok().filter(|_| crate::preview()),
+            slash_at: None,
             mouse: None,
             modifiers: Modifiers::default(),
             hover: None,
@@ -352,8 +356,12 @@ impl TerminalView {
             && event.keystroke.modifiers == Modifiers::default()
             && let Some(slash) = self.terminal.read(cx).typing().as_deref().and_then(slash::parse)
         {
-            self.send(b"\x15".to_vec(), cx);
-            cx.emit(ViewEvent::Slash(slash));
+            // a second Enter before the shell has cleared the line: the word was taken
+            if !self.slash_at.is_some_and(|at| at.elapsed() < Duration::from_secs(1)) {
+                self.slash_at = Some(Instant::now());
+                self.send(b"\x15".to_vec(), cx);
+                cx.emit(ViewEvent::Slash(slash));
+            }
             cx.stop_propagation();
             return;
         }
