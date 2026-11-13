@@ -33,6 +33,7 @@ use crate::keys::Press;
 use crate::links::{self, Target};
 use crate::palette;
 use crate::pulse::{self, Pulse};
+use crate::slash::{self, Slash};
 use crate::terminal::{CommandEvent, Listener, Started, Terminal, TerminalEvent};
 use crate::{keys, mouse};
 
@@ -55,6 +56,8 @@ pub enum ViewEvent {
     Edit { path: PathBuf, line: u32, column: Option<u32> },
     /// The program has something to tell the user.
     Notify(commands::Note),
+    /// A slash word of lumen's was typed at the prompt: see [`crate::slash`].
+    Slash(Slash),
 }
 
 /// A line of the screen, as it is read for what its text names: taken while
@@ -341,6 +344,17 @@ impl TerminalView {
             if self.search_key(&event.keystroke, cx) {
                 cx.stop_propagation();
             }
+            return;
+        }
+        // `/settings` and Enter at a prompt is lumen's: the shell never sees the line,
+        // which is taken back as Ctrl+U takes it in fish, bash and zsh.
+        if event.keystroke.key == "enter"
+            && event.keystroke.modifiers == Modifiers::default()
+            && let Some(slash) = self.terminal.read(cx).typing().as_deref().and_then(slash::parse)
+        {
+            self.send(b"\x15".to_vec(), cx);
+            cx.emit(ViewEvent::Slash(slash));
+            cx.stop_propagation();
             return;
         }
         // The press is the program's from here on, as bytes now or as text through

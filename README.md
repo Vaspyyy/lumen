@@ -171,6 +171,8 @@ src/
   instance.rs   one lumen for all windows: launches and the daemon
   update.rs     lumen update: lumen, its tools and their skills at their newest releases
   config.rs     the config file
+  settings.rs   lumen settings: the config file in a menu
+  slash.rs      /settings and the other words at a prompt that are lumen's
   terminal.rs   a running terminal: the program, its PTY, its grid
   pty.rs        the thread that reads what the program prints and writes what is typed
   graphics.rs   inline images: the kitty graphics protocol

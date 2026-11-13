@@ -65,6 +65,14 @@ These need no window. They run in any terminal, and over SSH.
 
 [lumen on your phone](/docs/phone/) is where to start, [How the phone logs in](/docs/phone-security/) says what pairing changes on the PC, and [Terminals that keep running](/docs/kept-terminals/) is about `attach` and `sessions`.
 
+## Settings
+
+| Command | Does |
+| --- | --- |
+| `lumen settings` | Opens the settings in a menu in the terminal. Each change is saved and shows at once. `/settings` typed at a prompt opens it too |
+
+[Configuration](/docs/configuration/#the-settings-menu) says what the menu changes, and what it leaves alone.
+
 ## Updates
 
 | Command | Does |

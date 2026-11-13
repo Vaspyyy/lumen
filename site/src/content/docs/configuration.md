@@ -11,6 +11,12 @@ lumen reads one file:
 
 If you have moved your config folder with `XDG_CONFIG_HOME`, the file is there. `lumen --config-path` prints the place.
 
+## The settings menu
+
+`lumen settings`, or `/settings` typed at a prompt, opens the most used settings in a menu: the arrows move and change, Enter flips a switch or lets you type (a font's name, a folder), `r` puts one back to its default, and `q` leaves. Each change is written to the file at once, so the window behind the menu shows it as you go. What else the file says stays as it is: your comments, the order, and the settings the menu doesn't show. A setting the file doesn't set is shown dim, at its default.
+
+`/settings` is taken only as those exact words at a prompt, with Enter: the shell never sees them, and a path like `/usr/bin/htop` still goes to the shell. It needs the shell to mark its prompts (fish 4.0 and newer do; bash and zsh need [one line](/docs/commands/#setting-up-your-shell)). Typed at a prompt, `/settings` opens the menu in a tab of its own, which closes when you leave it.
+
 The file doesn't have to exist. Without it, and for every setting you leave out, lumen uses its defaults.
 
 ## Saving is enough
@@ -37,6 +43,7 @@ notifications = true       # programs may post on the desktop
 # shell = "/usr/bin/fish"  # your own shell if unset
 prewarm = false            # a new tab is there at once
 launch = "tab"             # starting lumen again: tab, window, process
+new_tab_folder = "current" # where a new tab starts: current, home, or a folder
 
 [font]
 family = "monospace"       # the system's fixed-width font
@@ -85,6 +92,7 @@ The `[colors]` table has more in it: the cursor's colors, the selection's, and t
 | `shell` | unset | The program a new tab or pane runs: its path, without arguments. Unset, it is your shell, as `$SHELL` names it |
 | `prewarm` | `false` | Keeps one shell started ahead of time. See [Instant tabs](/docs/instant-tabs/) |
 | `launch` | `"tab"` | What `lumen` opens when a lumen runs already: `"tab"`, a tab in the window you used last; `"window"`, a window of the lumen that runs; `"process"`, a lumen of its own. See [Opening lumen again](/docs/launching/) |
+| `new_tab_folder` | `"current"` | Where a new tab starts: `"current"`, the folder of the pane you are in; `"home"`, your home folder; or a folder, such as `"/"` or `"~/Projekte"`. A split always starts beside the pane it splits. A folder that isn't there (on a drive that isn't plugged in) is left aside for that tab. See [Tabs and splits](/docs/tabs-and-splits/#where-a-new-one-starts) |
 
 ## `[font]`
 

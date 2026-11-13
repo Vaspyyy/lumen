@@ -18,6 +18,8 @@ mod palette;
 mod phone;
 mod pty;
 mod pulse;
+mod settings;
+mod slash;
 mod terminal;
 mod update;
 mod view;
@@ -93,7 +95,9 @@ fn help_text(color: bool) -> String {
         paint("38;5;59", &format!("v{}", env!("CARGO_PKG_VERSION"))),
         paint("38;5;146;3", "a terminal emulator"),
     );
-    for line in format!("{USAGE}\n{}\n{}\n{}", update::USAGE, integration::USAGE, phone::USAGE).lines() {
+    for line in
+        format!("{USAGE}\n{}\n{}\n{}\n{}", settings::USAGE, update::USAGE, integration::USAGE, phone::USAGE).lines()
+    {
         if line.is_empty() {
             text.push('\n');
         } else if line.starts_with(|c: char| c.is_ascii_uppercase()) {
@@ -273,7 +277,11 @@ fn watch_config(cx: &mut App) {
 fn main() {
     // the commands for phones work over SSH, with no display: before anything of the window
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if let Some(status) = phone::run(&args).or_else(|| integration::run(&args)).or_else(|| update::run(&args)) {
+    if let Some(status) = phone::run(&args)
+        .or_else(|| integration::run(&args))
+        .or_else(|| update::run(&args))
+        .or_else(|| settings::run(&args))
+    {
         std::process::exit(status);
     }
     let Started { spawn, mut how } = match parse_args(args.into_iter()) {
