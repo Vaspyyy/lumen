@@ -59,7 +59,7 @@ When the daemon's last window closes, it doesn't end. It lets go of the display 
 
 The daemon is started by systemd, as a service of your user:
 
-- **The install script** ([Install](/docs/install/#any-other-distribution)) and **`scripts/install.sh`** install the service and turn it on, where systemd runs for your user. With `LUMEN_DAEMON=0` in front of the command they leave it out. A service you turned off stays off when you install an update.
+- **The install script** ([Install](/docs/install/#any-other-distribution)) and **`scripts/install.sh`** install the service and turn it on, where systemd runs for your user. With `LUMEN_DAEMON=0` in front of the command they leave it out. A service you turned off stays off when you install an update, and one you changed by hand stays as it is ([Install](/docs/install/#updates) says how to change it so that updates keep the change).
 - **The packages** install the service, but leave it off, as packages do. Turn it on with:
 
 ```sh

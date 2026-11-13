@@ -221,7 +221,9 @@ case $kind in
         grep -q "can't be found, using" /tmp/window.log || fail "lumen did not say which font it took instead"
 
         step "a second time, over the first"
-        as_tester "$fetched"
+        as_tester "$fetched" >/tmp/out 2>&1
+        cat /tmp/out
+        ! grep -q "not the one lumen comes with" /tmp/out || fail "install.sh took its own units for someone else's"
 
         step "a damaged download is refused"
         cp "$release/lumen-x86_64-linux.tar.gz" /tmp/whole.tar.gz
@@ -233,12 +235,16 @@ case $kind in
         refused "HOME=$home LUMEN_BIN_DIR=$home/rootbin $fetched sh $here/install.sh" "without sudo"
         [ ! -e "$home/rootbin" ] || fail "root made a folder in the user's home"
 
-        step "removed"
+        step "removed, all but a timer changed by hand"
+        timer=$home/.config/systemd/user/lumen-update.timer
+        su tester -c "sed -i 's/^OnCalendar=daily\$/OnCalendar=hourly/' $timer"
         as_tester "" --uninstall
         [ ! -e "$home/.local/bin/lumen" ] && [ ! -e "$home/.local/share/applications/lumen.desktop" ] || fail "something is left after --uninstall"
-        for unit in lumen.service lumen-update.service lumen-update.timer; do
+        for unit in lumen.service lumen-update.service; do
             [ ! -e "$home/.config/systemd/user/$unit" ] || fail "$unit is left after --uninstall"
         done
+        grep -qx "OnCalendar=hourly" "$timer" || fail "--uninstall removed a timer changed by hand"
+        rm -f -- "$timer"
 
         step "another program called lumen is neither written over nor removed"
         su tester -c "printf '#!/bin/sh\necho another lumen\n' > $home/.local/bin/lumen && chmod +x $home/.local/bin/lumen"

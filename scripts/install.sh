@@ -16,16 +16,19 @@ install -Dm644 packaging/lumen.desktop "$data/applications/lumen.desktop"
 units=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
 # quoted as systemd reads a path: \ and " escaped, % and $ doubled
 quoted=$(printf '%s' "$program" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/%/%%/g' -e 's/\$/$$/g')
-# Whether $1 is a service or timer lumen ships: each starts with its own line, as
-# packaging/install.sh knows them.
+# Whether $1 is a service or timer lumen wrote and nobody changed since: each ends
+# with a checksum of the lines above it, as packaging/install.sh writes them. One
+# changed or written by hand stays as it is (`systemctl --user edit` keeps changes
+# in a drop-in, which an install leaves alone).
+seal='# Written by lumen'"'"'s installer, which replaces it while this checksum fits:'
+unit_sum() {
+    grep -v -F -e "$seal" "$1" | sha256sum 2>/dev/null | cut -d ' ' -f 1
+}
 ours() {
-    case ${1##*/} in
-        lumen.service) mark='# Keeps a lumen running without a window from login on' ;;
-        lumen-update.service) mark='# Updates lumen and the tools made for it' ;;
-        lumen-update.timer) mark='# Starts lumen-update.service once a day' ;;
-        *) return 1 ;;
-    esac
-    head -n 1 "$1" | grep -q -F -e "$mark"
+    sealed=$(grep -F -e "$seal" "$1" 2>/dev/null | tail -n 1)
+    sealed=${sealed#"$seal "}
+    sum=$(unit_sum "$1")
+    [ -n "$sum" ] && [ "$sealed" = "$sum" ]
 }
 # install_unit ENABLE FILE...: writes the files, then turns ENABLE on. A file that is
 # not one lumen ships stays as it is, and one you turned off stays off.
@@ -48,6 +51,7 @@ install_unit() {
             /^ExecStart=\/usr\/bin\/lumen / { sub(/^ExecStart=\/usr\/bin\/lumen/, ""); print "ExecStart=\"" ENVIRON["LUMEN_EXEC"] "\"" $0; next }
             { print }
         ' "packaging/$file" >"$units/$file"
+        printf '%s %s\n' "$seal" "$(unit_sum "$units/$file")" >>"$units/$file"
     done
     systemctl --user daemon-reload || true
     # a daemon from before makes way for the new program by itself, once it has no window open

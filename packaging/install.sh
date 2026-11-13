@@ -54,16 +54,20 @@ our_entry() {
     grep -q '^Icon=lumen$' "$1" 2>/dev/null && grep -q '^Categories=.*TerminalEmulator' "$1" 2>/dev/null
 }
 
-# The same question for a service or a timer: each one lumen ships starts with
-# its own line. One written by hand, for lumen too, stays as it is.
+# The same question for a service or a timer. Each one this script writes ends
+# with a checksum of the lines above it: while it fits, lumen wrote the file and
+# nobody changed it since, so it may be replaced or removed. One changed or written
+# by hand, for lumen too, stays as it is. (`systemctl --user edit` keeps changes
+# in a drop-in of their own, which updates leave alone.)
+seal='# Written by lumen'"'"'s installer, which replaces it while this checksum fits:'
+unit_sum() {
+    grep -v -F -e "$seal" "$1" | sha256sum 2>/dev/null | cut -d ' ' -f 1
+}
 our_unit() {
-    case ${1##*/} in
-        lumen.service) mark='# Keeps a lumen running without a window from login on' ;;
-        lumen-update.service) mark='# Updates lumen and the tools made for it' ;;
-        lumen-update.timer) mark='# Starts lumen-update.service once a day' ;;
-        *) return 1 ;;
-    esac
-    head -n 1 "$1" 2>/dev/null | grep -q -F -e "$mark"
+    sealed=$(grep -F -e "$seal" "$1" 2>/dev/null | tail -n 1)
+    sealed=${sealed#"$seal "}
+    sum=$(unit_sum "$1")
+    [ -n "$sum" ] && [ "$sealed" = "$sum" ]
 }
 
 # Whether systemd runs for this user, so that a service can be started.
@@ -286,6 +290,7 @@ write_unit() {
         /^ExecStart=\/usr\/bin\/lumen / { sub(/^ExecStart=\/usr\/bin\/lumen/, ""); print "ExecStart=" ENVIRON["LUMEN_EXEC"] $0; next }
         { print }
     ' "$1/$2" >"$unit_dir/$2"
+    printf '%s %s\n' "$seal" "$(unit_sum "$unit_dir/$2")" >>"$unit_dir/$2"
 }
 
 # Whether the user turned $1 off: it is there, and not enabled.

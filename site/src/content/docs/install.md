@@ -135,6 +135,8 @@ systemctl --user enable --now lumen-update.timer
 
 `systemctl --user disable --now lumen-update.timer` turns it off again, and stays so through updates.
 
+To change how the daemon or the daily update runs, use `systemctl --user edit lumen` or `systemctl --user edit lumen-update.timer`: the change goes into a file of its own, which installs and updates leave alone. A unit file in `~/.config/systemd/user` that you change in place, or write yourself, is yours from then on: the install scripts and `--uninstall` leave it as it is, and it gets no more changes from lumen.
+
 A lumen that is running keeps running the old version until you close its windows. The [daemon](#the-daemon) then makes way for the new version by itself. The [release notes](/releases/) say what changed, and have a [feed](/rss.xml) to follow.
 
 ## Remove it

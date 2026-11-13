@@ -175,6 +175,34 @@ struct Report {
 }
 
 impl Report {
+    /// An install that failed. One that would fail again the same way (`failed`, as
+    /// `failed seek 0.5.3`) isn't tried again by the timer for this version, and the owner
+    /// hears of it once: by notification when the timer ran, in the terminal by hand. The
+    /// notice has its own key, so that noting the failure doesn't count as telling of it.
+    fn failed(&mut self, failure: &Failure, failed: String, how: How, told: &mut Told) {
+        if let Failure::Lasting(why) = failure {
+            let notice = format!("told {failed}");
+            if how == How::ByHand {
+                told.note(notice.clone());
+            }
+            told.note(failed);
+            self.waiting.push((notice, why.clone()));
+        }
+        self.failure(failure);
+    }
+
+    /// The timer skipped what failed before (`failed`) for good: the owner is still told
+    /// of it if the notice couldn't be shown when it failed.
+    fn still_failing(&mut self, failed: &str, what: &str) {
+        self.waiting
+            .push((format!("told {failed}"), format!("{what} could not be installed; `lumen update` says why")));
+    }
+
+    /// What waits for the owner and wasn't told yet.
+    fn news(&self, told: &Told) -> Vec<&(String, String)> {
+        self.waiting.iter().filter(|(key, _)| !told.knows(key)).collect()
+    }
+
     fn failure(&mut self, failure: &Failure) {
         match failure {
             Failure::Again(why) => {
@@ -388,7 +416,7 @@ fn update_lumen(how: How, told: &mut Told, report: &mut Report) {
     let failed = format!("failed lumen {newest}");
     if how == How::Timer && told.knows(&failed) {
         println!("lumen {newest} is out, and could not be installed here; `lumen update` tries again");
-        return;
+        return report.still_failing(&failed, &format!("lumen {newest}"));
     }
     if how == How::Check {
         println!("lumen {ours} → {newest}");
@@ -399,13 +427,11 @@ fn update_lumen(how: How, told: &mut Told, report: &mut Report) {
             println!("lumen {ours} → {newest}");
             report.updated.push(format!("lumen {ours} → {newest}"));
         },
-        Err(failure) => {
-            if let Failure::Lasting(why) = &failure {
-                told.note(failed.clone());
-                report.waiting.push((failed, format!("lumen {newest} could not be installed: {why}")));
-            }
-            report.failure(&failure);
+        Err(Failure::Lasting(why)) => {
+            let why = format!("lumen {newest} could not be installed: {why}");
+            report.failed(&Failure::Lasting(why), failed, how, told);
         },
+        Err(failure) => report.failed(&failure, failed, how, told),
     }
 }
 
@@ -560,7 +586,7 @@ fn update_tool(tool: &str, go: Option<&Path>, how: How, told: &mut Told, report:
     let failed = format!("failed {tool} {newest}");
     if how == How::Timer && told.knows(&failed) {
         println!("{tool} {newest} is out, and could not be installed here; `lumen update` tries again");
-        return;
+        return report.still_failing(&failed, &format!("{tool} {newest}"));
     }
     if how == How::Check {
         println!("{tool} {ours} → {newest}");
@@ -591,11 +617,7 @@ fn update_tool(tool: &str, go: Option<&Path>, how: How, told: &mut Told, report:
         },
         Err(e) => Failure::Again(format!("can't run go: {e}")),
     };
-    if let Failure::Lasting(why) = &failure {
-        told.note(failed.clone());
-        report.waiting.push((failed, why.clone()));
-    }
-    report.failure(&failure);
+    report.failed(&failure, failed, how, told);
 }
 
 /// The program file of a tool and its version: the first on `PATH` or in Go's folders
@@ -688,7 +710,7 @@ fn go_folders() -> Vec<PathBuf> {
 /// Says on the desktop what the update did, and what is out but waits for the owner, each
 /// once. A notice that couldn't be shown is shown next time.
 fn tell(report: &Report, told: &mut Told) {
-    let news: Vec<&(String, String)> = report.waiting.iter().filter(|(key, _)| !told.knows(key)).collect();
+    let news = report.news(told);
     let mut lines = report.updated.clone();
     lines.extend(news.iter().map(|(_, line)| line.clone()));
     if lines.is_empty() {
@@ -758,6 +780,33 @@ mod tests {
         // a folder named target is no build without cargo's mark
         assert!(matches!(kind(&file("target/bin/lumen")), Kind::Ours(dir) if dir.ends_with("target/bin")));
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_lasting_failure_is_told_once_and_not_tried_again_by_the_timer() {
+        let mut told = Told { file: None, lines: BTreeSet::new(), changed: false };
+        let lasting = || Failure::Lasting("go install failed".into());
+
+        // the timer's run: the notice is news, and the version is skipped from now on
+        let mut report = Report::default();
+        report.failed(&lasting(), "failed seek 0.5.3".into(), How::Timer, &mut told);
+        assert!(told.knows("failed seek 0.5.3"));
+        assert_eq!(report.news(&told).len(), 1);
+
+        // shown: the next run skips the version and says nothing
+        let shown: Vec<String> = report.news(&told).iter().map(|(key, _)| key.clone()).collect();
+        shown.into_iter().for_each(|key| told.note(key));
+        let mut report = Report::default();
+        report.still_failing("failed seek 0.5.3", "seek 0.5.3");
+        assert!(report.news(&told).is_empty());
+
+        // by hand, the terminal said it: no notification follows
+        let mut report = Report::default();
+        report.failed(&lasting(), "failed glint 1.0.0".into(), How::ByHand, &mut told);
+        assert!(report.news(&told).is_empty());
+        let mut report = Report::default();
+        report.still_failing("failed glint 1.0.0", "glint 1.0.0");
+        assert!(report.news(&told).is_empty());
     }
 
     #[test]
