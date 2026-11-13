@@ -498,7 +498,7 @@ fn kind(exe: &Path) -> Kind {
     Kind::Ours(dir.to_path_buf())
 }
 
-/// Whether this user may write to a folder.
+/// Whether this user may write `path`, a folder or a file.
 fn writable(dir: &Path) -> bool {
     let Ok(path) = std::ffi::CString::new(dir.as_os_str().as_bytes()) else { return false };
     // SAFETY: access with a string that ends with its NUL
@@ -730,7 +730,8 @@ fn update_skill(
     told: &mut Told,
     report: &mut Report,
 ) {
-    let home = dirs::home_dir().unwrap_or_default();
+    // as the files are: links followed, so that a home behind a link is known as one
+    let home = dirs::home_dir().map(|home| std::fs::canonicalize(&home).unwrap_or(home)).unwrap_or_default();
     let mut seen = BTreeSet::new();
     let files: Vec<PathBuf> = skill_folders()
         .into_iter()
@@ -762,9 +763,14 @@ fn update_skill(
         match put_skill(&file, &wanted, &released, how) {
             Skill::Current => {},
             Skill::Changed => {
-                println!("{tool}'s skill in {} is none that a release had, so it stays as it is", file.display())
+                println!(
+                    "{tool}'s skill in {} isn't one lumen knows from a release, so it stays as it is",
+                    file.display()
+                )
             },
-            Skill::Pinned => println!("{tool}'s skill in {} is read-only, so it stays as it is", file.display()),
+            Skill::Pinned => {
+                println!("{tool}'s skill in {} is not yours to write, so it stays as it is", file.display())
+            },
             Skill::Old => println!("{tool}'s skill in {} → {now}", file.display()),
             Skill::Replaced => {
                 println!("{tool}'s skill in {} → {now}", file.display());
@@ -798,7 +804,7 @@ enum Skill {
     Current,
     /// It is no released skill: changed by hand, so it stays.
     Changed,
-    /// It is read-only: kept as it is on purpose.
+    /// It is read-only, or someone else's: kept as it is.
     Pinned,
     /// It is an older release's, and only checked.
     Old,
@@ -818,7 +824,9 @@ fn put_skill(file: &Path, wanted: &[u8], released: &[Vec<u8>], how: How) -> Skil
         return Skill::Changed;
     }
     let Ok(meta) = std::fs::metadata(file) else { return Skill::Failed("can't read it".into()) };
-    if meta.permissions().readonly() {
+    // read-only on purpose, or someone else's (copied in with sudo): the folder may let a
+    // rename replace it, but the file says no
+    if !writable(file) {
         return Skill::Pinned;
     }
     if how == How::Check {
