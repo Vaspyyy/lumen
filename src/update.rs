@@ -871,8 +871,15 @@ fn module_cache(go: Option<&Path>) -> Option<PathBuf> {
             return Some(PathBuf::from(said));
         }
     }
+    // as Go finds it: GOMODCACHE, or the first GOPATH's pkg/mod, or ~/go/pkg/mod
     std::env::var_os("GOMODCACHE")
+        .filter(|dir| !dir.is_empty())
         .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("GOPATH")
+                .and_then(|gopath| std::env::split_paths(&gopath).find(|dir| !dir.as_os_str().is_empty()))
+                .map(|gopath| gopath.join("pkg/mod"))
+        })
         .or_else(|| dirs::home_dir().map(|home| home.join("go/pkg/mod")))
         .filter(|dir| dir.is_absolute())
 }
