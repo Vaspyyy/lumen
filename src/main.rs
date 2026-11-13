@@ -217,6 +217,11 @@ pub fn open_window(spawn: Spawn, cx: &mut App) -> Result<WindowHandle<Workspace>
         window_decorations: Some(WindowDecorations::Client),
         window_background: config.appearance(),
         app_id: Some("lumen".into()),
+        // GPUI holds a window to 30 frames a second in the power-saver profile: typing
+        // then waits up to two refreshes of a fast display for its frame, and the cursor
+        // glides in two steps. A terminal draws only when something changes, so it keeps
+        // the display's rate whatever the profile.
+        low_power_frame_interval: None,
         ..Default::default()
     };
     // a terminal that doesn't start leaves the window empty, and it closes again
