@@ -27,6 +27,8 @@ gpui_linux = { package = "gpui-fast-linux", version = "0.1.14", default-features
 alacritty_terminal = "0.26"
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
+# Changing one setting in lumen.toml for `lumen settings`, keeping the rest of the file as it is.
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
 dirs = "5"
 futures = "0.3"
 # Waiting on the PTY, as alacritty_terminal's own event loop does.

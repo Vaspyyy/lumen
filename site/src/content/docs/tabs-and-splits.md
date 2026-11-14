@@ -9,7 +9,7 @@ A lumen window holds tabs, and a tab holds panes. Every pane is a terminal of it
 
 | Key | Does |
 | --- | --- |
-| `Ctrl+Shift+T` | New tab, in the folder of the current pane |
+| `Ctrl+Shift+T` | New tab, in the folder of the current pane (or the one `new_tab_folder` names) |
 | `Ctrl+Tab`, `Ctrl+Shift+Tab` | Next and previous tab |
 | `Ctrl+PageDown`, `Ctrl+PageUp` | Next and previous tab, too |
 | `Alt+1` to `Alt+8` | Go to a tab by its place |
@@ -42,6 +42,8 @@ The line between two panes can be dragged with the mouse to give one of them mor
 ## Where a new one starts
 
 A new tab or pane starts in the folder of the pane you were in. lumen asks the system where that pane's shell is, so this works with any shell and needs no setup.
+
+To have new tabs start somewhere else, set [`new_tab_folder`](/docs/configuration/#general) to `"home"`, `"/"` or any folder, in the file or with `/settings`. A split still starts beside the pane it splits.
 
 With [`prewarm`](/docs/instant-tabs/) on, the shell of the next tab or pane is started ahead of time, and is there the moment you ask for it.
 

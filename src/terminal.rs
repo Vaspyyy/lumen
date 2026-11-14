@@ -388,6 +388,14 @@ impl Terminal {
         self.shell_pid
     }
 
+    /// What is typed at the prompt that is open, up to the cursor: see
+    /// [`commands::typing`].
+    pub fn typing(&self) -> Option<String> {
+        let term = self.term.lock();
+        let log = self.commands.lock().unwrap();
+        commands::typing(&log, &term)
+    }
+
     /// The folder the shell is in: where a new tab or split next to this
     /// one starts.
     pub fn cwd(&self) -> Option<PathBuf> {

@@ -69,6 +69,69 @@ pub enum Launch {
     Process,
 }
 
+/// Where a new tab starts.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum TabFolder {
+    /// In the folder of the tab you are in.
+    #[default]
+    Current,
+    /// In your home folder.
+    Home,
+    /// In this folder, as written: `/`, `~/Projekte`.
+    Folder(String),
+}
+
+impl TabFolder {
+    /// The folder a new tab starts in, if not the current tab's. One that isn't there (a
+    /// folder on a drive that isn't plugged in) is none: the tab starts where it would
+    /// have without the setting.
+    pub fn folder(&self) -> Option<PathBuf> {
+        let dir = match self {
+            TabFolder::Current => return None,
+            TabFolder::Home => dirs::home_dir()?,
+            TabFolder::Folder(written) => expand_home(written)?,
+        };
+        dir.is_dir().then_some(dir)
+    }
+
+    /// As the file says it.
+    pub fn written(&self) -> &str {
+        match self {
+            TabFolder::Current => "current",
+            TabFolder::Home => "home",
+            TabFolder::Folder(written) => written,
+        }
+    }
+
+    pub fn parse(text: &str) -> Result<TabFolder, String> {
+        match text.trim() {
+            "current" => Ok(TabFolder::Current),
+            "home" => Ok(TabFolder::Home),
+            folder if folder.starts_with('/') || folder == "~" || folder.starts_with("~/") => {
+                Ok(TabFolder::Folder(folder.to_string()))
+            },
+            other => Err(format!(
+                "new_tab_folder can't be {other:?} (want \"current\", \"home\", or a folder like \"/\" or \"~/Projekte\")"
+            )),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for TabFolder {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        TabFolder::parse(&String::deserialize(d)?).map_err(serde::de::Error::custom)
+    }
+}
+
+/// `~` and `~/…` as the home folder and what is in it.
+pub fn expand_home(written: &str) -> Option<PathBuf> {
+    match written.strip_prefix('~') {
+        Some("") => dirs::home_dir(),
+        Some(rest) => rest.strip_prefix('/').and_then(|rest| Some(dirs::home_dir()?.join(rest))),
+        None => Some(PathBuf::from(written)),
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Font {
@@ -308,6 +371,8 @@ pub struct Config {
     pub prewarm: bool,
     /// What starting lumen again does while one runs: see [`Launch`].
     pub launch: Launch,
+    /// Where a new tab starts: see [`TabFolder`].
+    pub new_tab_folder: TabFolder,
     /// What was wrong with the file when it was last read, while lumen is
     /// running: the settings from before stay, and the window says why.
     #[serde(skip)]
@@ -329,6 +394,7 @@ impl Default for Config {
             shell: None,
             prewarm: false,
             launch: Launch::default(),
+            new_tab_folder: TabFolder::default(),
             problem: None,
         }
     }

@@ -885,6 +885,45 @@ fn typed<L>(term: &Term<L>, id: u32) -> Option<String> {
     any.then_some(text)
 }
 
+/// What is typed at the prompt that is open, with the cursor after all of it: what Enter
+/// would send off. None while no prompt is open, for a shell that doesn't mark what is
+/// typed, and where anything typed stands after the cursor (the cursor moved back into
+/// the line, or a suggestion of fish's), since what Enter sends then is more than what
+/// stands before the cursor.
+pub fn typing<L>(log: &Log, term: &Term<L>) -> Option<String> {
+    let id = log.current.filter(|_| log.phase == Phase::Input)?;
+    let cursor = term.grid().cursor.point;
+    if owner(term, cursor.line) != Some(id) {
+        return None;
+    }
+    let (first, last) = own_lines(term, cursor.line, id);
+    let mut text = String::new();
+    for line in (first.0..=last.0).map(Line) {
+        let row = &term.grid()[line];
+        let mut wrapped = false;
+        for (column, cell) in row.into_iter().enumerate() {
+            wrapped = cell.flags.contains(Flags::WRAPLINE);
+            if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                continue;
+            }
+            if cell.hyperlink().and_then(|link| cell_of(link.uri())) == Some((id, Part::Input)) {
+                let after = line > cursor.line || (line == cursor.line && column >= cursor.column.0);
+                if after && cell.c != ' ' {
+                    return None;
+                }
+                if !after {
+                    text.push(cell.c);
+                    text.extend(cell.zerowidth().into_iter().flatten());
+                }
+            }
+        }
+        if !wrapped && line < cursor.line {
+            text.push('\n');
+        }
+    }
+    Some(text)
+}
+
 /// Where a command is in the grid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Place {
@@ -1105,6 +1144,29 @@ mod tests {
         fn command(&self, id: u32) -> Command {
             self.log.lock().unwrap().get(id).cloned().unwrap()
         }
+    }
+
+    /// What `typing` reads at the screen's open prompt.
+    fn typing_on(screen: &Screen) -> Option<String> {
+        typing(&screen.log.lock().unwrap(), &screen.term)
+    }
+
+    #[test]
+    fn what_is_typed_at_the_open_prompt_is_read_up_to_the_cursor() {
+        let mut screen = Screen::new();
+        assert_eq!(typing_on(&screen), None, "no prompt yet");
+        screen.run("ls", "a b\r\n", 0);
+        screen.print("\x1b]133;A\x07~> \x1b]133;B\x07/settings");
+        assert_eq!(typing_on(&screen).as_deref(), Some("/settings"));
+        // with something typed after the cursor, Enter would send more than that
+        screen.print(" --help\x1b[7D");
+        assert_eq!(typing_on(&screen), None);
+        // taken back to the cursor, it is the word again
+        screen.print("\x1b[K");
+        assert_eq!(typing_on(&screen).as_deref(), Some("/settings"));
+        // once it runs, nothing is being typed
+        screen.print("\r\n\x1b]133;C\x07");
+        assert_eq!(typing_on(&screen), None);
     }
 
     /// How many commands have ended on a screen, and how many of them failed.

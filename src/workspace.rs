@@ -23,6 +23,7 @@ use crate::config::Config;
 use crate::editor;
 use crate::element::Metrics;
 use crate::pulse::{Pulse, Use};
+use crate::slash::Slash;
 use crate::terminal::{CommandEvent, Env, Spawn, Terminal};
 use crate::view::{TerminalView, ViewEvent};
 
@@ -407,11 +408,12 @@ impl Workspace {
                 for image in images {
                     let _ = window.drop_image(image);
                 }
-                if this.spare.as_ref().is_some_and(|spare| spare.cwd != this.spawn_here(cx).cwd) {
+                if this.spare.as_ref().is_some_and(|spare| spare.cwd != this.spawn_tab(cx).cwd) {
                     this.refresh_spare_soon(window, cx);
                 }
             },
             ViewEvent::Notice(text) => this.say(text.clone(), cx),
+            ViewEvent::Slash(Slash::Settings) => this.open_settings(window, cx),
             ViewEvent::Edit { path, line, column } => this.edit(path, *line, *column, window, cx),
             ViewEvent::Bell => this.tell(pane, News::Bell, window, cx),
             ViewEvent::Notify(note) => this.note(pane, note, window, cx),
@@ -602,6 +604,22 @@ impl Workspace {
         }
     }
 
+    /// `lumen settings`, in a tab that closes when it ends: what `/settings` at a prompt
+    /// opens. The window behind it shows each change as it is made.
+    fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // after an update, the program this lumen runs from is gone: the new one is there
+        let program = std::fs::read_link("/proc/self/exe")
+            .or_else(|_| std::env::current_exe())
+            .map(|exe| exe.to_string_lossy().trim_end_matches(" (deleted)").to_string())
+            .unwrap_or_else(|_| "lumen".into());
+        let command = vec![program, "settings".into(), "--in-tab".into()];
+        let spawn = Spawn { cwd: dirs::home_dir(), command: Some(command), env: self.pane_env(cx) };
+        match self.open(spawn, (1., 1.), window, cx) {
+            Ok(pane) => self.push_tab(pane, window, cx),
+            Err(e) => self.say(format!("Can't open the settings: {e}"), cx),
+        }
+    }
+
     fn push_tab(&mut self, pane: Pane, window: &mut Window, cx: &mut Context<Self>) {
         self.next_id += 1;
         let at = if self.tabs.is_empty() { 0 } else { self.active + 1 };
@@ -643,6 +661,16 @@ impl Workspace {
         Spawn { cwd, command: None, env: self.pane_env(cx) }
     }
 
+    /// Where a new tab starts: in the folder `new_tab_folder` names, or where a split
+    /// would.
+    fn spawn_tab(&self, cx: &App) -> Spawn {
+        let mut spawn = self.spawn_here(cx);
+        if let Some(folder) = cx.global::<Config>().new_tab_folder.folder() {
+            spawn.cwd = Some(folder);
+        }
+        spawn
+    }
+
     /// What `Ctrl+Shift+N` opens from here: a window in the folder this one was opened in,
     /// with the active pane's environment.
     pub fn spawn_window(&self, cx: &App) -> Spawn {
@@ -662,7 +690,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> std::io::Result<Entity<TerminalView>> {
-        let ready = if spawn.command.is_none() { self.take_spare(&spawn, window, cx) } else { None };
+        let ready = if spawn.command.is_none() { self.take_spare(&spawn) } else { None };
         let pane = match ready {
             Some(pane) => pane,
             None => self.open(spawn, (1., 1.), window, cx)?,
@@ -717,20 +745,17 @@ impl Workspace {
         }
     }
 
-    /// The shell that was started ahead of time, if it was started where
-    /// `spawn` would start one.
-    fn take_spare(&mut self, spawn: &Spawn, window: &mut Window, cx: &mut Context<Self>) -> Option<Pane> {
-        let spare = self.spare.take()?;
-        if spare.cwd == spawn.cwd && spare.env == spawn.env {
-            return Some(spare.pane);
-        }
-        self.forget(&spare.pane, window, cx);
-        None
+    /// The shell that was started ahead of time, if it was started where `spawn` would
+    /// start one. One that doesn't fit stays for the next tab, which it may fit (a split
+    /// starts in its pane's folder, a new tab where `new_tab_folder` says).
+    fn take_spare(&mut self, spawn: &Spawn) -> Option<Pane> {
+        let fits = self.spare.as_ref().is_some_and(|spare| spare.cwd == spawn.cwd && spare.env == spawn.env);
+        fits.then(|| self.spare.take().map(|spare| spare.pane)).flatten()
     }
 
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
-        let spawn = self.spawn_here(cx);
-        let ready = self.take_spare(&spawn, window, cx);
+        let spawn = self.spawn_tab(cx);
+        let ready = self.take_spare(&spawn);
         match ready.map(Ok).unwrap_or_else(|| self.open(spawn, (1., 1.), window, cx)) {
             Ok(pane) => self.push_tab(pane, window, cx),
             Err(e) => self.report("can't open a tab", e),
@@ -751,9 +776,9 @@ impl Workspace {
     }
 
     /// Makes sure a spare is running that fits the next tab: started in the
-    /// folder of the active pane, for the window's current size, not long ago.
+    /// folder a new tab starts in, for the window's current size, not long ago.
     fn refresh_spare(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let spawn = self.spawn_here(cx);
+        let spawn = self.spawn_tab(cx);
         let viewport = window.viewport_size();
         let fits = self.spare.as_ref().is_some_and(|spare| {
             spare.cwd == spawn.cwd
@@ -791,7 +816,7 @@ impl Workspace {
         };
         // the spare was laid out for a whole tab; its shell is told the new size like any resized one
         let spawn = self.spawn_here(cx);
-        let ready = self.take_spare(&spawn, window, cx);
+        let ready = self.take_spare(&spawn);
         let pane = match ready.map(Ok).unwrap_or_else(|| self.open(spawn, share, window, cx)) {
             Ok(pane) => pane,
             Err(e) => return self.report("can't split", e),
