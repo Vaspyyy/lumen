@@ -1,3 +1,6 @@
+// Modified for lumen: a drop shadow is not drawn under what casts it, as CSS has it
+// (fs_shadow), so a see-through element isn't darkened by its own shadow.
+
 /* Functions useful for debugging:
 
 // A heat map color for debugging (blue -> cyan -> green -> yellow -> red).
@@ -1004,6 +1007,16 @@ fn fs_shadow(input: ShadowVarying) -> @location(0) vec4<f32> {
     }
 
     let shadow = load_shadow(input.shadow_id);
+    // lumen: a drop shadow lies around what casts it, never under it
+    var outside = 1.0;
+    if (shadow.inset == 0u) {
+        let element_distance = quad_sdf(input.position.xy, shadow.element_bounds,
+                                        shadow.element_corner_radii);
+        if (element_distance <= -0.5) {
+            return vec4<f32>(0.0);
+        }
+        outside = saturate(0.5 + element_distance);
+    }
     let half_size = shadow.bounds.size / 2.0;
     let center = shadow.bounds.origin + half_size;
     let center_to_point = input.position.xy - center;
@@ -1042,7 +1055,7 @@ fn fs_shadow(input: ShadowVarying) -> @location(0) vec4<f32> {
         alpha *= saturate(0.5 - element_distance);
     }
 
-    return blend_color(input.color, alpha);
+    return blend_color(input.color, alpha * outside);
 }
 
 // --- path rasterization --- //
