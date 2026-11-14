@@ -11,12 +11,12 @@ use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Axis, Bounds, BoxShadow, Context, Corners, CursorStyle, Decorations, Entity, EntityId, Focusable,
     Hsla, MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, ResizeEdge, SharedString, Size, Subscription,
-    SystemNotification, Task, Tiling, Window, canvas, div, point, px, size, svg,
+    SystemNotification, Task, Tiling, Window, WindowDecorations, canvas, div, point, px, size, svg,
 };
 
 use crate::actions::{
     ClosePane, CloseTab, FocusDown, FocusLeft, FocusRight, FocusUp, GoToTab, MoveTabLeft, MoveTabRight, NewTab,
-    NextTab, PreviousTab, SplitDown, SplitRight, ToggleZoomPane,
+    NextTab, OpenPulse, PreviousTab, SplitDown, SplitRight, ToggleZoomPane,
 };
 use crate::commands::Note;
 use crate::config::Config;
@@ -293,6 +293,9 @@ pub struct Workspace {
     /// The environment of the launch that opened the window, which every terminal in it
     /// gets: None for lumen's own.
     env: Option<Env>,
+    /// The frame the desktop was last asked for. What it has may be another: a desktop
+    /// that can't do what was asked does what it can.
+    asked: WindowDecorations,
     _observers: Vec<Subscription>,
 }
 
@@ -313,12 +316,12 @@ struct Spare {
 /// A spare older than this shows a greeting that has gone stale.
 const SPARE_MAX_AGE: Duration = Duration::from_secs(300);
 
-const TAB_BAR: f32 = 40.;
+pub const TAB_BAR: f32 = 40.;
 
 impl Workspace {
     pub fn new(spawn: Spawn, window: &mut Window, cx: &mut Context<Self>) -> std::io::Result<Self> {
         let mut this = Self::empty(&spawn, window, cx);
-        let pane = this.open(spawn, (1., 1.), window, cx)?;
+        let pane = this.open(spawn, (1., 1.), true, window, cx)?;
         this.push_tab(pane, window, cx);
         this.refresh_spare_soon(window, cx);
         Ok(this)
@@ -342,6 +345,8 @@ impl Workspace {
             noted: HashMap::new(),
             home: spawn.cwd.clone(),
             env: spawn.env.clone(),
+            // what main asked for when it opened the window
+            asked: cx.global::<Config>().decorations(),
             _observers: vec![
                 // a spare is laid out for the window's size: a resized window wants a new one
                 cx.observe_window_bounds(window, |this, window, cx| this.refresh_spare_soon(window, cx)),
@@ -380,17 +385,20 @@ impl Workspace {
 
     /// Starts a terminal and wires it to this window.
     /// `share` is the part of the window's width and height the pane is
-    /// about to get.
+    /// about to get, and `tab` whether it gets a tab of its own.
     fn open(
         &mut self,
         spawn: Spawn,
         share: (f32, f32),
+        tab: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> std::io::Result<Pane> {
         let config = cx.global::<Config>();
         let viewport = window.viewport_size();
-        let area = size(viewport.width * share.0, (viewport.height - px(TAB_BAR)) * share.1);
+        // the tab bar as it will be once the pane is there
+        let bar = if config.tab_bar(self.tabs.len() + usize::from(tab)) { px(TAB_BAR) } else { px(0.) };
+        let area = size(viewport.width * share.0, (viewport.height - bar) * share.1);
         let grid = Metrics::new(config, 1., window).grid(area, config);
         let started = Terminal::start(spawn, config, grid)?;
         let pane = cx.new(|cx| TerminalView::new(started, window, cx));
@@ -453,7 +461,7 @@ impl Workspace {
         let started = if launch.terminal {
             let spawn =
                 Spawn { cwd: path.parent().map(Path::to_path_buf), command: Some(launch.argv), env: launched.clone() };
-            self.open(spawn, (1., 1.), window, cx).map(|pane| self.push_tab(pane, window, cx))
+            self.open(spawn, (1., 1.), true, window, cx).map(|pane| self.push_tab(pane, window, cx))
         } else {
             let mut command = std::process::Command::new(&program);
             command.args(&launch.argv[1..]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
@@ -598,7 +606,7 @@ impl Workspace {
         let program = cx.try_global::<Pulse>().and_then(|pulse| pulse.0.read(cx).program().map(Path::to_path_buf));
         let program = program.map_or_else(|| "pulse".to_string(), |program| program.to_string_lossy().into_owned());
         let spawn = Spawn { cwd: dirs::home_dir(), command: Some(vec![program]), env: self.pane_env(cx) };
-        match self.open(spawn, (1., 1.), window, cx) {
+        match self.open(spawn, (1., 1.), true, window, cx) {
             Ok(pane) => self.push_tab(pane, window, cx),
             Err(e) => self.say(format!("Can't start pulse: {e}"), cx),
         }
@@ -614,7 +622,7 @@ impl Workspace {
             .unwrap_or_else(|_| "lumen".into());
         let command = vec![program, "settings".into(), "--in-tab".into()];
         let spawn = Spawn { cwd: dirs::home_dir(), command: Some(command), env: self.pane_env(cx) };
-        match self.open(spawn, (1., 1.), window, cx) {
+        match self.open(spawn, (1., 1.), true, window, cx) {
             Ok(pane) => self.push_tab(pane, window, cx),
             Err(e) => self.say(format!("Can't open the settings: {e}"), cx),
         }
@@ -693,7 +701,7 @@ impl Workspace {
         let ready = if spawn.command.is_none() { self.take_spare(&spawn) } else { None };
         let pane = match ready {
             Some(pane) => pane,
-            None => self.open(spawn, (1., 1.), window, cx)?,
+            None => self.open(spawn, (1., 1.), true, window, cx)?,
         };
         self.push_tab(pane.clone(), window, cx);
         self.refresh_spare_soon(window, cx);
@@ -723,6 +731,12 @@ impl Workspace {
     fn config_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let config = cx.global::<Config>();
         window.set_background_appearance(config.appearance());
+        // asked again only when the config changed it: what the window has is no guide,
+        // as a desktop that can't draw frames, or must, has the other one whatever is asked
+        if config.decorations() != self.asked {
+            self.asked = config.decorations();
+            window.request_decorations(self.asked);
+        }
         let said = match &config.problem {
             Some(problem) => problem.clone(),
             None => "Config reloaded".to_string(),
@@ -756,7 +770,7 @@ impl Workspace {
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         let spawn = self.spawn_tab(cx);
         let ready = self.take_spare(&spawn);
-        match ready.map(Ok).unwrap_or_else(|| self.open(spawn, (1., 1.), window, cx)) {
+        match ready.map(Ok).unwrap_or_else(|| self.open(spawn, (1., 1.), true, window, cx)) {
             Ok(pane) => self.push_tab(pane, window, cx),
             Err(e) => self.report("can't open a tab", e),
         }
@@ -793,7 +807,7 @@ impl Workspace {
             self.forget(&old.pane, window, cx);
         }
         let (cwd, env) = (spawn.cwd.clone(), spawn.env.clone());
-        match self.open(spawn, (1., 1.), window, cx) {
+        match self.open(spawn, (1., 1.), true, window, cx) {
             Ok(pane) => self.spare = Some(Spare { pane, cwd, env, born: Instant::now(), viewport }),
             Err(e) => self.report("can't start a shell ahead of time", e),
         }
@@ -817,7 +831,7 @@ impl Workspace {
         // the spare was laid out for a whole tab; its shell is told the new size like any resized one
         let spawn = self.spawn_here(cx);
         let ready = self.take_spare(&spawn);
-        let pane = match ready.map(Ok).unwrap_or_else(|| self.open(spawn, share, window, cx)) {
+        let pane = match ready.map(Ok).unwrap_or_else(|| self.open(spawn, share, false, window, cx)) {
             Ok(pane) => pane,
             Err(e) => return self.report("can't split", e),
         };
@@ -1186,7 +1200,8 @@ impl Workspace {
 
     fn render_tab_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let accent = cx.global::<Config>().accent();
-        let client = Frame::of(window).client;
+        let frame = Frame::of(window, cx);
+        let client = frame.client;
         let controls = window.window_controls();
         let icon = gpui::white().opacity(0.6);
         let soft = gpui::white().opacity(0.08);
@@ -1203,7 +1218,7 @@ impl Workspace {
                 .child(svg().path(path).size(px(12.)).text_color(icon))
         };
         let mut bar = div().id("tab-bar").flex().flex_none().items_center().gap(px(4.)).h(px(TAB_BAR)).px(px(8.)).when(
-            client,
+            frame.moves,
             |this| {
                 this.on_mouse_down(MouseButton::Left, |event, window, _| {
                     if event.click_count == 2 {
@@ -1305,6 +1320,9 @@ impl Workspace {
 struct Frame {
     /// lumen draws the title bar's buttons and the window's edges.
     client: bool,
+    /// The desktop draws no title bar: the tab bar is where the window is
+    /// taken to move it, whether lumen draws a frame or none.
+    moves: bool,
     /// The edges that are against a screen edge or another tiled window:
     /// no margin, shadow or rounding there.
     tiling: Tiling,
@@ -1316,15 +1334,18 @@ const SHADOW: f32 = 12.;
 const RADIUS: f32 = 12.;
 
 impl Frame {
-    fn of(window: &Window) -> Frame {
-        match window.window_decorations() {
+    fn of(window: &Window, cx: &App) -> Frame {
+        let none = cx.global::<Config>().window.decorations == crate::config::Decorations::None;
+        let frame = match window.window_decorations() {
             Decorations::Client { tiling } => {
                 let tiling = if window.is_maximized() || window.is_fullscreen() { Tiling::tiled() } else { tiling };
-                Frame { client: true, tiling }
+                Frame { client: true, moves: true, tiling }
             },
-            Decorations::Server if crate::preview() => Frame { client: true, tiling: Tiling::default() },
-            Decorations::Server => Frame { client: false, tiling: Tiling::tiled() },
-        }
+            Decorations::Server if crate::preview() => Frame { client: true, moves: true, tiling: Tiling::default() },
+            Decorations::Server => Frame { client: false, moves: false, tiling: Tiling::tiled() },
+        };
+        // a window without a frame is drawn as one against every edge: no margin, no corners
+        if none { Frame { client: false, tiling: Tiling::tiled(), ..frame } } else { frame }
     }
 
     fn floating(&self) -> bool {
@@ -1417,7 +1438,7 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let config = cx.global::<Config>();
         let background = Hsla { a: config.window.opacity, ..config.colors.primary.background.hsla() };
-        let frame = Frame::of(window);
+        let frame = Frame::of(window, cx);
         let t = frame.tiling;
         // the corners that are free are round; the desktop is told, so that what it
         // draws behind the window (the blur) has the window's shape
@@ -1451,7 +1472,7 @@ impl Render for Workspace {
             Some(tab) => self.render_node(&tab.root, tab, cx),
             None => div().into_any_element(),
         };
-        let bar = self.render_tab_bar(window, cx);
+        let bar = cx.global::<Config>().tab_bar(self.tabs.len()).then(|| self.render_tab_bar(window, cx));
 
         let surface = div()
             .id("workspace")
@@ -1508,6 +1529,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &FocusRight, window, cx| this.focus_toward(1., 0., window, cx)))
             .on_action(cx.listener(|this, _: &FocusUp, window, cx| this.focus_toward(0., -1., window, cx)))
             .on_action(cx.listener(|this, _: &FocusDown, window, cx| this.focus_toward(0., 1., window, cx)))
+            .on_action(cx.listener(|this, _: &OpenPulse, window, cx| this.open_monitor(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleZoomPane, _, cx| {
                 if let Some(tab) = this.tabs.get_mut(this.active) {
                     tab.zoomed = !tab.zoomed && matches!(tab.root, Node::Split { .. });
@@ -1521,7 +1543,7 @@ impl Render for Workspace {
                     this.drag = None;
                 }),
             )
-            .child(bar)
+            .children(bar)
             .child(div().flex_1().min_h_0().child(content))
             .children(self.notice.clone().map(|text| {
                 div()

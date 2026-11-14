@@ -23,8 +23,8 @@ use gpui::{
 };
 
 use crate::actions::{
-    Copy, CopyOutput, NextCommand, Paste, PreviousCommand, ScrollBottom, ScrollPageDown, ScrollPageUp, ScrollTop,
-    ToggleSearch, ZoomIn, ZoomOut, ZoomReset,
+    Copy, CopyOutput, NextCommand, Paste, PreviousCommand, ScrollBottom, ScrollLineDown, ScrollLineUp, ScrollPageDown,
+    ScrollPageUp, ScrollTop, SendText, ToggleSearch, ZoomIn, ZoomOut, ZoomReset,
 };
 use crate::commands;
 use crate::config::Config;
@@ -261,12 +261,16 @@ impl TerminalView {
                 cx.notify();
             }),
         ];
+        let first = Duration::from_millis(cx.global::<Config>().cursor.blink_interval);
         let blink = cx.spawn(async move |this, cx| {
+            let mut interval = first;
             loop {
-                cx.background_executor().timer(Duration::from_millis(530)).await;
-                let alive = this.update(cx, |this, cx| {
-                    if !cx.global::<Config>().cursor.blink {
-                        return;
+                cx.background_executor().timer(interval).await;
+                let next = this.update(cx, |this, cx| {
+                    let cursor = &cx.global::<Config>().cursor;
+                    let next = Duration::from_millis(cursor.blink_interval);
+                    if !cursor.blink {
+                        return next;
                     }
                     // typing holds the cursor lit
                     let on = !this.blink_on || this.last_input.elapsed() < Duration::from_millis(500);
@@ -275,9 +279,11 @@ impl TerminalView {
                         this.blink_at = Instant::now();
                         cx.notify();
                     }
+                    next
                 });
-                if alive.is_err() {
-                    break;
+                match next {
+                    Ok(next) => interval = next,
+                    Err(_) => break,
                 }
             }
         });
@@ -1147,7 +1153,7 @@ impl TerminalView {
             // already counted in lines per wheel step by the platform
             ScrollDelta::Lines(delta) => delta.y,
         };
-        self.scroll_rest += lines;
+        self.scroll_rest += lines * cx.global::<Config>().mouse.scroll_multiplier;
         let whole = self.scroll_rest.trunc();
         self.scroll_rest -= whole;
         let steps = whole as i32;
@@ -1389,7 +1395,10 @@ impl Render for TerminalView {
             .on_action(cx.listener(|this, _: &NextCommand, _, cx| this.jump(true, cx)))
             .on_action(cx.listener(|this, _: &ScrollPageUp, _, cx| this.scroll_by(Scroll::PageUp, cx)))
             .on_action(cx.listener(|this, _: &ScrollPageDown, _, cx| this.scroll_by(Scroll::PageDown, cx)))
+            .on_action(cx.listener(|this, _: &ScrollLineUp, _, cx| this.scroll_by(Scroll::Delta(1), cx)))
+            .on_action(cx.listener(|this, _: &ScrollLineDown, _, cx| this.scroll_by(Scroll::Delta(-1), cx)))
             .on_action(cx.listener(|this, _: &ScrollTop, _, cx| this.scroll_by(Scroll::Top, cx)))
+            .on_action(cx.listener(|this, text: &SendText, _, cx| this.send(text.0.clone().into_bytes(), cx)))
             .on_action(cx.listener(|this, _: &ScrollBottom, _, cx| this.scroll_by(Scroll::Bottom, cx)))
             .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.zoom(Some(1.1), cx)))
             .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.zoom(Some(1. / 1.1), cx)))

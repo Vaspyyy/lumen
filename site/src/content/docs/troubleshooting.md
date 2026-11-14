@@ -98,7 +98,13 @@ A new tab or pane has the theme's colors again in any case. See [Colors](/docs/c
 
 ## A key doesn't reach my program
 
-lumen keeps a few keys for itself, listed in [Keys](/docs/keys/). They can't be changed yet. Everything else goes to the program.
+lumen keeps a few keys for itself, listed in [Keys](/docs/keys/). Everything else goes to the program. To give one of lumen's back, name it in `[keys]` with `"none"`: `"ctrl-shift-t" = "none"`. See [Changing the keys](/docs/keys/#changing-the-keys).
+
+## There is empty space around the window
+
+Where lumen draws its own frame, it keeps a margin around the window for its shadow, and rounds its corners. A desktop says when a window is tiled, and lumen then leaves both out; some tiling desktops don't say so. `decorations = "none"` in the `[window]` table takes the margin, the corners and the border away for good, and `decorations = "desktop"` lets a desktop that draws frames draw one.
+
+Inside each pane, `padding` is the space around the text: `padding = 0`, or `padding = { x = 4, y = 0 }`, which keeps just enough room at the left for the marks of commands. See [Configuration](/docs/configuration/#window).
 
 ## A new tab opens in the wrong folder
 

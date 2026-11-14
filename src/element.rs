@@ -15,7 +15,7 @@ use alacritty_terminal::term::search::Match;
 use alacritty_terminal::vte::ansi::CursorShape;
 use gpui::{
     App, BorderStyle, Bounds, BoxShadow, Corners, CursorStyle, DispatchPhase, Element, ElementId, ElementInputHandler,
-    Entity, FocusHandle, Font, FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
+    Entity, FocusHandle, Font, FontFeatures, FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
     InspectorElementId, IntoElement, LayoutId, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
     RenderImage, ScrollEvent, ShapedLine, Size, StrikethroughStyle, Style, TextAlign, TextRun, UnderlineStyle, Window,
     fill, font, point, px, quad, relative, size, transparent_black,
@@ -23,7 +23,7 @@ use gpui::{
 
 use crate::blocks::{self, snap};
 use crate::commands::{self, Status};
-use crate::config::Config;
+use crate::config::{Config, Unfocused};
 use crate::graphics;
 use crate::palette;
 use crate::terminal::{TermSize, Terminal};
@@ -68,7 +68,10 @@ pub struct MarkSpot {
 
 /// The font and the size of a cell, for a config and a pane's zoom.
 pub struct Metrics {
+    /// The font plain text is drawn in.
     pub font: Font,
+    /// How heavy bold text is.
+    pub bold: FontWeight,
     pub font_size: Pixels,
     pub cell: Size<Pixels>,
 }
@@ -77,21 +80,27 @@ impl Metrics {
     pub fn new(config: &Config, zoom: f32, window: &Window) -> Metrics {
         let text_system = window.text_system();
         let font_size = px(config.font.size * 4. / 3. * zoom);
-        let font = font(crate::fonts::grid(&config.font.family, text_system));
+        let mut font = font(crate::fonts::grid(&config.font.family, text_system));
+        font.weight = FontWeight(f32::from(config.font.weight));
+        if !config.font.ligatures {
+            // the two ways a font joins letters: by their context, and as plain ligatures
+            font.features = FontFeatures(Arc::new(vec![("calt".into(), 0), ("liga".into(), 0)]));
+        }
         let font_id = text_system.resolve_font(&font);
         let width = text_system.advance(font_id, font_size, 'm').map(|s| s.width).unwrap_or(font_size * 0.6);
         let ascent = f32::from(text_system.ascent(font_id, font_size));
         let descent = f32::from(text_system.descent(font_id, font_size));
         let height = px(((ascent + descent.abs()) * config.font.line_height).ceil().max(1.));
-        Metrics { font, font_size, cell: size(width, height) }
+        let bold = FontWeight(f32::from(config.font.bold_weight));
+        Metrics { font, bold, font_size, cell: size(width, height) }
     }
 
     /// The grid that fits into an area of this size.
     pub fn grid(&self, area: Size<Pixels>, config: &Config) -> TermSize {
-        let pad = px(config.window.padding);
+        let pad = config.window.padding;
         TermSize {
-            cols: (((area.width - pad * 2.) / self.cell.width) as usize).max(2),
-            rows: (((area.height - pad * 2.) / self.cell.height) as usize).max(1),
+            cols: (((area.width - px(pad.x) * 2.) / self.cell.width) as usize).max(2),
+            rows: (((area.height - px(pad.y) * 2.) / self.cell.height) as usize).max(1),
             cell_width: self.cell.width.into(),
             cell_height: self.cell.height.into(),
         }
@@ -196,6 +205,10 @@ struct CursorLayout {
     color: Hsla,
     /// The cursor gives off light.
     glow: bool,
+    /// Its corners are round.
+    rounded: bool,
+    /// How thick a beam or an underline is.
+    stroke: Pixels,
     /// The character under a block cursor, in the cursor's text color.
     text: Option<ShapedLine>,
     /// A block element under a block cursor, in that color.
@@ -239,11 +252,11 @@ impl IntoElement for TerminalElement {
 }
 
 impl TerminalElement {
-    fn text_run(&self, base: &Font, style: &RunStyle, len: usize, thickness: Pixels) -> TextRun {
+    fn text_run(&self, base: &Font, bold: FontWeight, style: &RunStyle, len: usize, thickness: Pixels) -> TextRun {
         TextRun {
             len,
             font: Font {
-                weight: if style.bold { FontWeight::BOLD } else { FontWeight::NORMAL },
+                weight: if style.bold { bold } else { base.weight },
                 style: if style.italic { FontStyle::Italic } else { FontStyle::Normal },
                 ..base.clone()
             },
@@ -301,14 +314,20 @@ impl Element for TerminalElement {
         let config = cx.global::<Config>().clone();
         let colors = &config.colors;
         let text_system = window.text_system().clone();
-        let Metrics { font: base, font_size, cell } = Metrics::new(&config, self.zoom, window);
+        let Metrics { font: base, bold, font_size, cell } = Metrics::new(&config, self.zoom, window);
         let (cell_width, cell_height) = (cell.width, cell.height);
         let thickness = px((f32::from(font_size) / 14.).round().max(1.));
 
-        let pad = px(config.window.padding);
-        let term_size = Metrics { font: base.clone(), font_size, cell }.grid(bounds.size, &config);
+        let pad = config.window.padding;
+        let term_size = Metrics { font: base.clone(), bold, font_size, cell }.grid(bounds.size, &config);
         let (cols, rows) = (term_size.cols, term_size.rows);
-        let origin = point((bounds.origin.x + pad).round(), (bounds.origin.y + pad).round());
+        let (mut left, mut top) = (px(pad.x), px(pad.y));
+        if config.window.dynamic_padding {
+            // what is left beyond the last whole cell goes to both sides alike
+            left += ((bounds.size.width - left * 2. - cell_width * cols as f32) / 2.).max(px(0.));
+            top += ((bounds.size.height - top * 2. - cell_height * rows as f32) / 2.).max(px(0.));
+        }
+        let origin = point((bounds.origin.x + left).round(), (bounds.origin.y + top).round());
         self.terminal.update(cx, |terminal, _| terminal.resize(term_size));
         let mut geometry = Geometry { bounds, origin, cell, cols, rows, cursor: None };
         self.geometry.set(Some(geometry));
@@ -524,7 +543,11 @@ impl Element for TerminalElement {
             let row = point.line.0 + offset;
             let mut shape = content.cursor.shape;
             if !self.focused && shape != CursorShape::Hidden {
-                shape = CursorShape::HollowBlock;
+                shape = match config.cursor.unfocused {
+                    Unfocused::Hollow => CursorShape::HollowBlock,
+                    Unfocused::Same => shape,
+                    Unfocused::Hidden => CursorShape::Hidden,
+                };
             }
             let visible = shape != CursorShape::Hidden
                 && row >= 0
@@ -655,7 +678,7 @@ impl Element for TerminalElement {
             let glyphs = run.text.chars().count();
             // each glyph is placed on the grid: one cell apart, or two for a wide character
             let advance = cell_width * (run.cells as f32 / glyphs.max(1) as f32).max(1.);
-            let text_run = self.text_run(&base, &run.style, run.text.len(), thickness);
+            let text_run = self.text_run(&base, bold, &run.style, run.text.len(), thickness);
             let line = text_system.shape_line(run.text.into(), font_size, &[text_run], Some(advance));
             lines.push((point(origin.x + cell_width * run.col as f32, origin.y + cell_height * run.row as f32), line));
         }
@@ -672,7 +695,7 @@ impl Element for TerminalElement {
                 underline_color: Some(accent),
                 strike: false,
             };
-            let run = self.text_run(&base, &style, text.len(), thickness);
+            let run = self.text_run(&base, bold, &style, text.len(), thickness);
             let line = text_system.shape_line(text.clone().into(), font_size, &[run], None);
             let at = cell_bounds(col, row, 1).origin;
             composed = (line.width / cell_width).ceil() * cell_width;
@@ -734,11 +757,13 @@ impl Element for TerminalElement {
                     strike: false,
                 };
                 let text = c.to_string();
-                let run = self.text_run(&base, &style, text.len(), thickness);
+                let run = self.text_run(&base, bold, &style, text.len(), thickness);
                 text_system.shape_line(text.into(), font_size, &[run], Some(cell_width * cells as f32))
             });
             let glow = config.cursor.glow && self.focused && shape != CursorShape::HollowBlock;
-            CursorLayout { bounds, shape, color, glow, text, block }
+            let stroke =
+                px(config.cursor.thickness.unwrap_or_else(|| (f32::from(cell_height) / 9.).round().max(1.)).round());
+            CursorLayout { bounds, shape, color, glow, rounded: config.cursor.rounded, stroke, text, block }
         });
         self.motion.set(motion);
 
@@ -802,7 +827,9 @@ impl Element for TerminalElement {
         if let Some(cursor) = &layout.cursor {
             let b = cursor.bounds;
             let height = f32::from(layout.cell.height);
-            let stroke = px((height / 9.).round().max(1.));
+            let stroke = cursor.stroke.min(b.size.width).min(b.size.height);
+            // round corners, as far as the cursor has them
+            let round = |radius: f32| if cursor.rounded { radius } else { 0. };
             // the part of the cell the cursor's shape fills
             let lit = match cursor.shape {
                 CursorShape::Beam => Bounds::new(b.origin, size(stroke, b.size.height)),
@@ -821,14 +848,14 @@ impl Element for TerminalElement {
                     inset: false,
                 };
                 let lights = [light(0.5, height * 0.3), light(0.3, height * 1.2)];
-                window.paint_drop_shadows(lit, Corners::all(px(2.)), &lights);
+                window.paint_drop_shadows(lit, Corners::all(px(round(2.))), &lights);
             }
             let solid = |bounds: Bounds<Pixels>, radius: f32| {
                 quad(bounds, px(radius), cursor.color, px(0.), transparent_black(), BorderStyle::default())
             };
             match cursor.shape {
                 CursorShape::Block => {
-                    window.paint_quad(solid(lit, 2.));
+                    window.paint_quad(solid(lit, round(2.)));
                     if let Some(text) = &cursor.text {
                         let _ = text.paint(b.origin, layout.cell.height, TextAlign::Left, None, window, cx);
                     }
@@ -838,7 +865,7 @@ impl Element for TerminalElement {
                         }
                     }
                 },
-                CursorShape::Beam | CursorShape::Underline => window.paint_quad(solid(lit, 1.)),
+                CursorShape::Beam | CursorShape::Underline => window.paint_quad(solid(lit, round(1.))),
                 CursorShape::HollowBlock => {
                     let line = px(1.);
                     let (o, s) = (b.origin, b.size);

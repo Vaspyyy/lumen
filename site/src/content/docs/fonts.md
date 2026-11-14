@@ -34,6 +34,19 @@ It does not take the nearest font the system offers. That would often be a font 
 
 `line_height` is the height of a row as a multiple of the font's own line height. `1.0` is what the font's designer chose. `1.2` gives the lines more air, and fits fewer of them into the window.
 
+## Ligatures and weight
+
+```toml
+[font]
+ligatures = false
+weight = 300
+bold_weight = 600
+```
+
+Some fonts join letters into one sign: `->` into an arrow, `!=` into a crossed equals sign. lumen draws those, as the font intends. `ligatures = false` keeps every letter as it is.
+
+`weight` is how heavy plain text is, and `bold_weight` how heavy bold text is, from 100 (thin) to 900 (black); 400 is regular and 700 bold. A font that doesn't have the weight you ask for is drawn in the nearest one it has. A light weight suits a light theme or a screen with many pixels.
+
 ## Size for one pane
 
 `Ctrl+Plus` and `Ctrl+Minus` change the text size of the pane you are in, and `Ctrl+0` brings it back. The other panes keep theirs. That is for the moment something has to be read from across the room, or a wide table has to fit.

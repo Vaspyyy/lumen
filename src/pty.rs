@@ -22,8 +22,8 @@ use alacritty_terminal::tty::{self, EventedPty, EventedReadWrite};
 use alacritty_terminal::vte::ansi;
 use polling::{Event as Interest, Events, PollMode, Poller};
 
-use crate::commands;
 use crate::graphics::{Filter, Graphics, Piece, Shared};
+use crate::{commands, queries};
 
 const READ_BUFFER: usize = 0x10_0000;
 /// How much is parsed in one go before the window gets a turn at the grid.
@@ -33,6 +33,13 @@ const EIO: i32 = 5;
 /// The keys alacritty_terminal registers the PTY and its child's exit under.
 const PTY_READ_WRITE: usize = 0;
 const PTY_CHILD_EVENT: usize = 1;
+
+/// Sends an answer to the program the way the parser sends its own: by the
+/// window, which writes them in the order they were asked for. A program
+/// that asks several things at once tells the answers apart by that order.
+fn answer<L: EventListener>(listener: &L, text: String) {
+    listener.send_event(Event::PtyWrite(text));
+}
 
 pub enum Msg {
     /// Bytes for the program.
@@ -68,6 +75,8 @@ pub struct IoLoop<L: EventListener> {
     graphics: Graphics,
     /// What finds a shell's marks in the output, and the commands they tell of.
     marks: commands::Scanner,
+    /// What finds the questions the parser leaves unanswered.
+    queries: queries::Scanner,
     commands: commands::Shared,
     /// A cell's size in pixels, which an image's size in cells follows from.
     cell: (f32, f32),
@@ -101,6 +110,7 @@ impl<L: EventListener + Send + 'static> IoLoop<L> {
             filter: Filter::default(),
             graphics: Graphics::new(images),
             marks: commands::Scanner::default(),
+            queries: queries::Scanner::default(),
             commands,
             cell,
         })
@@ -148,8 +158,33 @@ impl<L: EventListener + Send + 'static> IoLoop<L> {
             for piece in pieces {
                 match piece {
                     Piece::Text(bytes) => {
+                        let mut queries = Vec::new();
+                        self.queries.feed(bytes, |end, query| queries.push((end, query)));
                         let term = terminal.get_or_insert_with(|| self.terminal.lock_unfair());
-                        commands::advance(&mut self.marks, &self.commands, &mut state.parser, &mut **term, bytes);
+                        let mut done = 0;
+                        for (end, query) in queries {
+                            commands::advance(
+                                &mut self.marks,
+                                &self.commands,
+                                &mut state.parser,
+                                &mut **term,
+                                &bytes[done..end],
+                            );
+                            done = end;
+                            // the parser answers what was asked before this when it gets to it,
+                            // which is at the end of a synchronized update: that is now
+                            if state.parser.sync_bytes_count() > 0 {
+                                state.parser.stop_sync(&mut **term);
+                            }
+                            answer(&self.listener, query.answer(self.cell));
+                        }
+                        commands::advance(
+                            &mut self.marks,
+                            &self.commands,
+                            &mut state.parser,
+                            &mut **term,
+                            &bytes[done..],
+                        );
                     },
                     Piece::Command(command) => {
                         // reading an image takes a while: the window may have the grid meanwhile
@@ -165,8 +200,8 @@ impl<L: EventListener + Send + 'static> IoLoop<L> {
                             if state.parser.sync_bytes_count() > 0 {
                                 state.parser.stop_sync(&mut **term);
                             }
-                            if let Some(answer) = self.graphics.apply(step, &mut **term, self.cell) {
-                                state.queue.push_back(answer.into());
+                            if let Some(said) = self.graphics.apply(step, &mut **term, self.cell) {
+                                answer(&self.listener, String::from_utf8_lossy(&said).into_owned());
                             }
                             // an image moves what stands above it up by its rows, for a few bytes
                             self.commands.lock().unwrap().wrote(crate::graphics::MAX_ROWS);

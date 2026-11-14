@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::DocumentMut;
 
-use crate::config::{Config, TabFolder};
+use crate::config::{Clipboard, Config, Decorations, StartupMode, TabBar, TabFolder, Unfocused};
 
 pub const USAGE: &str = "\
 SETTINGS
@@ -112,6 +112,23 @@ fn rows() -> Vec<Row> {
             |c| Value::Text(c.new_tab_folder.written().to_string()),
         ),
         item(
+            Some("tabs"),
+            "bar",
+            "Tab bar",
+            "always; auto: only with two tabs or more; never. The keys for tabs work without it.",
+            Choice(&["always", "auto", "never"]),
+            |c| {
+                Value::Text(
+                    match c.tabs.bar {
+                        TabBar::Always => "always",
+                        TabBar::Auto => "auto",
+                        TabBar::Never => "never",
+                    }
+                    .into(),
+                )
+            },
+        ),
+        item(
             None,
             "launch",
             "Starting lumen again opens a",
@@ -161,7 +178,48 @@ fn rows() -> Vec<Row> {
             Number { step: 0.05, min: 0.8, max: 3., decimals: 2 },
             |c| Value::Number(c.font.line_height.into()),
         ),
+        item(
+            Some("font"),
+            "ligatures",
+            "Ligatures",
+            "Letters a font joins into one sign, such as -> into an arrow, are joined.",
+            Bool,
+            |c| Value::Bool(c.font.ligatures),
+        ),
+        item(
+            Some("font"),
+            "weight",
+            "Weight",
+            "How heavy plain text is: 100 is thin, 400 regular, 900 black.",
+            Number { step: 100., min: 100., max: 900., decimals: 0 },
+            |c| Value::Number(c.font.weight.into()),
+        ),
+        item(
+            Some("font"),
+            "bold_weight",
+            "Bold weight",
+            "How heavy bold text is: 700 is the usual bold.",
+            Number { step: 100., min: 100., max: 900., decimals: 0 },
+            |c| Value::Number(c.font.bold_weight.into()),
+        ),
         Heading("Window"),
+        item(
+            Some("window"),
+            "decorations",
+            "Frame",
+            "lumen: round corners and a shadow. desktop: your desktop's title bar. none: nothing at all.",
+            Choice(&["lumen", "desktop", "none"]),
+            |c| {
+                Value::Text(
+                    match c.window.decorations {
+                        Decorations::Lumen => "lumen",
+                        Decorations::Desktop => "desktop",
+                        Decorations::None => "none",
+                    }
+                    .into(),
+                )
+            },
+        ),
         item(
             Some("window"),
             "opacity",
@@ -182,9 +240,34 @@ fn rows() -> Vec<Row> {
             Some("window"),
             "padding",
             "Padding",
-            "Space around a pane's text, in pixels.",
+            "Space around a pane's text, in pixels. The file can set it across and down apart: { x = 10, y = 4 }.",
             Number { step: 1., min: 0., max: 200., decimals: 0 },
-            |c| Value::Number(c.window.padding.into()),
+            |c| Value::Number(c.window.padding.x.into()),
+        ),
+        item(
+            Some("window"),
+            "dynamic_padding",
+            "Text in the middle",
+            "What a pane has beyond its last whole cell goes to both sides, not to the right and bottom.",
+            Bool,
+            |c| Value::Bool(c.window.dynamic_padding),
+        ),
+        item(
+            Some("window"),
+            "startup_mode",
+            "New windows open",
+            "As a window, maximized, or on the whole screen.",
+            Choice(&["windowed", "maximized", "fullscreen"]),
+            |c| {
+                Value::Text(
+                    match c.window.startup_mode {
+                        StartupMode::Windowed => "windowed",
+                        StartupMode::Maximized => "maximized",
+                        StartupMode::Fullscreen => "fullscreen",
+                    }
+                    .into(),
+                )
+            },
         ),
         Heading("Cursor"),
         item(
@@ -207,10 +290,38 @@ fn rows() -> Vec<Row> {
         item(Some("cursor"), "blink", "Blink", "The cursor dims and comes back.", Bool, |c| {
             Value::Bool(c.cursor.blink)
         }),
+        item(
+            Some("cursor"),
+            "blink_interval",
+            "Blink time",
+            "Milliseconds the cursor is lit, and then dimmed.",
+            Number { step: 50., min: 100., max: 5000., decimals: 0 },
+            |c| Value::Number(c.cursor.blink_interval as f64),
+        ),
+        item(Some("cursor"), "rounded", "Round corners", "The cursor's corners are round, not square.", Bool, |c| {
+            Value::Bool(c.cursor.rounded)
+        }),
         item(Some("cursor"), "glow", "Glow", "The cursor gives off light.", Bool, |c| Value::Bool(c.cursor.glow)),
         item(Some("cursor"), "smooth", "Glide", "The cursor slides to where it goes instead of jumping.", Bool, |c| {
             Value::Bool(c.cursor.smooth)
         }),
+        item(
+            Some("cursor"),
+            "unfocused",
+            "In other panes",
+            "The cursor of a pane you aren't typing in: hollow, the same shape, or none.",
+            Choice(&["hollow", "same", "hidden"]),
+            |c| {
+                Value::Text(
+                    match c.cursor.unfocused {
+                        Unfocused::Hollow => "hollow",
+                        Unfocused::Same => "same",
+                        Unfocused::Hidden => "hidden",
+                    }
+                    .into(),
+                )
+            },
+        ),
         Heading("Behavior"),
         item(
             None,
@@ -235,6 +346,40 @@ fn rows() -> Vec<Row> {
             "How many lines are kept above the screen.",
             Number { step: 1000., min: 0., max: 1_000_000., decimals: 0 },
             |c| Value::Number(c.scrollback as f64),
+        ),
+        item(
+            Some("mouse"),
+            "scroll_multiplier",
+            "Wheel speed",
+            "How far a turn of the mouse wheel scrolls: 2 is twice as far.",
+            Number { step: 0.5, min: 0.1, max: 20., decimals: 1 },
+            |c| Value::Number(c.mouse.scroll_multiplier.into()),
+        ),
+        item(
+            Some("mouse"),
+            "hide_while_typing",
+            "Hide the pointer to type",
+            "The mouse pointer goes out of sight while you type, until the mouse moves.",
+            Bool,
+            |c| Value::Bool(c.mouse.hide_while_typing),
+        ),
+        item(
+            None,
+            "clipboard",
+            "Programs may",
+            "What a program may do with the clipboard: copy to it, paste from it, both, or nothing.",
+            Choice(&["copy", "paste", "both", "off"]),
+            |c| {
+                Value::Text(
+                    match c.clipboard {
+                        Clipboard::Copy => "copy",
+                        Clipboard::Paste => "paste",
+                        Clipboard::Both => "both",
+                        Clipboard::Off => "off",
+                    }
+                    .into(),
+                )
+            },
         ),
         item(
             Some("pulse"),
@@ -556,7 +701,8 @@ impl Menu {
             &mut out,
             &format!(
                 "  \x1b[2m{} · each change is saved and shows at once",
-                clip(&shown_path, columns.saturating_sub(40))
+                // the two spaces before it and the 41 characters after it fit on the line too
+                clip(&shown_path, columns.saturating_sub(44))
             ),
         );
         line(&mut out, "");
@@ -622,12 +768,13 @@ fn cycle<'a>(words: &[&'a str], now: &str, by: isize) -> &'a str {
 }
 
 /// A number for the file: kept between the ends, rounded to its decimals, and a whole
-/// one for a setting that counts (scrollback).
+/// one for a setting without decimals (scrollback, a font's weight), which lumen reads
+/// as a count and not as `400.0`.
 fn number(n: f64, min: f64, max: f64, decimals: usize) -> toml_edit::Item {
     let n = n.clamp(min, max);
     let scale = 10f64.powi(decimals as i32);
     let n = (n * scale).round() / scale;
-    if decimals == 0 && max > 1000. { toml_edit::value(n as i64) } else { toml_edit::value(n) }
+    if decimals == 0 { toml_edit::value(n as i64) } else { toml_edit::value(n) }
 }
 
 /// A value as the menu shows it: a number to its setting's decimals (the config keeps
@@ -991,6 +1138,42 @@ mod tests {
         assert!(!written.contains("scrollback"), "the removed file's settings came back: {written}");
         assert_eq!(std::fs::read_to_string(dir.join(".lumen.toml.settings")).unwrap(), "mine");
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "nothing else is left beside it");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn every_setting_can_be_changed_both_ways() {
+        let (mut menu, dir) = menu_on("");
+        let settings: Vec<(Option<&str>, &str)> = menu
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Setting(item) if !matches!(item.kind, Kind::Text) => Some((item.table, item.key)),
+                _ => None,
+            })
+            .collect();
+        for (table, key) in settings {
+            for way in [Key::Right, Key::Left, Key::Left] {
+                go_to(&mut menu, table, key);
+                menu.said = None;
+                menu.key(way);
+                assert!(matches!(&menu.said, Some((_, true))), "{table:?}.{key}: {:?}", menu.said);
+            }
+        }
+        // what was written is a file lumen takes, whole numbers as whole numbers
+        let written = std::fs::read_to_string(dir.join("lumen.toml")).unwrap();
+        let config: Config = toml::from_str(&written).unwrap();
+        assert_eq!(config.font.weight, 300, "{written}");
+        assert!(written.contains("weight = 300\n"), "{written}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn padding_written_apart_is_shown_and_changed_as_one_number() {
+        let (mut menu, dir) = menu_on("[window]\npadding = { x = 4, y = 0 }\n");
+        go_to(&mut menu, Some("window"), "padding");
+        menu.key(Key::Right);
+        assert_eq!(menu.config().window.padding, crate::config::Padding { x: 5., y: 5. });
         std::fs::remove_dir_all(dir).unwrap();
     }
 

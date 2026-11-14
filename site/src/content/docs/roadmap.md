@@ -47,7 +47,6 @@ The memory beside a command's mark is what was seen every few seconds. The syste
 
 Things other terminals have and lumen doesn't, in no order. None of them has a date.
 
-- **Keys can't be changed.** The keys lumen takes are fixed.
 - **Not in any distribution's repositories.** lumen has [packages of its own](/docs/install/), which a system's updates don't know about: a new version is installed by hand.
 - **Packages for one kind of machine.** They are built for `x86_64`. On ARM, lumen is built from source.
 - **Linux only**, and Android for the phone app. No iPhone.

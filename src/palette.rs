@@ -11,6 +11,12 @@ use crate::config::{Colors, Rgb};
 /// the gray ramp. Above that are the named colors (foreground, background,
 /// cursor and the dim variants).
 pub fn indexed(index: usize, colors: &Colors) -> Rgb {
+    // the theme's own for one of the 240 past the sixteen, the last it names for it
+    if (16..=255).contains(&index)
+        && let Some(own) = colors.indexed_colors.iter().rfind(|own| usize::from(own.index) == index)
+    {
+        return own.color;
+    }
     match index {
         0..=7 => colors.normal.list()[index],
         8..=15 => colors.bright.list()[index - 8],

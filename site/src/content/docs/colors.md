@@ -35,7 +35,15 @@ white = "#bac2de"
 
 Save, and lumen changes its colors while you look at it.
 
-A theme can hold tables for parts of Alacritty that lumen doesn't have (`search`, `hints`, `vi_mode_cursor`, `footer_bar`, `line_indicator`, `dim`, `indexed_colors`). lumen accepts them and leaves them aside, so nothing has to be deleted from what you paste. This needs lumen 0.2.1 or newer.
+A theme can hold tables for parts of Alacritty that lumen doesn't have (`search`, `hints`, `vi_mode_cursor`, `footer_bar`, `line_indicator`, `dim`). lumen accepts them and leaves them aside, so nothing has to be deleted from what you paste. This needs lumen 0.2.1 or newer.
+
+`indexed_colors` is taken as Alacritty takes it: each entry sets one of the colors from 16 to 255, which are otherwise the usual cube and gray ramp.
+
+```toml
+[[colors.indexed_colors]]
+index = 16
+color = "#fab387"
+```
 
 lumen has no `import` line as Alacritty has. The tables go into `lumen.toml` itself.
 

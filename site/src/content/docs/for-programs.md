@@ -14,7 +14,7 @@ This page is for people who write command line tools, and for anyone who wants t
 | `TERM_PROGRAM` | `lumen` |
 | `TERM_PROGRAM_VERSION` | lumen's version, such as `0.2.1` |
 
-lumen has no terminfo entry of its own. It behaves as xterm does where programs look that up, so it works on machines that have never heard of it, over SSH as well. `TERM_PROGRAM` is not passed on over SSH unless you configure that. Another terminal that is started from a shell in lumen inherits it, unless it sets its own.
+lumen has no terminfo entry of its own. It behaves as xterm does where programs look that up, so it works on machines that have never heard of it, over SSH as well. `TERM_PROGRAM` is not passed on over SSH unless you configure that; XTVERSION, below, tells a program which terminal it is in there too. Another terminal that is started from a shell in lumen inherits it, unless it sets its own. `[env]` in the [config](/docs/configuration/#env) can set `TERM` to something else.
 
 The better way to find out what a terminal can do is to ask it. lumen answers the queries the protocols below define for that.
 
@@ -32,14 +32,14 @@ The better way to find out what a terminal can do is to ask it. lumen answers th
 | Pictures | The kitty graphics protocol, in part. See [Pictures](/docs/images/) |
 | Keyboard | The kitty keyboard protocol, all of its levels |
 | Mouse | Click, drag and motion reports, in the SGR format and the older one |
-| Clipboard | A program can set the clipboard (OSC 52). It can't read it |
+| Clipboard | A program can set the clipboard (OSC 52). It can read it only where `clipboard` in the [config](/docs/configuration/) allows that |
 | Window title | OSC 0 and 2. The title is the tab's name |
 | Paste | Bracketed paste |
 | Focus | Reports when the pane gains or loses the keyboard, to programs that ask |
 | Screen updates | Synchronized updates, so a redraw is shown whole |
 | Screens | The alternate screen, with the wheel as arrow keys in it |
 | Cursor | The shapes a program can ask for: block, beam, underline. Whether it blinks is set in the config, not by the program |
-| Queries | The colors in use, the size of the window in cells and in pixels, what kind of terminal this is |
+| Queries | The colors in use, the size of the window in cells and in pixels, the size of a cell in pixels (`CSI 16 t`), what kind of terminal this is, and its name and version (XTVERSION, `CSI > q`: `lumen 0.6.0`) |
 
 ## The kitty keyboard protocol
 
