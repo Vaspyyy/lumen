@@ -16,7 +16,7 @@ border = true           # the thin line around the window
 shadow = true           # the shadow around it
 ```
 
-The shadow is drawn around the window only, never under it, so a see-through window is as see-through as `opacity` says. Very round corners want a little more `padding`: the text's own corners stay inside the curve while `padding` is at least about a third of `corner_radius`. `decorations = "desktop"` gives your desktop's own frame instead, and `"none"` no frame at all. See [Configuration](/docs/configuration/#window).
+The shadow is drawn around the window only, never under it, so a see-through window is as see-through as `opacity` says. Everything in the window keeps to its round corners, so very round ones cut into the text's own corners: a `padding` of about a third of `corner_radius` keeps the text clear of them. `decorations = "desktop"` gives your desktop's own frame instead, and `"none"` no frame at all. See [Configuration](/docs/configuration/#window).
 
 ## A picture behind the text
 
