@@ -39,7 +39,7 @@ The better way to find out what a terminal can do is to ask it. lumen answers th
 | Screen updates | Synchronized updates, so a redraw is shown whole |
 | Screens | The alternate screen, with the wheel as arrow keys in it |
 | Cursor | The shapes a program can ask for: block, beam, underline. Whether it blinks is set in the config, not by the program |
-| Queries | The colors in use, the size of the window in cells and in pixels, the size of a cell in pixels (`CSI 16 t`), what kind of terminal this is, and its name and version (XTVERSION, `CSI > q`: `lumen 0.6.0`) |
+| Queries | The colors in use, the size of the window in cells and in pixels, the size of a cell in pixels (`CSI 16 t`), what kind of terminal this is, and its name and version (XTVERSION, `CSI > q`: `lumen 0.7.0` in this version) |
 
 ## The kitty keyboard protocol
 
