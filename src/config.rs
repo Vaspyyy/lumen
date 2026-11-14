@@ -148,11 +148,28 @@ pub struct Font {
     /// How heavy plain text is, and bold text: 100 (thin) to 900 (black).
     pub weight: u16,
     pub bold_weight: u16,
+    /// Pixels between two characters, beyond what the font has: a cell is wider by it.
+    pub letter_spacing: f32,
+    /// The family of lumen's own words (the tabs, the notes, the search): the
+    /// desktop's if unset.
+    pub ui_family: Option<String>,
+    /// Their size, in pixels.
+    pub ui_size: f32,
 }
 
 impl Default for Font {
     fn default() -> Self {
-        Font { family: "monospace".into(), size: 12., line_height: 1.0, ligatures: true, weight: 400, bold_weight: 700 }
+        Font {
+            family: "monospace".into(),
+            size: 12.,
+            line_height: 1.0,
+            ligatures: true,
+            weight: 400,
+            bold_weight: 700,
+            letter_spacing: 0.,
+            ui_family: None,
+            ui_size: 12.5,
+        }
     }
 }
 
@@ -247,6 +264,21 @@ pub struct Window {
     pub startup_mode: StartupMode,
     pub columns: usize,
     pub lines: usize,
+    /// How round the corners of lumen's frame are, in pixels.
+    pub corner_radius: f32,
+    /// lumen's frame casts a shadow around the window.
+    pub shadow: bool,
+    /// A hairline around lumen's frame.
+    pub border: bool,
+    /// A picture behind the text: a file, `~` for the home folder.
+    pub background_image: Option<String>,
+    /// How much of the picture shows over the background's own color: 1 is all of it.
+    pub background_image_opacity: f32,
+    pub background_image_fit: ImageFit,
+    /// The background fades from its own color into this one.
+    pub gradient: Option<Rgb>,
+    /// Which way it fades, in degrees: 180 is from the top down, 90 from the left.
+    pub gradient_angle: f32,
 }
 
 impl Default for Window {
@@ -260,7 +292,62 @@ impl Default for Window {
             startup_mode: StartupMode::default(),
             columns: 100,
             lines: 30,
+            corner_radius: 12.,
+            shadow: true,
+            border: true,
+            background_image: None,
+            background_image_opacity: 0.3,
+            background_image_fit: ImageFit::default(),
+            gradient: None,
+            gradient_angle: 180.,
         }
+    }
+}
+
+impl Window {
+    /// The background picture's file, if one is set: `~` is the home folder, and a path
+    /// that doesn't start at `/` starts at the config file's folder.
+    pub fn background_image(&self) -> Option<PathBuf> {
+        let written = self.background_image.as_deref()?.trim();
+        let path = expand_home(written).filter(|_| !written.is_empty())?;
+        if path.is_absolute() { Some(path) } else { Some(Config::path().parent()?.join(path)) }
+    }
+}
+
+/// How the background picture fills the window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageFit {
+    /// All of the window, cutting off what sticks out.
+    #[default]
+    Cover,
+    /// All of the picture, with room left beside it.
+    Contain,
+    /// Stretched to the window's shape.
+    Fill,
+}
+
+/// Where the tab bar is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TabPosition {
+    #[default]
+    Top,
+    Bottom,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Panes {
+    /// How far the panes without the keyboard step back: 0 not at all, 1 out of sight.
+    pub dim_inactive: f32,
+    /// The line between two panes, in pixels: 0 is none.
+    pub divider_width: f32,
+}
+
+impl Default for Panes {
+    fn default() -> Self {
+        Panes { dim_inactive: 0.22, divider_width: 1. }
     }
 }
 
@@ -279,6 +366,7 @@ pub enum TabBar {
 #[serde(default, deny_unknown_fields)]
 pub struct Tabs {
     pub bar: TabBar,
+    pub position: TabPosition,
 }
 
 /// The cursor of a pane that doesn't have the keyboard.
@@ -309,6 +397,15 @@ pub struct Cursor {
     /// How thick a beam or an underline is, in pixels: a ninth of a row if unset.
     pub thickness: Option<f32>,
     pub unfocused: Unfocused,
+    /// How bright the glow is, and how far it reaches: 1 is lumen's own.
+    pub glow_strength: f32,
+    pub glow_size: f32,
+    /// Milliseconds the cursor takes to glide to its next cell.
+    pub glide_time: u64,
+    /// How bright a blinking cursor is at its dimmest: 0 is out.
+    pub blink_dim: f32,
+    /// Milliseconds it takes to dim and to come back: 0 is at once.
+    pub blink_fade: u64,
 }
 
 impl Default for Cursor {
@@ -322,6 +419,11 @@ impl Default for Cursor {
             rounded: true,
             thickness: None,
             unfocused: Unfocused::default(),
+            glow_strength: 1.,
+            glow_size: 1.,
+            glide_time: 70,
+            blink_dim: 0.22,
+            blink_fade: 140,
         }
     }
 }
@@ -488,9 +590,11 @@ pub struct Colors {
     pub selection: SelectionColors,
     pub normal: Ansi,
     pub bright: Ansi,
-    /// The color of lumen's own light: the cursor's glow, the active tab.
+    /// The color of lumen's own light: the line under the active tab, the search.
     pub accent: Rgb,
     pub draw_bold_text_with_bright_colors: bool,
+    /// The colors of lumen's own parts: the tabs, the frame, the lines between panes.
+    pub ui: UiColors,
     // the rest of what Alacritty's [colors] can hold
     #[serde(rename = "dim")]
     _dim: Unused,
@@ -508,6 +612,72 @@ pub struct Colors {
     pub indexed_colors: Vec<IndexedColor>,
     #[serde(rename = "transparent_background_colors")]
     _transparent_background_colors: Unused,
+}
+
+/// A color that may be see-through: `#rrggbb`, or `#rrggbbaa`, where `aa` is
+/// how much of what is behind it it covers (`ff` all of it, `00` nothing).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tint(pub u8, pub u8, pub u8, pub u8);
+
+impl Tint {
+    pub fn parse(s: &str) -> Option<Tint> {
+        let hex = s.trim().trim_start_matches('#').trim_start_matches("0x");
+        match hex.len() {
+            6 => Rgb::parse(hex).map(|Rgb(r, g, b)| Tint(r, g, b, 0xff)),
+            8 => {
+                let n = u32::from_str_radix(hex, 16).ok()?;
+                Some(Tint((n >> 24) as u8, (n >> 16) as u8, (n >> 8) as u8, n as u8))
+            },
+            _ => None,
+        }
+    }
+
+    pub fn hsla(self) -> Hsla {
+        Hsla { a: f32::from(self.3) / 255., ..Rgb(self.0, self.1, self.2).hsla() }
+    }
+}
+
+impl<'de> Deserialize<'de> for Tint {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Tint::parse(&s).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "not a color: {s:?} (want \"#rrggbb\", or \"#rrggbbaa\" to see through it)"
+            ))
+        })
+    }
+}
+
+/// `[colors.ui]`: the colors of what lumen draws itself. Each may be
+/// see-through, and each that isn't set follows `text`, but for the shadow,
+/// which is black.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct UiColors {
+    /// lumen's own words and signs. Unset, white on a dark background and black on a light one.
+    pub text: Option<Tint>,
+    /// The hairline around lumen's frame.
+    pub border: Option<Tint>,
+    /// The line between two panes.
+    pub divider: Option<Tint>,
+    /// Behind the tab bar: the window's background if unset.
+    pub tab_bar: Option<Tint>,
+    /// Behind the tab you are in.
+    pub active_tab: Option<Tint>,
+    /// The frame's shadow.
+    pub shadow: Option<Tint>,
+}
+
+/// The colors lumen's own parts are drawn in, as they come out of
+/// `[colors.ui]` and the theme.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ui {
+    pub text: Hsla,
+    pub border: Hsla,
+    pub divider: Hsla,
+    pub tab_bar: Option<Hsla>,
+    pub active_tab: Hsla,
+    pub shadow: Hsla,
 }
 
 /// One of the 256 colors, as Alacritty's `[[colors.indexed_colors]]` names it.
@@ -565,6 +735,7 @@ impl Default for Colors {
             },
             accent: Rgb(0xff, 0xc9, 0x7a),
             draw_bold_text_with_bright_colors: false,
+            ui: UiColors::default(),
             _dim: Unused,
             _vi_mode_cursor: Unused,
             _search: Unused,
@@ -611,6 +782,7 @@ pub struct Config {
     pub font: Font,
     pub window: Window,
     pub tabs: Tabs,
+    pub panes: Panes,
     pub cursor: Cursor,
     pub mouse: Mouse,
     pub selection: Selection,
@@ -650,6 +822,7 @@ impl Default for Config {
             font: Font::default(),
             window: Window::default(),
             tabs: Tabs::default(),
+            panes: Panes::default(),
             cursor: Cursor::default(),
             mouse: Mouse::default(),
             selection: Selection::default(),
@@ -699,11 +872,29 @@ impl Config {
             if value.is_nan() { default } else { value.clamp(least, most) }
         };
         let (font, window, mouse) = (Font::default(), Window::default(), Mouse::default());
+        let (cursor, panes) = (Cursor::default(), Panes::default());
         self.font.family = installed_family(&self.font.family);
         self.font.size = within(self.font.size, 4., 96., font.size);
         self.font.line_height = within(self.font.line_height, 0.8, 3., font.line_height);
         self.font.weight = self.font.weight.clamp(100, 900);
         self.font.bold_weight = self.font.bold_weight.clamp(100, 900);
+        self.font.letter_spacing = within(self.font.letter_spacing, -5., 20., font.letter_spacing);
+        self.font.ui_size = within(self.font.ui_size, 8., 18., font.ui_size);
+        self.window.corner_radius = within(self.window.corner_radius, 0., 40., window.corner_radius);
+        self.window.background_image_opacity =
+            within(self.window.background_image_opacity, 0., 1., window.background_image_opacity);
+        self.window.gradient_angle = if self.window.gradient_angle.is_finite() {
+            self.window.gradient_angle.rem_euclid(360.)
+        } else {
+            window.gradient_angle
+        };
+        self.panes.dim_inactive = within(self.panes.dim_inactive, 0., 1., panes.dim_inactive);
+        self.panes.divider_width = within(self.panes.divider_width, 0., 8., panes.divider_width);
+        self.cursor.glow_strength = within(self.cursor.glow_strength, 0., 3., cursor.glow_strength);
+        self.cursor.glow_size = within(self.cursor.glow_size, 0.2, 4., cursor.glow_size);
+        self.cursor.glide_time = self.cursor.glide_time.clamp(10, 1000);
+        self.cursor.blink_dim = within(self.cursor.blink_dim, 0., 1., cursor.blink_dim);
+        self.cursor.blink_fade = self.cursor.blink_fade.min(1000);
         self.window.opacity = within(self.window.opacity, 0., 1., window.opacity);
         self.window.padding.x = within(self.window.padding.x, 0., 200., window.padding.x);
         self.window.padding.y = within(self.window.padding.y, 0., 200., window.padding.y);
@@ -750,6 +941,31 @@ impl Config {
 
     pub fn accent(&self) -> Hsla {
         self.colors.accent.hsla()
+    }
+
+    /// The colors of lumen's own parts: what `[colors.ui]` sets, and for the
+    /// rest, shades of its text color, which is white or black, whichever
+    /// stands out more on the theme's background (and a black shadow).
+    pub fn ui(&self) -> Ui {
+        let set = &self.colors.ui;
+        let background = self.colors.primary.background;
+        let white = Rgb(0xff, 0xff, 0xff);
+        let black = Rgb(0, 0, 0);
+        let auto = if crate::palette::contrast(white, background) >= crate::palette::contrast(black, background) {
+            white
+        } else {
+            black
+        };
+        let text = set.text.map(Tint::hsla).unwrap_or_else(|| auto.hsla());
+        let or = |tint: Option<Tint>, alpha: f32| tint.map(Tint::hsla).unwrap_or_else(|| text.opacity(alpha));
+        Ui {
+            text,
+            border: or(set.border, 0.1),
+            divider: or(set.divider, 0.08),
+            tab_bar: set.tab_bar.map(Tint::hsla),
+            active_tab: or(set.active_tab, 0.09),
+            shadow: set.shadow.map(Tint::hsla).unwrap_or_else(|| gpui::black().opacity(0.35)),
+        }
     }
 
     /// What a window asks the desktop for: a frame of the desktop's, or none
@@ -1047,5 +1263,106 @@ mod tests {
         // the ones it doesn't name are the usual ones
         assert_eq!(crate::palette::indexed(17, &config.colors), crate::palette::indexed(17, &Colors::default()));
         assert!(toml::from_str::<Config>("[[colors.indexed_colors]]\nindex = 300\ncolor = \"#000000\"\n").is_err());
+    }
+
+    #[test]
+    fn a_tint_is_a_color_that_may_be_see_through() {
+        assert_eq!(Tint::parse("#ff8000"), Some(Tint(0xff, 0x80, 0x00, 0xff)));
+        assert_eq!(Tint::parse("#ff800080"), Some(Tint(0xff, 0x80, 0x00, 0x80)));
+        assert_eq!(Tint::parse("0x00000000"), Some(Tint(0, 0, 0, 0)));
+        assert_eq!(Tint::parse("#ff80"), None);
+        assert_eq!(Tint::parse("red"), None);
+        assert!((Tint(0, 0, 0, 0x80).hsla().a - 0.502).abs() < 0.01);
+        assert!(toml::from_str::<Config>("[colors.ui]\ntext = \"#12345\"\n").is_err());
+        assert!(toml::from_str::<Config>("[colors.ui]\ntxet = \"#123456\"\n").is_err());
+    }
+
+    #[test]
+    fn lumens_own_colors_follow_the_theme() {
+        // white on lumen's dark theme, at the shades lumen always had
+        let dark = Config::default().ui();
+        assert_eq!(dark.text, gpui::white());
+        assert_eq!(dark.border, gpui::white().opacity(0.1));
+        assert_eq!(dark.divider, gpui::white().opacity(0.08));
+        assert_eq!(dark.active_tab, gpui::white().opacity(0.09));
+        assert_eq!(dark.tab_bar, None);
+        // black on a light one, where white would not be seen
+        let light: Config = toml::from_str("[colors.primary]\nbackground = \"#fafafa\"\n").unwrap();
+        assert_eq!(light.ui().text, gpui::black());
+        assert_eq!(light.ui().border, gpui::black().opacity(0.1));
+        // what is set wins, and what isn't follows the text that is set
+        let set: Config =
+            toml::from_str("[colors.ui]\ntext = \"#ff0000\"\ntab_bar = \"#00000080\"\ndivider = \"#00ff00\"\n")
+                .unwrap();
+        let ui = set.ui();
+        assert_eq!(ui.text, Rgb(0xff, 0, 0).hsla());
+        assert_eq!(ui.border, Rgb(0xff, 0, 0).hsla().opacity(0.1));
+        assert_eq!(ui.divider, Rgb(0, 0xff, 0).hsla());
+        assert!(ui.tab_bar.is_some_and(|bar| (bar.a - 0.502).abs() < 0.01));
+    }
+
+    #[test]
+    fn the_looks_are_read_and_kept_in_range() {
+        let config: Config = toml::from_str(
+            r##"
+            [window]
+            corner_radius = 99
+            shadow = false
+            border = false
+            background_image = "~/wall.png"
+            background_image_opacity = 2
+            background_image_fit = "contain"
+            gradient = "#000000"
+            gradient_angle = -90
+
+            [tabs]
+            position = "bottom"
+
+            [panes]
+            dim_inactive = nan
+            divider_width = 3
+
+            [cursor]
+            glow_strength = 9
+            glow_size = 0
+            glide_time = 1
+            blink_dim = 0
+            blink_fade = 5000
+
+            [font]
+            letter_spacing = 1.5
+            ui_family = "Inter"
+            ui_size = 30
+            "##,
+        )
+        .unwrap();
+        let config = config.checked();
+        assert_eq!(config.window.corner_radius, 40.);
+        assert!(!config.window.shadow && !config.window.border);
+        assert_eq!(config.window.background_image(), dirs::home_dir().map(|home| home.join("wall.png")));
+        assert_eq!(config.window.background_image_opacity, 1.);
+        assert_eq!(config.window.background_image_fit, ImageFit::Contain);
+        assert_eq!(config.window.gradient, Some(Rgb(0, 0, 0)));
+        assert_eq!(config.window.gradient_angle, 270.);
+        assert_eq!(config.tabs.position, TabPosition::Bottom);
+        assert_eq!(config.panes.dim_inactive, Panes::default().dim_inactive);
+        assert_eq!(config.panes.divider_width, 3.);
+        assert_eq!(config.cursor.glow_strength, 3.);
+        assert_eq!(config.cursor.glow_size, 0.2);
+        assert_eq!(config.cursor.glide_time, 10);
+        assert_eq!(config.cursor.blink_dim, 0.);
+        assert_eq!(config.cursor.blink_fade, 1000);
+        assert_eq!(config.font.letter_spacing, 1.5);
+        assert_eq!(config.font.ui_family.as_deref(), Some("Inter"));
+        assert_eq!(config.font.ui_size, 18.);
+        assert!(toml::from_str::<Config>("[window]\nbackground_image_fit = \"tile\"\n").is_err());
+        assert!(toml::from_str::<Config>("[tabs]\nposition = \"left\"\n").is_err());
+        assert!(toml::from_str::<Config>("[panes]\ndim = 0.5\n").is_err());
+        // a picture by a bare name is beside the config file, and an empty one is none
+        let picture = |written: &str| Window { background_image: Some(written.into()), ..Window::default() };
+        assert_eq!(picture("wall.png").background_image(), Config::path().parent().map(|dir| dir.join("wall.png")));
+        assert_eq!(picture("/a/wall.png").background_image(), Some(PathBuf::from("/a/wall.png")));
+        assert_eq!(picture("").background_image(), None);
+        assert_eq!(picture("  ").background_image(), None);
     }
 }

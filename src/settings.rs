@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::DocumentMut;
 
-use crate::config::{Clipboard, Config, Decorations, StartupMode, TabBar, TabFolder, Unfocused};
+use crate::config::{
+    Clipboard, Config, Decorations, ImageFit, StartupMode, TabBar, TabFolder, TabPosition, Unfocused, expand_home,
+};
 
 pub const USAGE: &str = "\
 SETTINGS
@@ -71,6 +73,8 @@ enum Kind {
     Text,
     /// `new_tab_folder`: current, home, `/`, or a folder typed in.
     Folder,
+    /// A picture's file, typed in: none until one is.
+    Picture,
 }
 
 /// What a setting is now.
@@ -123,6 +127,22 @@ fn rows() -> Vec<Row> {
                         TabBar::Always => "always",
                         TabBar::Auto => "auto",
                         TabBar::Never => "never",
+                    }
+                    .into(),
+                )
+            },
+        ),
+        item(
+            Some("tabs"),
+            "position",
+            "Tab bar at the",
+            "The top of the window or its bottom.",
+            Choice(&["top", "bottom"]),
+            |c| {
+                Value::Text(
+                    match c.tabs.position {
+                        TabPosition::Top => "top",
+                        TabPosition::Bottom => "bottom",
                     }
                     .into(),
                 )
@@ -202,6 +222,22 @@ fn rows() -> Vec<Row> {
             Number { step: 100., min: 100., max: 900., decimals: 0 },
             |c| Value::Number(c.font.bold_weight.into()),
         ),
+        item(
+            Some("font"),
+            "letter_spacing",
+            "Letter spacing",
+            "Pixels between two characters, beyond the font's own: 1 gives them more air.",
+            Number { step: 0.5, min: -5., max: 20., decimals: 1 },
+            |c| Value::Number(c.font.letter_spacing.into()),
+        ),
+        item(
+            Some("font"),
+            "ui_size",
+            "Size of lumen's own words",
+            "The tabs, the notes and the search, in pixels.",
+            Number { step: 0.5, min: 8., max: 18., decimals: 1 },
+            |c| Value::Number(c.font.ui_size.into()),
+        ),
         Heading("Window"),
         item(
             Some("window"),
@@ -269,6 +305,71 @@ fn rows() -> Vec<Row> {
                 )
             },
         ),
+        item(
+            Some("window"),
+            "corner_radius",
+            "Corner roundness",
+            "How round the corners of lumen's frame are, in pixels: 0 is square.",
+            Number { step: 2., min: 0., max: 40., decimals: 0 },
+            |c| Value::Number(c.window.corner_radius.into()),
+        ),
+        item(Some("window"), "shadow", "Shadow", "lumen's frame casts a shadow around the window.", Bool, |c| {
+            Value::Bool(c.window.shadow)
+        }),
+        item(Some("window"), "border", "Border", "A thin line around lumen's frame.", Bool, |c| {
+            Value::Bool(c.window.border)
+        }),
+        Heading("Background"),
+        item(
+            Some("window"),
+            "background_image",
+            "Picture",
+            "A picture behind the text: Enter, then its file from / or ~/ (PNG, JPEG, WebP, SVG). r takes it away.",
+            Picture,
+            |c| Value::Text(c.window.background_image.clone().unwrap_or_else(|| "none".into())),
+        ),
+        item(
+            Some("window"),
+            "background_image_opacity",
+            "Picture strength",
+            "How much of the picture shows over the background's color: 1 is all of it.",
+            Number { step: 0.05, min: 0., max: 1., decimals: 2 },
+            |c| Value::Number(c.window.background_image_opacity.into()),
+        ),
+        item(
+            Some("window"),
+            "background_image_fit",
+            "Picture fills",
+            "cover: all of the window, cut to fit. contain: all of the picture. fill: stretched.",
+            Choice(&["cover", "contain", "fill"]),
+            |c| {
+                Value::Text(
+                    match c.window.background_image_fit {
+                        ImageFit::Cover => "cover",
+                        ImageFit::Contain => "contain",
+                        ImageFit::Fill => "fill",
+                    }
+                    .into(),
+                )
+            },
+        ),
+        Heading("Panes"),
+        item(
+            Some("panes"),
+            "dim_inactive",
+            "Dim other panes",
+            "How far the panes you aren't typing in step back: 0 not at all.",
+            Number { step: 0.05, min: 0., max: 1., decimals: 2 },
+            |c| Value::Number(c.panes.dim_inactive.into()),
+        ),
+        item(
+            Some("panes"),
+            "divider_width",
+            "Line between panes",
+            "Its width in pixels: 0 is none.",
+            Number { step: 1., min: 0., max: 8., decimals: 0 },
+            |c| Value::Number(c.panes.divider_width.into()),
+        ),
         Heading("Cursor"),
         item(
             Some("cursor"),
@@ -321,6 +422,46 @@ fn rows() -> Vec<Row> {
                     .into(),
                 )
             },
+        ),
+        item(
+            Some("cursor"),
+            "glow_strength",
+            "Glow strength",
+            "How bright the cursor's light is: 1 is lumen's own, 0 none.",
+            Number { step: 0.1, min: 0., max: 3., decimals: 1 },
+            |c| Value::Number(c.cursor.glow_strength.into()),
+        ),
+        item(
+            Some("cursor"),
+            "glow_size",
+            "Glow size",
+            "How far the cursor's light reaches: 1 is lumen's own.",
+            Number { step: 0.1, min: 0.2, max: 4., decimals: 1 },
+            |c| Value::Number(c.cursor.glow_size.into()),
+        ),
+        item(
+            Some("cursor"),
+            "glide_time",
+            "Glide time",
+            "Milliseconds the cursor takes to glide to its next cell.",
+            Number { step: 10., min: 10., max: 1000., decimals: 0 },
+            |c| Value::Number(c.cursor.glide_time as f64),
+        ),
+        item(
+            Some("cursor"),
+            "blink_dim",
+            "Blink dims to",
+            "How bright a blinking cursor is at its dimmest: 0 goes out.",
+            Number { step: 0.05, min: 0., max: 1., decimals: 2 },
+            |c| Value::Number(c.cursor.blink_dim.into()),
+        ),
+        item(
+            Some("cursor"),
+            "blink_fade",
+            "Blink fade",
+            "Milliseconds it takes to dim and to come back: 0 is at once.",
+            Number { step: 20., min: 0., max: 1000., decimals: 0 },
+            |c| Value::Number(c.cursor.blink_fade as f64),
         ),
         Heading("Behavior"),
         item(
@@ -576,6 +717,10 @@ impl Menu {
                 let text = if matches!(written.as_str(), "current" | "home") { String::new() } else { written };
                 self.typing = Some(Typing { text });
             },
+            (Kind::Picture, Value::Text(written)) => {
+                let text = if written == "none" { String::new() } else { written };
+                self.typing = Some(Typing { text });
+            },
             (Kind::Text, Value::Text(text)) => self.typing = Some(Typing { text }),
             _ => {},
         }
@@ -601,6 +746,23 @@ impl Menu {
                         return self.say(format!("there is no folder {text}"), false);
                     },
                     Ok(_) => {},
+                }
+                toml_edit::value(text)
+            },
+            Kind::Picture => {
+                if text.is_empty() {
+                    return;
+                }
+                // the menu's own folder is no one else's: a picture is given from / or ~
+                let Some(path) = expand_home(&text).filter(|path| path.is_absolute()) else {
+                    return self.say(format!("{text} isn't a whole path: start it with / or ~/"), false);
+                };
+                if !path.is_file() {
+                    return self.say(format!("there is no file {text}"), false);
+                }
+                let kind = path.extension().and_then(|kind| kind.to_str()).map(str::to_ascii_lowercase);
+                if !kind.is_some_and(|kind| gpui::Img::extensions().contains(&kind.as_str())) {
+                    return self.say(format!("{text} isn't a picture lumen can show (PNG, JPEG, WebP, SVG…)"), false);
                 }
                 toml_edit::value(text)
             },
@@ -1148,7 +1310,8 @@ mod tests {
             .rows
             .iter()
             .filter_map(|row| match row {
-                Row::Setting(item) if !matches!(item.kind, Kind::Text) => Some((item.table, item.key)),
+                // a name or a file is typed: it has no next one
+                Row::Setting(item) if !matches!(item.kind, Kind::Text | Kind::Picture) => Some((item.table, item.key)),
                 _ => None,
             })
             .collect();
@@ -1165,6 +1328,44 @@ mod tests {
         let config: Config = toml::from_str(&written).unwrap();
         assert_eq!(config.font.weight, 300, "{written}");
         assert!(written.contains("weight = 300\n"), "{written}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_picture_is_typed_and_checked() {
+        let (mut menu, dir) = menu_on("");
+        go_to(&mut menu, Some("window"), "background_image");
+        menu.key(Key::Enter);
+        for c in "/no/such/picture.png".chars() {
+            menu.key(Key::Char(c));
+        }
+        menu.key(Key::Enter);
+        assert!(matches!(&menu.said, Some((text, false)) if text.contains("no file")));
+        let type_in = |menu: &mut Menu, text: &str| {
+            menu.key(Key::Enter);
+            for c in text.chars() {
+                menu.key(Key::Char(c));
+            }
+            menu.key(Key::Enter);
+        };
+        // a path from the menu's own folder would mean another folder to lumen
+        type_in(&mut menu, "wall.png");
+        assert!(matches!(&menu.said, Some((text, false)) if text.contains("whole path")));
+        let notes = dir.join("notes.txt");
+        std::fs::write(&notes, b"no picture").unwrap();
+        type_in(&mut menu, &notes.to_string_lossy());
+        assert!(matches!(&menu.said, Some((text, false)) if text.contains("isn't a picture")));
+        assert_eq!(menu.config().window.background_image, None);
+        let picture = dir.join("wall.PNG");
+        std::fs::write(&picture, b"not checked for being a picture").unwrap();
+        menu.key(Key::Enter);
+        for c in picture.to_string_lossy().chars() {
+            menu.key(Key::Char(c));
+        }
+        menu.key(Key::Enter);
+        assert_eq!(menu.config().window.background_image(), Some(picture));
+        menu.key(Key::Char('r'));
+        assert_eq!(menu.config().window.background_image, None);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
