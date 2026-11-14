@@ -53,6 +53,10 @@ lag = ["gpui/profiler"]
 [profile.dev]
 # The grid is drawn every frame: unoptimized, a full screen of text stutters.
 opt-level = 1
+# Full debug info was 758 of a debug lumen's 849 MB and filled target/ in every worktree.
+# Line tables keep file:line in panics, backtraces and profilers; a debugger can still
+# break on lines but no longer shows variables (add `debug = true` locally for that).
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 2
