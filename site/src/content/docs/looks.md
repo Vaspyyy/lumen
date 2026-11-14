@@ -102,7 +102,7 @@ active_tab = "#ff7ac840"  # behind the tab you are in
 shadow = "#00000059"      # the window's shadow
 ```
 
-None of them has to be set. `text` unset is white on a dark background and black on a light one, so a light theme works without it, and the others unset are shades of `text`. The line under the active tab is in the `accent` color of [`[colors]`](/docs/colors/#the-accent), and the cursor's glow in the cursor's own color.
+None of them has to be set. `text` unset is white on a dark background and black on a light one, so a light theme works without it, and the others unset are shades of `text`, but for the shadow, which is black. The line under the active tab is in the `accent` color of [`[colors]`](/docs/colors/#the-accent), and the cursor's glow in the cursor's own color.
 
 ## Looks to start from
 

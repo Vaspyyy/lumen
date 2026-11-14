@@ -308,7 +308,8 @@ impl Window {
     /// The background picture's file, if one is set: `~` is the home folder, and a path
     /// that doesn't start at `/` starts at the config file's folder.
     pub fn background_image(&self) -> Option<PathBuf> {
-        let path = expand_home(self.background_image.as_deref()?.trim())?;
+        let written = self.background_image.as_deref()?.trim();
+        let path = expand_home(written).filter(|_| !written.is_empty())?;
         if path.is_absolute() { Some(path) } else { Some(Config::path().parent()?.join(path)) }
     }
 }
@@ -648,7 +649,8 @@ impl<'de> Deserialize<'de> for Tint {
 }
 
 /// `[colors.ui]`: the colors of what lumen draws itself. Each may be
-/// see-through, and each that isn't set follows `text`.
+/// see-through, and each that isn't set follows `text`, but for the shadow,
+/// which is black.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct UiColors {
@@ -943,7 +945,7 @@ impl Config {
 
     /// The colors of lumen's own parts: what `[colors.ui]` sets, and for the
     /// rest, shades of its text color, which is white or black, whichever
-    /// stands out more on the theme's background.
+    /// stands out more on the theme's background (and a black shadow).
     pub fn ui(&self) -> Ui {
         let set = &self.colors.ui;
         let background = self.colors.primary.background;
@@ -1356,5 +1358,11 @@ mod tests {
         assert!(toml::from_str::<Config>("[window]\nbackground_image_fit = \"tile\"\n").is_err());
         assert!(toml::from_str::<Config>("[tabs]\nposition = \"left\"\n").is_err());
         assert!(toml::from_str::<Config>("[panes]\ndim = 0.5\n").is_err());
+        // a picture by a bare name is beside the config file, and an empty one is none
+        let picture = |written: &str| Window { background_image: Some(written.into()), ..Window::default() };
+        assert_eq!(picture("wall.png").background_image(), Config::path().parent().map(|dir| dir.join("wall.png")));
+        assert_eq!(picture("/a/wall.png").background_image(), Some(PathBuf::from("/a/wall.png")));
+        assert_eq!(picture("").background_image(), None);
+        assert_eq!(picture("  ").background_image(), None);
     }
 }
