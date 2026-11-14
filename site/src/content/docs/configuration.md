@@ -13,7 +13,7 @@ If you have moved your config folder with `XDG_CONFIG_HOME`, the file is there. 
 
 ## The settings menu
 
-`lumen settings`, or `/settings` typed at a prompt, opens the most used settings in a menu: the arrows move and change, Enter flips a switch or lets you type (a font's name, a folder), `r` puts one back to its default, and `q` leaves. Each change is written to the file at once, so the window behind the menu shows it as you go. What else the file says stays as it is: your comments, the order, and the settings the menu doesn't show. A setting the file doesn't set is shown dim, at its default.
+`lumen settings`, or `/settings` typed at a prompt, opens the most used settings in a menu: the arrows move and change, Enter flips a switch or lets you type (a font's name, a folder), `r` puts one back to its default, and `q` leaves. Each change is written to the file at once, so the window behind the menu shows it as you go. What else the file says stays as it is: your comments, the order, and the settings the menu doesn't show. A setting the file doesn't set is shown dim, at its default. The window's frame, the tab bar and the cursor's corners are in the menu too; the keys, `[env]` and the colors are only in the file.
 
 `/settings` is taken only as those exact words at a prompt, with Enter: the shell never sees them, and a path like `/usr/bin/htop` still goes to the shell. It needs the shell to mark its prompts (fish 4.0 and newer do; bash and zsh need [one line](/docs/commands/#setting-up-your-shell)). Typed at a prompt, `/settings` opens the menu in a tab of its own, which closes when you leave it.
 
