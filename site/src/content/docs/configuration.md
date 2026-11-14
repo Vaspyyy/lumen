@@ -13,7 +13,7 @@ If you have moved your config folder with `XDG_CONFIG_HOME`, the file is there. 
 
 ## The settings menu
 
-`lumen settings`, or `/settings` typed at a prompt, opens the most used settings in a menu: the arrows move and change, Enter flips a switch or lets you type (a font's name, a folder), `r` puts one back to its default, and `q` leaves. Each change is written to the file at once, so the window behind the menu shows it as you go. What else the file says stays as it is: your comments, the order, and the settings the menu doesn't show. A setting the file doesn't set is shown dim, at its default. The window's frame, the tab bar and the cursor's corners are in the menu too; the keys, `[env]` and the colors are only in the file.
+`lumen settings`, or `/settings` typed at a prompt, opens the most used settings in a menu: the arrows move and change, Enter flips a switch or lets you type (a font's name, a folder), `r` puts one back to its default, and `q` leaves. Each change is written to the file at once, so the window behind the menu shows it as you go. What else the file says stays as it is: your comments, the order, and the settings the menu doesn't show. A setting the file doesn't set is shown dim, at its default. The window's frame, the tab bar, a picture behind the text and the cursor's light are in the menu too; the keys, `[env]` and the colors are only in the file. [Looks](/docs/looks/) has all of how lumen looks.
 
 `/settings` is taken only as those exact words at a prompt, with Enter: the shell never sees them, and a path like `/usr/bin/htop` still goes to the shell. It needs the shell to mark its prompts (fish 4.0 and newer do; bash and zsh need [one line](/docs/commands/#setting-up-your-shell)). Typed at a prompt, `/settings` opens the menu in a tab of its own, which closes when you leave it.
 
@@ -53,6 +53,9 @@ line_height = 1.0          # 1.2 gives the lines more air
 ligatures = true           # letters a font joins, such as ->, are joined
 weight = 400               # of plain text: 100 (thin) to 900 (black)
 bold_weight = 700          # of bold text
+letter_spacing = 0         # pixels between two characters, beyond the font's own
+# ui_family = "Inter"      # lumen's own words; the desktop's font if unset
+ui_size = 12.5             # their size, in pixels
 
 [window]
 opacity = 1.0              # of the background; 1 is solid
@@ -63,9 +66,22 @@ decorations = "lumen"      # who draws the frame: lumen, desktop, none
 startup_mode = "windowed"  # windowed, maximized, fullscreen
 columns = 100              # the size of a new window
 lines = 30
+corner_radius = 12         # how round lumen's frame is: 0 is square
+border = true              # the thin line around it
+shadow = true              # the shadow around it
+# background_image = "~/Pictures/wall.png"   # a picture behind the text
+background_image_opacity = 0.3   # how much of it shows: 1 is all
+background_image_fit = "cover"   # cover, contain, fill
+# gradient = "#3a1030"     # the background fades into this color
+gradient_angle = 180       # which way: 180 from the top down
 
 [tabs]
 bar = "always"             # always; auto, with two tabs or more; never
+position = "top"           # top, bottom
+
+[panes]
+dim_inactive = 0.22        # how far other panes step back: 0 not at all
+divider_width = 1          # the line between panes, in pixels
 
 [cursor]
 style = "block"            # block, beam, underline
@@ -76,6 +92,11 @@ smooth = true              # the cursor glides between cells
 rounded = true             # round corners
 # thickness = 2            # of a beam or an underline, in pixels
 unfocused = "hollow"       # in a pane without the keyboard: hollow, same, hidden
+glow_strength = 1.0        # how bright the glow is: 0 to 3
+glow_size = 1.0            # how far it reaches
+glide_time = 70            # milliseconds a glide takes
+blink_dim = 0.22           # how bright a blink is at its dimmest: 0 goes out
+blink_fade = 140           # milliseconds to dim and to come back
 
 [mouse]
 scroll_multiplier = 1.0    # how far a turn of the wheel scrolls
@@ -92,6 +113,9 @@ draw_bold_text_with_bright_colors = false
 background = "#12111a"
 foreground = "#e4e1ee"
 
+[colors.ui]
+# text = "#ffffff"         # lumen's own parts: see Looks
+
 [editor]
 # command = "nvim"         # $VISUAL or $EDITOR if unset
 # terminal = true          # by the editor's name if unset
@@ -107,7 +131,7 @@ every = 3                  # seconds between two looks
 # "ctrl-shift-t" = "none"  # see Keys
 ```
 
-The `[colors]` table has more in it: the cursor's colors, the selection's, and the sixteen colors programs use. [Colors](/docs/colors/) has all of them.
+The `[colors]` table has more in it: the cursor's colors, the selection's, and the sixteen colors programs use. [Colors](/docs/colors/) has all of them, and [Looks](/docs/looks/) the colors of lumen's own parts, the picture, the gradient and the cursor's light, with a few looks to start from.
 
 ## General
 
@@ -132,6 +156,9 @@ The `[colors]` table has more in it: the cursor's colors, the selection's, and t
 | `ligatures` | `true` | Letters a font joins into one sign, such as `->` into an arrow, are joined. With `false` each stays as it is |
 | `weight` | `400` | How heavy plain text is, from 100 (thin) to 900 (black). 400 is regular. A font draws the weight nearest to this that it has |
 | `bold_weight` | `700` | How heavy bold text is |
+| `letter_spacing` | `0` | Pixels between two characters, beyond what the font has, from -5 to 20. Each character stays at the left of its cell, which is wider by this |
+| `ui_family` | unset | The font of lumen's own words: the tabs, the notes, the search. Unset, or one that can't be found, it is your desktop's |
+| `ui_size` | `12.5` | Their size, in pixels, from 8 to 18 |
 
 More in [Fonts](/docs/fonts/).
 
@@ -147,12 +174,28 @@ More in [Fonts](/docs/fonts/).
 | `startup_mode` | `"windowed"` | How a new window opens: `"windowed"`, `"maximized"` or `"fullscreen"` |
 | `columns` | `100` | The width of a new window, counted in cells of the default 12 point font. With larger text, fewer fit. From 20 to 1000 |
 | `lines` | `30` | The height of a new window, counted the same way. From 5 to 500 |
+| `corner_radius` | `12` | How round the corners of lumen's frame are, in pixels, from 0 (square) to 40 |
+| `border` | `true` | A thin line around lumen's frame |
+| `shadow` | `true` | lumen's frame casts a shadow around the window. It is drawn around the window only, never under it, so a see-through window is as see-through as `opacity` says |
+| `background_image` | unset | A picture behind the text: its file, with `~` for your home folder. PNG, JPEG, WebP and the other usual kinds. See [Looks](/docs/looks/#a-picture-behind-the-text) |
+| `background_image_opacity` | `0.3` | How much of the picture shows over the background's color, from 0 to 1 |
+| `background_image_fit` | `"cover"` | `"cover"`: all of the window, cut to fit. `"contain"`: all of the picture, with room beside it. `"fill"`: stretched to the window |
+| `gradient` | unset | A color the background fades into, from its own (`background` in [`[colors.primary]`](/docs/colors/)) |
+| `gradient_angle` | `180` | Which way it fades, in degrees: `180` from the top down, `90` from the left, `0` from the bottom up |
 
 ## `[tabs]`
 
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `bar` | `"always"` | When the tab bar is there. `"auto"`: while a window has two tabs or more. `"never"`: not at all; the keys in [Keys](/docs/keys/) still open, close and switch tabs. Where lumen draws the frame, the tab bar is also where the window's buttons are and where it is dragged: without it, your desktop's keys move and close the window. The [machine's light](/docs/machine/) is in it too; `open_pulse` in [`[keys]`](/docs/keys/#changing-the-keys) opens pulse without it |
+| `position` | `"top"` | Where the tab bar is: `"top"` or `"bottom"` of the window |
+
+## `[panes]`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `dim_inactive` | `0.22` | How far the panes you aren't typing in step back, from 0 (not at all) to 1 |
+| `divider_width` | `1` | The line between two panes, in pixels, from 0 (none) to 8. It can be dragged however thin it is |
 
 ## `[cursor]`
 
@@ -166,6 +209,11 @@ More in [Fonts](/docs/fonts/).
 | `rounded` | `true` | The cursor's corners are round. With `false` they are square |
 | `thickness` | unset | How thick a beam or an underline cursor is, in pixels, from 1 to 20. Unset, a ninth of a row |
 | `unfocused` | `"hollow"` | The cursor of a pane that doesn't have the keyboard. `"hollow"`: the outline of a block. `"same"`: its own shape, still, without the glow. `"hidden"`: none |
+| `glow_strength` | `1.0` | How bright the cursor's light is, from 0 (none) to 3 |
+| `glow_size` | `1.0` | How far the light reaches, from 0.2 to 4 |
+| `glide_time` | `70` | Milliseconds the cursor takes to glide to its next cell, from 10 to 1000, where `smooth` is on |
+| `blink_dim` | `0.22` | How bright a blinking cursor is at its dimmest, from 0 (it goes out, as in other terminals) to 1 |
+| `blink_fade` | `140` | Milliseconds it takes to dim and to come back, from 0 (at once) to 1000 |
 
 ## `[mouse]`
 

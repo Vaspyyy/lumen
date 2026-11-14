@@ -159,8 +159,8 @@ impl Render for FileGhost {
             .bg(config.colors.primary.background.hsla().opacity(0.92))
             .border_1()
             .border_color(config.accent().opacity(0.6))
-            .text_size(px(12.5))
-            .text_color(gpui::white().opacity(0.92))
+            .text_size(px(config.font.ui_size))
+            .text_color(config.ui().text.opacity(0.92))
             .font_family(crate::fonts::ui())
             .child(self.0.clone())
     }
@@ -812,7 +812,7 @@ impl TerminalView {
                 .top(top)
                 .h(px(HEIGHT))
                 .child(SharedString::from(about))
-                .child(div().text_color(gpui::white().opacity(0.45)).child("click copies the output")),
+                .child(div().text_color(config.ui().text.opacity(0.45)).child("click copies the output")),
         )
     }
 
@@ -833,11 +833,11 @@ impl TerminalView {
         let &(row, col, len) = hover.segments.first()?;
         const NOTE: &str = "click puts it at the prompt";
         const EDGE: Pixels = px(8.);
-        const SIZE: Pixels = px(12.5);
-        const LINE: Pixels = px(18.);
         // what the chip has around its text: 10 pixels to either side, and its border
         const AROUND: Pixels = px(22.);
         let config = cx.global::<Config>();
+        // the size of lumen's own words, and a line of them
+        let (size, line_height) = (px(config.font.ui_size), px(config.font.ui_size * 1.44));
         let text_system = window.text_system();
         let family = crate::fonts::grid(&config.font.family, text_system);
         // the widths are measured, not guessed: a font may draw a character wider than a cell
@@ -850,7 +850,7 @@ impl TerminalView {
                 underline: None,
                 strikethrough: None,
             };
-            text_system.shape_line(SharedString::from(text.to_string()), SIZE, &[run], None).width
+            text_system.shape_line(SharedString::from(text.to_string()), size, &[run], None).width
         };
         let pane = geometry.bounds.size;
         let left = geometry.origin.x + geometry.cell.width * col as f32 - geometry.bounds.origin.x;
@@ -865,7 +865,7 @@ impl TerminalView {
                 .whitespace_nowrap()
                 .child(SharedString::from(line.to_string()))
         };
-        let note_shown = div().flex_none().whitespace_nowrap().text_color(gpui::white().opacity(0.45)).child(NOTE);
+        let note_shown = div().flex_none().whitespace_nowrap().text_color(config.ui().text.opacity(0.45)).child(NOTE);
         let (hint, height) = if command + px(8.) + note <= room {
             let width = command + px(8.) + note + AROUND;
             let hint = chip(config).h(px(26.)).child(shown(text)).child(note_shown);
@@ -881,7 +881,7 @@ impl TerminalView {
         } else {
             // the text takes the pane's width and the lines it needs, the note stands under it
             let font_id = text_system.resolve_font(&font(family.clone()));
-            let cell = text_system.advance(font_id, SIZE, 'm').map(|size| size.width).unwrap_or(SIZE * 0.6);
+            let cell = text_system.advance(font_id, size, 'm').map(|advance| advance.width).unwrap_or(size * 0.6);
             let cells = (room / cell).floor() as usize;
             if cells < 8 || note > room {
                 return None;
@@ -890,7 +890,7 @@ impl TerminalView {
             if lines.iter().any(|line| width_of(line, &family) > room) {
                 return None;
             }
-            let height = LINE * (lines.len() + 1) as f32 + px(14.);
+            let height = line_height * (lines.len() + 1) as f32 + px(14.);
             let hint = chip(config)
                 .flex_col()
                 .items_start()
@@ -898,7 +898,7 @@ impl TerminalView {
                 .py(px(6.))
                 .left(EDGE)
                 .w(pane.width - EDGE * 2.)
-                .line_height(LINE)
+                .line_height(line_height)
                 .children(lines.iter().map(|line| shown(line)))
                 .child(note_shown);
             (hint, height)
@@ -1254,7 +1254,8 @@ impl TerminalView {
             (Some(at), found) => format!("{} of {found}", at + 1),
             (None, found) => found.to_string(),
         };
-        let dim = gpui::white().opacity(0.45);
+        let text = config.ui().text;
+        let dim = text.opacity(0.45);
         div()
             .absolute()
             .top(px(8.))
@@ -1276,7 +1277,7 @@ impl TerminalView {
                 inset: false,
             }])
             .font_family(crate::fonts::ui())
-            .text_size(px(12.5))
+            .text_size(px(config.font.ui_size))
             .child(svg().path("icons/search.svg").flex_none().size(px(12.)).text_color(dim))
             .child(
                 div()
@@ -1285,7 +1286,7 @@ impl TerminalView {
                     .min_w(px(110.))
                     .max_w(px(320.))
                     .overflow_hidden()
-                    .text_color(gpui::white().opacity(0.92))
+                    .text_color(text.opacity(0.92))
                     .child(SharedString::from(search.query.clone()))
                     .child(div().flex_none().w(px(1.5)).h(px(14.)).ml(px(1.)).bg(config.accent())),
             )
@@ -1468,7 +1469,7 @@ fn chip(config: &Config) -> gpui::Div {
         .rounded(px(8.))
         .bg(config.colors.primary.background.hsla().opacity(0.95))
         .border_1()
-        .border_color(gpui::white().opacity(0.14))
+        .border_color(config.ui().text.opacity(0.14))
         .shadow(vec![BoxShadow {
             color: gpui::black().opacity(0.35),
             offset: point(px(0.), px(2.)),
@@ -1477,8 +1478,8 @@ fn chip(config: &Config) -> gpui::Div {
             inset: false,
         }])
         .font_family(crate::fonts::ui())
-        .text_size(px(12.5))
-        .text_color(gpui::white().opacity(0.92))
+        .text_size(px(config.font.ui_size))
+        .text_color(config.ui().text.opacity(0.92))
 }
 
 /// Text input. The terminal has no text of its own to edit: what the input

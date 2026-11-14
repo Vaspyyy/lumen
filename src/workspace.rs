@@ -9,9 +9,10 @@ use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Axis, Bounds, BoxShadow, Context, Corners, CursorStyle, Decorations, Entity, EntityId, Focusable,
-    Hsla, MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, ResizeEdge, SharedString, Size, Subscription,
-    SystemNotification, Task, Tiling, Window, WindowDecorations, canvas, div, point, px, size, svg,
+    AnyElement, App, Axis, Bounds, BoxShadow, Context, Corners, CursorStyle, Decorations, Edges, Entity, EntityId,
+    Focusable, Hsla, MouseButton, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, ResizeEdge, SharedString, Size,
+    Subscription, SystemNotification, Task, Tiling, Window, WindowDecorations, canvas, div, img, linear_color_stop,
+    linear_gradient, point, px, size, svg,
 };
 
 use crate::actions::{
@@ -19,7 +20,7 @@ use crate::actions::{
     NextTab, OpenPulse, PreviousTab, SplitDown, SplitRight, ToggleZoomPane,
 };
 use crate::commands::Note;
-use crate::config::Config;
+use crate::config::{Config, ImageFit, TabPosition};
 use crate::editor;
 use crate::element::Metrics;
 use crate::pulse::{Pulse, Use};
@@ -165,10 +166,12 @@ struct Tip(Vec<SharedString>);
 
 impl Render for Tip {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let lines =
-            self.0.iter().enumerate().map(|(n, line)| {
-                div().when(n > 0, |this| this.text_color(gpui::white().opacity(0.5))).child(line.clone())
-            });
+        let soft = cx.global::<Config>().ui().text.opacity(0.5);
+        let lines = self
+            .0
+            .iter()
+            .enumerate()
+            .map(|(n, line)| div().when(n > 0, |this| this.text_color(soft)).child(line.clone()));
         // below the mouse, clear of what it rests on
         div()
             .pt(px(6.))
@@ -197,8 +200,8 @@ fn label(config: &Config) -> gpui::Div {
             inset: false,
         }])
         .font_family(crate::fonts::ui())
-        .text_size(px(12.5))
-        .text_color(gpui::white().opacity(0.92))
+        .text_size(px(config.font.ui_size))
+        .text_color(config.ui().text.opacity(0.92))
 }
 
 /// The name a notification about a pane goes by: what leads back to the
@@ -1000,15 +1003,15 @@ impl Workspace {
     fn render_node(&self, node: &Node, tab: &Tab, cx: &mut Context<Self>) -> AnyElement {
         match node {
             Node::Leaf(pane) => {
-                let dim = pane != &tab.active;
+                let dim = cx.global::<Config>().panes.dim_inactive;
                 div()
                     .relative()
                     .size_full()
                     .overflow_hidden()
                     .child(pane.clone())
-                    .when(dim, |this| {
+                    .when(pane != &tab.active && dim > 0., |this| {
                         // the panes that don't have the keyboard step back
-                        this.child(div().absolute().inset_0().bg(gpui::black().opacity(0.22)))
+                        this.child(div().absolute().inset_0().bg(gpui::black().opacity(dim)))
                     })
                     .into_any_element()
             },
@@ -1046,7 +1049,11 @@ impl Workspace {
 
     /// A hairline between two panes, with a wider strip around it to grab.
     fn render_divider(&self, split: usize, index: usize, axis: Axis, cx: &mut Context<Self>) -> AnyElement {
-        let line = gpui::white().opacity(0.08);
+        let config = cx.global::<Config>();
+        let line = config.ui().divider;
+        let width = px(config.panes.divider_width);
+        // the strip to grab reaches 3 pixels past the line on either side
+        let (reach, span) = (px(-3.), width + px(6.));
         let grab = div().id(SharedString::from(format!("divider-{split}-{index}"))).absolute().occlude().on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _, _, cx| {
@@ -1058,17 +1065,17 @@ impl Workspace {
             Axis::Horizontal => div()
                 .relative()
                 .flex_none()
-                .w(px(1.))
+                .w(width)
                 .h_full()
                 .bg(line)
-                .child(grab.top_0().bottom_0().left(px(-3.)).w(px(7.)).cursor(CursorStyle::ResizeColumn)),
+                .child(grab.top_0().bottom_0().left(reach).w(span).cursor(CursorStyle::ResizeColumn)),
             Axis::Vertical => div()
                 .relative()
                 .flex_none()
-                .h(px(1.))
+                .h(width)
                 .w_full()
                 .bg(line)
-                .child(grab.left_0().right_0().top(px(-3.)).h(px(7.)).cursor(CursorStyle::ResizeRow)),
+                .child(grab.left_0().right_0().top(reach).h(span).cursor(CursorStyle::ResizeRow)),
         }
         .into_any_element()
     }
@@ -1077,7 +1084,10 @@ impl Workspace {
         let active = index == self.active;
         let title = tab.active.read(cx).terminal.read(cx).title();
         let id = tab.id;
-        let text = gpui::white().opacity(if active { 0.92 } else { 0.5 });
+        let config = cx.global::<Config>();
+        let (ui, ui_size) = (config.ui(), config.font.ui_size);
+        let bar_below = config.tabs.position == TabPosition::Bottom;
+        let text = ui.text.opacity(if active { 0.92 } else { 0.5 });
         // A tab that isn't looked at says what happened in it, or that a command still runs there.
         let colors = &cx.global::<Config>().colors;
         let dot = match tab.news {
@@ -1089,13 +1099,13 @@ impl Workspace {
                 tab.root.panes(&mut panes);
                 let running =
                     |pane: &Pane| pane.read(cx).terminal.read(cx).commands.lock().unwrap().running().is_some();
-                (!active && panes.iter().any(running)).then(|| gpui::white().opacity(0.32))
+                (!active && panes.iter().any(running)).then(|| ui.text.opacity(0.32))
             },
         };
         // what the tab's panes use, where pulse tells: shown when it is worth a look
         let usage = Self::tab_use(tab, cx);
         let meter = usage.as_ref().filter(|usage| usage.notable()).map(|usage| {
-            let soft = gpui::white().opacity(if active { 0.5 } else { 0.38 });
+            let soft = ui.text.opacity(if active { 0.5 } else { 0.38 });
             // from two cores on, the tab is at work: its number is lit
             let work = if usage.cores >= 2. { accent.opacity(0.95) } else { soft };
             let memory = usage.memory as f64 / (1u64 << 30) as f64;
@@ -1104,7 +1114,7 @@ impl Workspace {
                 .flex_none()
                 .items_center()
                 .gap(px(5.))
-                .text_size(px(11.))
+                .text_size(px(ui_size - 1.5))
                 .text_color(soft)
                 .child(svg().path("icons/pulse.svg").size(px(11.)).text_color(work))
                 .when(usage.cores >= 0.2, |this| {
@@ -1135,10 +1145,10 @@ impl Workspace {
             .pl(px(12.))
             .pr(px(6.))
             .rounded(px(8.))
-            .text_size(px(12.5))
+            .text_size(px(ui_size))
             .text_color(text)
-            .when(active, |this| this.bg(gpui::white().opacity(0.09)))
-            .when(!active, |this| this.hover(|style| style.bg(gpui::white().opacity(0.045))))
+            .when(active, |this| this.bg(ui.active_tab))
+            .when(!active, |this| this.hover(move |style| style.bg(ui.text.opacity(0.045))))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, window, cx| {
@@ -1161,7 +1171,7 @@ impl Workspace {
             .on_drag(DraggedTab { id, title: title.clone().into() }, |tab, _, _, cx| {
                 cx.new(|_| TabGhost(tab.title.clone()))
             })
-            .drag_over::<DraggedTab>(|style, _, _, _| style.bg(gpui::white().opacity(0.14)))
+            .drag_over::<DraggedTab>(move |style, _, _, _| style.bg(ui.text.opacity(0.14)))
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| this.reorder(dragged.id, id, cx)))
             .children(dot.map(|color| div().flex_none().size(px(6.)).rounded(px(3.)).bg(color)))
             .child(div().flex_1().min_w_0().truncate().child(SharedString::from(title)))
@@ -1177,7 +1187,7 @@ impl Workspace {
                     .size(px(18.))
                     .rounded(px(5.))
                     .when(!active, |this| this.invisible().group_hover("tab", |style| style.visible()))
-                    .hover(|style| style.bg(gpui::white().opacity(0.12)))
+                    .hover(move |style| style.bg(ui.text.opacity(0.12)))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, window, cx| {
@@ -1190,21 +1200,21 @@ impl Workspace {
                     .child(svg().path("icons/close.svg").size(px(10.)).text_color(text)),
             )
             .when(active, |this| {
-                // the lit tab: a line of the accent's light under it
-                this.child(
-                    div().absolute().left(px(14.)).right(px(14.)).bottom(px(-6.)).h(px(2.)).rounded(px(1.)).bg(accent),
-                )
+                // the lit tab: a line of the accent's light on the side toward the text
+                let line = div().absolute().left(px(14.)).right(px(14.)).h(px(2.)).rounded(px(1.)).bg(accent);
+                this.child(if bar_below { line.top(px(-6.)) } else { line.bottom(px(-6.)) })
             })
             .into_any_element()
     }
 
     fn render_tab_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let accent = cx.global::<Config>().accent();
+        let ui = cx.global::<Config>().ui();
         let frame = Frame::of(window, cx);
         let client = frame.client;
         let controls = window.window_controls();
-        let icon = gpui::white().opacity(0.6);
-        let soft = gpui::white().opacity(0.08);
+        let icon = ui.text.opacity(0.6);
+        let soft = ui.text.opacity(0.08);
         let button = |id: &'static str, path: &'static str, lit: Hsla| {
             div()
                 .id(id)
@@ -1217,9 +1227,16 @@ impl Workspace {
                 .hover(move |style| style.bg(lit))
                 .child(svg().path(path).size(px(12.)).text_color(icon))
         };
-        let mut bar = div().id("tab-bar").flex().flex_none().items_center().gap(px(4.)).h(px(TAB_BAR)).px(px(8.)).when(
-            frame.moves,
-            |this| {
+        let mut bar = div()
+            .id("tab-bar")
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(4.))
+            .h(px(TAB_BAR))
+            .px(px(8.))
+            .when_some(ui.tab_bar, |this, color| this.bg(color))
+            .when(frame.moves, |this| {
                 this.on_mouse_down(MouseButton::Left, |event, window, _| {
                     if event.click_count == 2 {
                         window.zoom_window();
@@ -1227,8 +1244,7 @@ impl Workspace {
                         window.start_window_move();
                     }
                 })
-            },
-        );
+            });
         for (index, tab) in self.tabs.iter().enumerate() {
             bar = bar.child(self.render_tab(index, tab, accent, cx));
         }
@@ -1260,7 +1276,7 @@ impl Workspace {
                         inset: false,
                     }])
                 } else {
-                    this.bg(gpui::white().opacity(0.22))
+                    this.bg(ui.text.opacity(0.22))
                 }
             });
             bar = bar.child(
@@ -1331,7 +1347,6 @@ struct Frame {
 /// The margin the shadow is drawn in, which is also where the window is
 /// grabbed to resize it.
 const SHADOW: f32 = 12.;
-const RADIUS: f32 = 12.;
 
 impl Frame {
     fn of(window: &Window, cx: &App) -> Frame {
@@ -1437,12 +1452,29 @@ fn resize_handles(frame: Frame) -> Option<AnyElement> {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let config = cx.global::<Config>();
-        let background = Hsla { a: config.window.opacity, ..config.colors.primary.background.hsla() };
+        let ui = config.ui();
+        let opacity = config.window.opacity;
+        let background = Hsla { a: opacity, ..config.colors.primary.background.hsla() };
+        let fill: gpui::Background = match config.window.gradient {
+            Some(to) => linear_gradient(
+                config.window.gradient_angle,
+                linear_color_stop(background, 0.),
+                linear_color_stop(Hsla { a: opacity, ..to.hsla() }, 1.),
+            ),
+            None => background.into(),
+        };
+        let picture = config
+            .window
+            .background_image()
+            .map(|path| (path, config.window.background_image_opacity, config.window.background_image_fit));
+        let (border, casts_shadow) = (config.window.border, config.window.shadow);
+        let bar_below = config.tabs.position == TabPosition::Bottom;
+        let corner = px(config.window.corner_radius);
         let frame = Frame::of(window, cx);
         let t = frame.tiling;
         // the corners that are free are round; the desktop is told, so that what it
         // draws behind the window (the blur) has the window's shape
-        let radius = |free: bool| if frame.client && free { px(RADIUS) } else { px(0.) };
+        let radius = |free: bool| if frame.client && free { corner } else { px(0.) };
         let corners = Corners {
             top_left: radius(!t.top && !t.left),
             top_right: radius(!t.top && !t.right),
@@ -1473,6 +1505,8 @@ impl Render for Workspace {
             None => div().into_any_element(),
         };
         let bar = cx.global::<Config>().tab_bar(self.tabs.len()).then(|| self.render_tab_bar(window, cx));
+        let (bar_above, bar_below) = if bar_below { (None, bar) } else { (bar, None) };
+        let bar_height = if bar_below.is_some() { px(TAB_BAR) } else { px(0.) };
 
         let surface = div()
             .id("workspace")
@@ -1482,31 +1516,30 @@ impl Render for Workspace {
             .flex_col()
             .size_full()
             .overflow_hidden()
-            .bg(background)
+            .bg(fill)
             .font_family(crate::fonts::ui())
             .rounded_tl(corners.top_left)
             .rounded_tr(corners.top_right)
             .rounded_bl(corners.bottom_left)
             .rounded_br(corners.bottom_right)
-            .when(frame.client, |this| this.border_1().border_color(gpui::white().opacity(0.1)))
-            .when(frame.floating(), |this| {
-                this.shadow(vec![
-                    BoxShadow {
-                        color: gpui::black().opacity(0.35),
-                        offset: point(px(0.), px(3.)),
-                        blur_radius: px(SHADOW),
-                        spread_radius: px(0.),
-                        inset: false,
-                    },
-                    BoxShadow {
-                        color: gpui::black().opacity(0.25),
-                        offset: point(px(0.), px(1.)),
-                        blur_radius: px(3.),
-                        spread_radius: px(0.),
-                        inset: false,
-                    },
-                ])
-            })
+            .when(frame.client && border, |this| this.border_1().border_color(ui.border))
+            // the picture lies over the background's color and under everything else
+            .children(picture.map(|(path, strength, fit)| {
+                img(path)
+                    .absolute()
+                    .inset_0()
+                    .size_full()
+                    .object_fit(match fit {
+                        ImageFit::Cover => ObjectFit::Cover,
+                        ImageFit::Contain => ObjectFit::Contain,
+                        ImageFit::Fill => ObjectFit::Fill,
+                    })
+                    .opacity(strength)
+                    .rounded_tl(corners.top_left)
+                    .rounded_tr(corners.top_right)
+                    .rounded_bl(corners.bottom_left)
+                    .rounded_br(corners.bottom_right)
+            }))
             .on_action(cx.listener(Self::new_tab))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| this.close_tab_at(this.active, window, cx)))
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
@@ -1543,14 +1576,16 @@ impl Render for Workspace {
                     this.drag = None;
                 }),
             )
-            .children(bar)
+            .children(bar_above)
             .child(div().flex_1().min_h_0().child(content))
+            .children(bar_below)
             .children(self.notice.clone().map(|text| {
                 div()
                     .absolute()
                     .left_0()
                     .right_0()
-                    .bottom(px(18.))
+                    // above a tab bar at the bottom
+                    .bottom(px(18.) + bar_height)
                     .px(px(24.))
                     .flex()
                     .justify_center()
@@ -1559,17 +1594,131 @@ impl Render for Workspace {
 
         // the margin around a floating window holds its shadow and the strips that resize it
         let margin = |free: bool| px(if frame.client && free { SHADOW } else { 0. });
+        let margins =
+            Edges { top: margin(!t.top), bottom: margin(!t.bottom), left: margin(!t.left), right: margin(!t.right) };
+        let shadows = (frame.floating() && casts_shadow).then(|| {
+            // two of them, both falling a little below the window: a soft one further out,
+            // and a darker one close to the edge
+            let soft = BoxShadow {
+                color: ui.shadow,
+                offset: point(px(0.), px(0.)),
+                blur_radius: px(SHADOW),
+                spread_radius: px(0.),
+                inset: false,
+            };
+            let close = BoxShadow { color: ui.shadow.opacity(ui.shadow.a * 0.7), blur_radius: px(3.), ..soft };
+            shadow_strips(window.viewport_size(), margins, corners, vec![soft, close], px(3.))
+        });
         div()
             .id("window")
             .relative()
             .size_full()
-            .pt(margin(!t.top))
-            .pb(margin(!t.bottom))
-            .pl(margin(!t.left))
-            .pr(margin(!t.right))
+            .pt(margins.top)
+            .pb(margins.bottom)
+            .pl(margins.left)
+            .pr(margins.right)
+            .children(shadows.into_iter().flatten())
             .child(surface)
             .children(resize_handles(frame))
     }
+}
+
+/// The frame's shadow, drawn in the margin around the window only. GPUI draws a
+/// shadow under all of what casts it, and under see-through glass that darkens
+/// the window: so the shadow is drawn four times, each time cut to one side of
+/// the margin (the top and bottom ones with the corners), and in the corners of the
+/// window's box that its round corners leave out, and never under the window.
+///
+/// `falls` is how far the shadows fall below the window. GPUI leaves out a shadow
+/// whose box doesn't reach into what it is cut to, however far its blur would: a
+/// shadow moved down would be left out at the top. So the box isn't moved: it
+/// reaches a pixel past the window on three sides and `falls` past it at the
+/// bottom, the same box for every clip, so that they meet without a seam.
+fn shadow_strips(
+    viewport: Size<Pixels>,
+    margins: Edges<Pixels>,
+    corners: Corners<Pixels>,
+    shadows: Vec<BoxShadow>,
+    falls: Pixels,
+) -> Vec<AnyElement> {
+    let surface = Bounds::new(
+        point(margins.left, margins.top),
+        size(viewport.width - margins.left - margins.right, viewport.height - margins.top - margins.bottom),
+    );
+    let mut clips = vec![
+        Bounds::new(point(px(0.), px(0.)), size(viewport.width, margins.top)),
+        Bounds::new(point(px(0.), surface.bottom()), size(viewport.width, margins.bottom)),
+        Bounds::new(point(px(0.), surface.top()), size(margins.left, surface.size.height)),
+        Bounds::new(point(surface.right(), surface.top()), size(margins.right, surface.size.height)),
+    ];
+    // At a round corner the window doesn't fill its own box: the shadow belongs in what is
+    // left of the box outside the curve too, which is cut in rows of a pixel, each as far
+    // as the curve. (GPUI cuts to rectangles only.)
+    let rows = |radius: Pixels, left: bool, top: bool| -> Vec<Bounds<Pixels>> {
+        let r = f32::from(radius);
+        let (x, y) = (
+            if left { surface.left() } else { surface.right() - radius },
+            if top { surface.top() } else { surface.bottom() - radius },
+        );
+        (0..r.ceil() as usize)
+            .filter_map(|i| {
+                // the row's middle, as far from the curve's center as it is
+                let middle = i as f32 + 0.5;
+                let from_center = if top { r - middle } else { middle };
+                let outside = r - (r * r - from_center * from_center).max(0.).sqrt();
+                // less than a pixel is under the window's own soft edge
+                (from_center > 0. && outside >= 1.).then(|| {
+                    let start = if left { x } else { x + radius - px(outside) };
+                    Bounds::new(point(start, y + px(i as f32)), size(px(outside), px(1.)))
+                })
+            })
+            .collect()
+    };
+    clips.extend(rows(corners.top_left, true, true));
+    clips.extend(rows(corners.top_right, false, true));
+    clips.extend(rows(corners.bottom_left, true, false));
+    clips.extend(rows(corners.bottom_right, false, false));
+    let grown = |radius: Pixels| if radius > px(0.) { radius + px(1.) } else { radius };
+    // GPUI draws a shadow over all of its box and its blur, and leaves out what is cut away
+    // only pixel by pixel: each clip gets a box of its own, no larger than what reaches it.
+    // A blur reaches three times its radius, so a box cut further from the clip than that
+    // casts the same shadow into it.
+    let reach = px(3. * shadows.iter().map(|shadow| f32::from(shadow.blur_radius)).fold(0., f32::max) + 4.);
+    let whole = Bounds::from_corners(
+        point(surface.left() - px(1.), surface.top() - px(1.)),
+        point(surface.right() + px(1.), surface.bottom() + falls.max(px(1.))),
+    );
+    clips
+        .into_iter()
+        .filter(|clip| clip.size.width > px(0.) && clip.size.height > px(0.))
+        .map(|clip| {
+            let caster = whole.intersect(&clip.dilate(reach));
+            // a corner is round where it is the window's own, and square where the box was cut
+            let corner = |own: bool, radius: Pixels| if own { grown(radius) } else { px(0.) };
+            let (left, right) = (caster.left() == whole.left(), caster.right() == whole.right());
+            let (top, bottom) = (caster.top() == whole.top(), caster.bottom() == whole.bottom());
+            let caster = div()
+                .absolute()
+                .left(caster.left() - clip.left())
+                .top(caster.top() - clip.top())
+                .w(caster.size.width)
+                .h(caster.size.height)
+                .rounded_tl(corner(top && left, corners.top_left))
+                .rounded_tr(corner(top && right, corners.top_right))
+                .rounded_bl(corner(bottom && left, corners.bottom_left))
+                .rounded_br(corner(bottom && right, corners.bottom_right))
+                .shadow(shadows.clone());
+            div()
+                .absolute()
+                .left(clip.left())
+                .top(clip.top())
+                .w(clip.size.width)
+                .h(clip.size.height)
+                .overflow_hidden()
+                .child(caster)
+                .into_any_element()
+        })
+        .collect()
 }
 
 #[cfg(test)]

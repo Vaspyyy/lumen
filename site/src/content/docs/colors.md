@@ -129,6 +129,16 @@ accent = "#ffc97a"
 
 The accent is lumen's own light: the line under the active tab, the match a search is on, the frame of the search field. It is the one color in this table that Alacritty doesn't have. A theme you paste won't set it, so set it yourself to a color that goes with the theme.
 
+### lumen's own parts
+
+```toml
+[colors.ui]
+text = "#ffd6f0"
+tab_bar = "#00000066"
+```
+
+The tabs, the frame, the lines between panes and the notes have colors of their own, which can be see-through. Unset, they are white on a dark background and black on a light one, so a light theme needs none of them. [Looks](/docs/looks/#lumens-own-colors) has all of them.
+
 ### Bold text
 
 ```toml

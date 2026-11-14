@@ -15,7 +15,7 @@ export const docsNav = [
   },
   {
     title: 'Make it yours',
-    pages: ['configuration', 'fonts', 'colors', 'instant-tabs'],
+    pages: ['configuration', 'looks', 'fonts', 'colors', 'instant-tabs'],
   },
   {
     title: 'Reference',

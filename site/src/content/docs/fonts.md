@@ -47,6 +47,19 @@ Some fonts join letters into one sign: `->` into an arrow, `!=` into a crossed e
 
 `weight` is how heavy plain text is, and `bold_weight` how heavy bold text is, from 100 (thin) to 900 (black); 400 is regular and 700 bold. A font that doesn't have the weight you ask for is drawn in the nearest one it has. A light weight suits a light theme or a screen with many pixels.
 
+## Spacing, and lumen's own words
+
+```toml
+[font]
+letter_spacing = 1
+ui_family = "Inter"
+ui_size = 13
+```
+
+`letter_spacing` puts that many pixels between two characters, beyond what the font has, from -5 to 20. Every cell gets wider by it, so the grid stays a grid.
+
+`ui_family` and `ui_size` are for lumen's own words: the tab titles, the notes, the search field. Unset, the family is your desktop's font, the one other programs use for their menus. A family that can't be found is your desktop's too, and lumen prints a line that says so.
+
 ## Size for one pane
 
 `Ctrl+Plus` and `Ctrl+Minus` change the text size of the pane you are in, and `Ctrl+0` brings it back. The other panes keep theirs. That is for the moment something has to be read from across the room, or a wide table has to fit.

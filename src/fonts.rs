@@ -7,21 +7,40 @@
 //! and names only families that can be found.
 
 use std::panic::{AssertUnwindSafe, catch_unwind, set_hook, take_hook};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use gpui::{App, SharedString, TextSystem, font};
 
 /// GPUI's name for the font of the desktop.
 const SYSTEM: &str = ".SystemUIFont";
 
-static UI: OnceLock<SharedString> = OnceLock::new();
+/// The desktop's font for lumen's own words, as found when lumen started.
+static DESKTOP: OnceLock<SharedString> = OnceLock::new();
+/// The one in use: the config's `ui_family` where it can be found, or else the desktop's.
+static UI: RwLock<Option<SharedString>> = RwLock::new(None);
 /// The family the config last asked for, and the one that was found for it.
 static GRID: Mutex<Option<(String, SharedString)>> = Mutex::new(None);
 
 /// The family of lumen's own words: the tab titles, the search field, the
 /// notices.
 pub fn ui() -> SharedString {
-    UI.get().cloned().unwrap_or_else(|| SYSTEM.into())
+    let chosen = UI.read().ok().and_then(|ui| ui.clone());
+    chosen.or_else(|| DESKTOP.get().cloned()).unwrap_or_else(|| SYSTEM.into())
+}
+
+/// Takes on the family the config names for lumen's own words: the desktop's
+/// when it names none, or one that can't be found (which is said).
+pub fn set_ui(wanted: Option<&str>, cx: &App) {
+    let chosen = wanted.map(str::trim).filter(|wanted| !wanted.is_empty()).and_then(|wanted| {
+        if resolves(cx.text_system(), wanted) {
+            return Some(SharedString::from(wanted.to_string()));
+        }
+        eprintln!("lumen: the font {wanted:?} for lumen's own words can't be found, using the desktop's");
+        None
+    });
+    if let Ok(mut ui) = UI.write() {
+        *ui = chosen;
+    }
 }
 
 /// Looks for the font of lumen's own words, once, when lumen starts. Ends
@@ -40,7 +59,7 @@ pub fn init(cx: &App) {
         };
         found.into()
     };
-    let _ = UI.set(ui);
+    let _ = DESKTOP.set(ui);
 }
 
 /// The family to draw the grid in: the one the config names when it can be

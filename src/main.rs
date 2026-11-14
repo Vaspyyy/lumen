@@ -264,9 +264,12 @@ pub fn open_window(spawn: Spawn, cx: &mut App) -> Result<WindowHandle<Workspace>
     Ok(window)
 }
 
-/// What the config sets for all of lumen at once: the keys, and whether typing hides the pointer.
+/// What the config sets for all of lumen at once: the keys, whether typing hides the
+/// pointer, and the font of lumen's own words.
 fn apply_config(cx: &mut App) {
     actions::bind(cx);
+    let ui_family = cx.global::<Config>().font.ui_family.clone();
+    fonts::set_ui(ui_family.as_deref(), cx);
     let hide = if cx.global::<Config>().mouse.hide_while_typing {
         CursorHideMode::OnTypingAndAction
     } else {

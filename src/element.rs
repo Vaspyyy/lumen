@@ -88,6 +88,8 @@ impl Metrics {
         }
         let font_id = text_system.resolve_font(&font);
         let width = text_system.advance(font_id, font_size, 'm').map(|s| s.width).unwrap_or(font_size * 0.6);
+        // letter spacing widens the cell: each character stays at the left of its own
+        let width = (width + px(config.font.letter_spacing)).max(px(1.));
         let ascent = f32::from(text_system.ascent(font_id, font_size));
         let descent = f32::from(text_system.descent(font_id, font_size));
         let height = px(((ascent + descent.abs()) * config.font.line_height).ceil().max(1.));
@@ -118,13 +120,11 @@ pub struct Motion {
     shown: bool,
 }
 
-const GLIDE: Duration = Duration::from_millis(70);
-const FADE: Duration = Duration::from_millis(140);
-
 impl Motion {
-    fn at(&self, now: Instant) -> ((f32, f32), bool) {
+    /// Where the cursor is `now`, on a glide that takes `glide`, and whether it still moves.
+    fn at(&self, now: Instant, glide: Duration) -> ((f32, f32), bool) {
         let Some(start) = self.start else { return (self.to, false) };
-        let t = now.duration_since(start).as_secs_f32() / GLIDE.as_secs_f32();
+        let t = now.duration_since(start).as_secs_f32() / glide.as_secs_f32().max(0.001);
         if t >= 1. {
             return (self.to, false);
         }
@@ -136,14 +136,14 @@ impl Motion {
 
     /// Where the cursor is drawn now that it belongs at `target`, and
     /// whether it is still moving.
-    fn toward(&mut self, target: (f32, f32), now: Instant) -> ((f32, f32), bool) {
+    fn toward(&mut self, target: (f32, f32), now: Instant, glide: Duration) -> ((f32, f32), bool) {
         if !self.shown {
             *self = Motion { from: target, to: target, start: None, shown: true };
         } else if self.to != target {
-            let (here, _) = self.at(now);
+            let (here, _) = self.at(now, glide);
             *self = Motion { from: here, to: target, start: Some(now), shown: true };
         }
-        self.at(now)
+        self.at(now, glide)
     }
 }
 
@@ -203,8 +203,8 @@ struct CursorLayout {
     bounds: Bounds<Pixels>,
     shape: CursorShape,
     color: Hsla,
-    /// The cursor gives off light.
-    glow: bool,
+    /// The light the cursor gives off: how bright, and how far it reaches.
+    glow: Option<(f32, f32)>,
     /// Its corners are round.
     rounded: bool,
     /// How thick a beam or an underline is.
@@ -717,15 +717,16 @@ impl Element for TerminalElement {
         let mut glide = false;
         let cursor = cursor.map(|(row, col, cells, shape, c, flags)| {
             // the blink fades between its halves; a pane without the keyboard doesn't blink
-            let since = now.duration_since(self.blink_at).as_secs_f32() / FADE.as_secs_f32();
-            // it dims instead of going out, so it can always be found
-            const DIM: f32 = 0.22;
+            let fade = config.cursor.blink_fade as f32 / 1000.;
+            let since = if fade > 0. { now.duration_since(self.blink_at).as_secs_f32() / fade } else { 1. };
+            // it dims instead of going out, so it can always be found, unless blink_dim says out
+            let dim = config.cursor.blink_dim;
             let lit = if !self.focused {
                 1.
             } else if self.cursor_on {
-                DIM + (1. - DIM) * since.min(1.)
+                dim + (1. - dim) * since.min(1.)
             } else {
-                1. - (1. - DIM) * since.min(1.)
+                1. - (1. - dim) * since.min(1.)
             };
             if self.focused && since < 1. {
                 window.request_animation_frame();
@@ -735,7 +736,8 @@ impl Element for TerminalElement {
             bounds.origin.x += composed;
             if config.cursor.smooth {
                 let target = (f32::from(bounds.origin.x - origin.x), f32::from(bounds.origin.y - origin.y));
-                let ((x, y), moving) = motion.toward(target, now);
+                let glide_time = Duration::from_millis(config.cursor.glide_time);
+                let ((x, y), moving) = motion.toward(target, now, glide_time);
                 bounds.origin = point(origin.x + px(x), origin.y + px(y));
                 glide = moving;
                 if moving {
@@ -760,7 +762,8 @@ impl Element for TerminalElement {
                 let run = self.text_run(&base, bold, &style, text.len(), thickness);
                 text_system.shape_line(text.into(), font_size, &[run], Some(cell_width * cells as f32))
             });
-            let glow = config.cursor.glow && self.focused && shape != CursorShape::HollowBlock;
+            let glow = (config.cursor.glow && self.focused && shape != CursorShape::HollowBlock)
+                .then_some((config.cursor.glow_strength, config.cursor.glow_size));
             let stroke =
                 px(config.cursor.thickness.unwrap_or_else(|| (f32::from(cell_height) / 9.).round().max(1.)).round());
             CursorLayout { bounds, shape, color, glow, rounded: config.cursor.rounded, stroke, text, block }
@@ -838,12 +841,12 @@ impl Element for TerminalElement {
                 },
                 _ => b,
             };
-            if cursor.glow {
+            if let Some((bright, far)) = cursor.glow {
                 // lumen's cursor is a lamp: a bright rim close to it, a soft light further out
                 let light = |strength: f32, reach: f32| BoxShadow {
-                    color: cursor.color.opacity(strength),
+                    color: cursor.color.opacity((strength * bright).min(1.)),
                     offset: point(px(0.), px(0.)),
-                    blur_radius: px(reach),
+                    blur_radius: px(reach * far),
                     spread_radius: px(0.),
                     inset: false,
                 };
