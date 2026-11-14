@@ -31,7 +31,7 @@ The picture lies over the background's own color, and the text over it. With `ba
 
 PNG, JPEG, WebP, SVG and the other usual kinds work, and a GIF that moves keeps moving (lumen then draws all the time, which costs a little power). `~` is your home folder, and a path that doesn't start at `/` or `~` starts in the folder `lumen.toml` is in: `background_image = "wall.png"` is a picture beside it. In the [settings menu](/docs/configuration/#the-settings-menu), a picture is typed in from `/` or `~/`, and lumen checks that it is there and is a picture.
 
-The picture is part of the background, so on a see-through window (`opacity` below 1) it is see-through too: its strength is `background_image_opacity` times `opacity`.
+The picture is part of the background, so on a see-through window (`opacity` below 1) it is see-through too: the picture and the background's color together let through as much of the desktop as `opacity` says, and `background_image_opacity` is how much of that is the picture. With `contain`, the room beside the picture is the background alone, and the picture itself covers a little more.
 
 ## A gradient
 

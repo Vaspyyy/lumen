@@ -1457,20 +1457,25 @@ impl Render for Workspace {
         let config = cx.global::<Config>();
         let ui = config.ui();
         let opacity = config.window.opacity;
-        let background = Hsla { a: opacity, ..config.colors.primary.background.hsla() };
+        // the picture is part of the background, as see-through as it is (a file that
+        // isn't there draws nothing, and leaves the background as it was)
+        let (strength, fit) = (config.window.background_image_opacity, config.window.background_image_fit);
+        let picture = config.window.background_image().filter(|path| path.is_file());
+        let under = match fit {
+            // a picture over all of the window: the two together let through what `opacity` says
+            ImageFit::Cover | ImageFit::Fill if picture.is_some() => under_picture(opacity, strength),
+            _ => opacity,
+        };
+        let picture = picture.map(|path| (path, strength * opacity, fit));
+        let background = Hsla { a: under, ..config.colors.primary.background.hsla() };
         let fill: gpui::Background = match config.window.gradient {
             Some(to) => linear_gradient(
                 config.window.gradient_angle,
                 linear_color_stop(background, 0.),
-                linear_color_stop(Hsla { a: opacity, ..to.hsla() }, 1.),
+                linear_color_stop(Hsla { a: under, ..to.hsla() }, 1.),
             ),
             None => background.into(),
         };
-        // the picture is part of the background, as see-through as it is
-        let picture = config
-            .window
-            .background_image()
-            .map(|path| (path, config.window.background_image_opacity * opacity, config.window.background_image_fit));
         let (border, casts_shadow) = (config.window.border, config.window.shadow);
         let bar_below = config.tabs.position == TabPosition::Bottom;
         let corner = px(config.window.corner_radius);
@@ -1635,9 +1640,36 @@ impl Render for Workspace {
     }
 }
 
+/// How see-through the background is under a picture over all of the window, for the
+/// two together to let through what `opacity` says: the picture covers `strength` ×
+/// `opacity` of what is behind, and the background as much of the rest as makes up
+/// `opacity`. On a window that isn't see-through, the background is too.
+fn under_picture(opacity: f32, strength: f32) -> f32 {
+    if opacity >= 1. {
+        return opacity;
+    }
+    let picture = strength * opacity;
+    (opacity - picture) / (1. - picture)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_picture_leaves_the_window_as_see_through_as_it_was() {
+        for opacity in [0., 0.3, 0.6, 0.95, 1.] {
+            for strength in [0., 0.3, 0.5, 1.] {
+                let (picture, under) = (strength * opacity, under_picture(opacity, strength));
+                assert!((0. ..=1.).contains(&under), "{opacity} {strength}: {under}");
+                // the picture over the background, as the GPU lays one over the other
+                let together = picture + under * (1. - picture);
+                assert!((together - opacity).abs() < 1e-6, "{opacity} {strength}: {together}");
+            }
+        }
+        assert_eq!(under_picture(0.6, 0.), 0.6);
+        assert_eq!(under_picture(0.6, 1.), 0.);
+    }
 
     #[test]
     fn a_pane_is_heard_so_often_and_no_more() {

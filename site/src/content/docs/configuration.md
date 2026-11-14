@@ -178,7 +178,7 @@ More in [Fonts](/docs/fonts/).
 | `border` | `true` | A thin line around lumen's frame |
 | `shadow` | `true` | lumen's frame casts a shadow around the window. It is drawn around the window only, never under it, so a see-through window is as see-through as `opacity` says |
 | `background_image` | unset | A picture behind the text: its file, with `~` for your home folder; a path not starting at `/` or `~` starts in the folder of this file. PNG, JPEG, WebP, SVG and the other usual kinds. See [Looks](/docs/looks/#a-picture-behind-the-text) |
-| `background_image_opacity` | `0.3` | How much of the picture shows over the background's color, from 0 to 1. On a see-through window, times `opacity` |
+| `background_image_opacity` | `0.3` | How much of the picture shows over the background's color, from 0 to 1. On a see-through window, the two together are as see-through as `opacity` says |
 | `background_image_fit` | `"cover"` | `"cover"`: all of the window, cut to fit. `"contain"`: all of the picture, with room beside it. `"fill"`: stretched to the window |
 | `gradient` | unset | A color the background fades into, from its own (`background` in [`[colors.primary]`](/docs/colors/)) |
 | `gradient_angle` | `180` | Which way it fades, in degrees: `180` from the top down, `90` from the left, `0` from the bottom up |
