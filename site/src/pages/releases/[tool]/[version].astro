@@ -1,0 +1,36 @@
+---
+import ReleaseNote from '../../../components/ReleaseNote.astro';
+import { family } from '../../../data/site';
+import { keptCurrent, products, toolReleases } from '../../../lib/releases';
+import { url } from '../../../lib/url';
+
+export async function getStaticPaths() {
+  const names = await products();
+  const tools = family.filter((tool) => names.includes(tool.name));
+  const pages = await Promise.all(
+    tools.map(async (tool) => {
+      const releases = await toolReleases(tool.name);
+      return releases.map((release, i) => ({
+        params: { tool: tool.name, version: release.data.version },
+        props: { tool, release, newer: releases[i - 1] ?? null, older: releases[i + 1] ?? null },
+      }));
+    }),
+  );
+  return pages.flat();
+}
+
+const { tool, release, newer, older } = Astro.props;
+const kept = keptCurrent(tool.name);
+---
+
+<ReleaseNote product={tool.name} release={release} newer={newer} older={older}>
+  To get this version or a newer one: <code>go install github.com/Vaspyyy/{tool.name}@latest</code>.
+  {
+    kept && (
+      <>
+        Once it is installed, <a href={url('/docs/install/#updates')}><code>lumen update</code></a> keeps it current.
+      </>
+    )
+  }
+  The changes themselves are in the <a href={`${tool.href}/commits/main`}>history on GitHub</a>.
+</ReleaseNote>
