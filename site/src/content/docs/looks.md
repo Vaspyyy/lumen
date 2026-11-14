@@ -11,12 +11,12 @@ Where lumen draws its own frame, it has round corners, a thin border and a shado
 
 ```toml
 [window]
-corner_radius = 12      # how round the corners are, in pixels: 0 is square
+corner_radius = 12      # how round the corners are, in pixels, up to 40: 0 is square
 border = true           # the thin line around the window
 shadow = true           # the shadow around it
 ```
 
-The shadow is drawn around the window only, never under it, so a see-through window is as see-through as `opacity` says. `decorations = "desktop"` gives your desktop's own frame instead, and `"none"` no frame at all. See [Configuration](/docs/configuration/#window).
+The shadow is drawn around the window only, never under it, so a see-through window is as see-through as `opacity` says. Very round corners want a little more `padding`: the text's own corners stay inside the curve while `padding` is at least about a third of `corner_radius`. `decorations = "desktop"` gives your desktop's own frame instead, and `"none"` no frame at all. See [Configuration](/docs/configuration/#window).
 
 ## A picture behind the text
 
@@ -27,9 +27,11 @@ background_image_opacity = 0.3   # how much of the picture shows: 1 is all of it
 background_image_fit = "cover"   # cover, contain, fill
 ```
 
-The picture lies over the background's own color, and the text over it. With `background_image_opacity` low, it is a hint behind the text; at 1 it is all there is. PNG, JPEG, WebP and the other usual kinds work. `cover` fills the window and cuts off what sticks out, `contain` shows all of the picture with room beside it, `fill` stretches it to the window's shape.
+The picture lies over the background's own color, and the text over it. With `background_image_opacity` low, it is a hint behind the text; at 1 it is all there is. `cover` fills the window and cuts off what sticks out, `contain` shows all of the picture with room beside it, `fill` stretches it to the window's shape.
 
-On a see-through window (`opacity` below 1), the picture is see-through as much as the background is.
+PNG, JPEG, WebP, SVG and the other usual kinds work, and a GIF that moves keeps moving (lumen then draws all the time, which costs a little power). `~` is your home folder, and a path that doesn't start at `/` or `~` starts in the folder `lumen.toml` is in: `background_image = "wall.png"` is a picture beside it. In the [settings menu](/docs/configuration/#the-settings-menu), a picture is typed in from `/` or `~/`, and lumen checks that it is there and is a picture.
+
+The picture is part of the background, so on a see-through window (`opacity` below 1) it is see-through too: its strength is `background_image_opacity` times `opacity`.
 
 ## A gradient
 

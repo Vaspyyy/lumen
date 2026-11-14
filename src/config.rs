@@ -305,9 +305,11 @@ impl Default for Window {
 }
 
 impl Window {
-    /// The background picture's file, if one is set: `~` is the home folder.
+    /// The background picture's file, if one is set: `~` is the home folder, and a path
+    /// that doesn't start at `/` starts at the config file's folder.
     pub fn background_image(&self) -> Option<PathBuf> {
-        expand_home(self.background_image.as_deref()?.trim())
+        let path = expand_home(self.background_image.as_deref()?.trim())?;
+        if path.is_absolute() { Some(path) } else { Some(Config::path().parent()?.join(path)) }
     }
 }
 

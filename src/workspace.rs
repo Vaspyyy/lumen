@@ -982,14 +982,17 @@ impl Workspace {
             Axis::Horizontal => (event.position.x - bounds.origin.x, bounds.size.width),
             Axis::Vertical => (event.position.y - bounds.origin.y, bounds.size.height),
         };
-        if extent <= px(0.) {
-            return;
-        }
-        let at = at / extent;
+        let width = px(cx.global::<Config>().panes.divider_width);
         let (index, split) = (drag.index, drag.split);
         let Some(shares) = self.tabs.get_mut(self.active).and_then(|tab| tab.root.shares_mut(split)) else {
             return;
         };
+        // the shares are of what the dividers leave, and the pointer holds the middle of its divider
+        let space = extent - width * (shares.len() - 1) as f32;
+        if space <= px(0.) {
+            return;
+        }
+        let at = (at - width * (index as f32 + 0.5)) / space;
         // the divider moves between its two neighbours; neither gets smaller than a sliver
         let before: f32 = shares[..index].iter().sum();
         let pair = shares[index] + shares[index + 1];
@@ -1000,7 +1003,9 @@ impl Workspace {
         cx.notify();
     }
 
-    fn render_node(&self, node: &Node, tab: &Tab, cx: &mut Context<Self>) -> AnyElement {
+    /// `corners` are the window's round corners this part of it lies in, for what is drawn
+    /// over a whole pane to keep to their curve.
+    fn render_node(&self, node: &Node, tab: &Tab, corners: Corners<Pixels>, cx: &mut Context<Self>) -> AnyElement {
         match node {
             Node::Leaf(pane) => {
                 let dim = cx.global::<Config>().panes.dim_inactive;
@@ -1011,7 +1016,16 @@ impl Workspace {
                     .child(pane.clone())
                     .when(pane != &tab.active && dim > 0., |this| {
                         // the panes that don't have the keyboard step back
-                        this.child(div().absolute().inset_0().bg(gpui::black().opacity(dim)))
+                        this.child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .bg(gpui::black().opacity(dim))
+                                .rounded_tl(corners.top_left)
+                                .rounded_tr(corners.top_right)
+                                .rounded_bl(corners.bottom_left)
+                                .rounded_br(corners.bottom_right),
+                        )
                     })
                     .into_any_element()
             },
@@ -1027,10 +1041,28 @@ impl Workspace {
                     Axis::Horizontal => row.flex_row(),
                     Axis::Vertical => row.flex_col(),
                 };
+                let last = children.len() - 1;
                 for (i, (child, share)) in children.iter().zip(shares).enumerate() {
                     if i > 0 {
                         row = row.child(self.render_divider(id, i - 1, axis, cx));
                     }
+                    // the first child has the corners on its side, the last those on the other
+                    let keep = |side: bool, radius: Pixels| if side { radius } else { px(0.) };
+                    let (start, end) = (i == 0, i == last);
+                    let corners = match axis {
+                        Axis::Horizontal => Corners {
+                            top_left: keep(start, corners.top_left),
+                            bottom_left: keep(start, corners.bottom_left),
+                            top_right: keep(end, corners.top_right),
+                            bottom_right: keep(end, corners.bottom_right),
+                        },
+                        Axis::Vertical => Corners {
+                            top_left: keep(start, corners.top_left),
+                            top_right: keep(start, corners.top_right),
+                            bottom_left: keep(end, corners.bottom_left),
+                            bottom_right: keep(end, corners.bottom_right),
+                        },
+                    };
                     row = row.child(
                         div()
                             .flex_basis(px(0.))
@@ -1039,7 +1071,7 @@ impl Workspace {
                             .min_w_0()
                             .min_h_0()
                             .overflow_hidden()
-                            .child(self.render_node(child, tab, cx)),
+                            .child(self.render_node(child, tab, corners, cx)),
                     );
                 }
                 row.into_any_element()
@@ -1207,7 +1239,8 @@ impl Workspace {
             .into_any_element()
     }
 
-    fn render_tab_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+    /// `corners` are the window's round corners the bar lies in, for its color to keep to.
+    fn render_tab_bar(&self, corners: Corners<Pixels>, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let accent = cx.global::<Config>().accent();
         let ui = cx.global::<Config>().ui();
         let frame = Frame::of(window, cx);
@@ -1235,7 +1268,13 @@ impl Workspace {
             .gap(px(4.))
             .h(px(TAB_BAR))
             .px(px(8.))
-            .when_some(ui.tab_bar, |this, color| this.bg(color))
+            .when_some(ui.tab_bar, |this, color| {
+                this.bg(color)
+                    .rounded_tl(corners.top_left)
+                    .rounded_tr(corners.top_right)
+                    .rounded_bl(corners.bottom_left)
+                    .rounded_br(corners.bottom_right)
+            })
             .when(frame.moves, |this| {
                 this.on_mouse_down(MouseButton::Left, |event, window, _| {
                     if event.click_count == 2 {
@@ -1463,10 +1502,11 @@ impl Render for Workspace {
             ),
             None => background.into(),
         };
+        // the picture is part of the background, as see-through as it is
         let picture = config
             .window
             .background_image()
-            .map(|path| (path, config.window.background_image_opacity, config.window.background_image_fit));
+            .map(|path| (path, config.window.background_image_opacity * opacity, config.window.background_image_fit));
         let (border, casts_shadow) = (config.window.border, config.window.shadow);
         let bar_below = config.tabs.position == TabPosition::Bottom;
         let corner = px(config.window.corner_radius);
@@ -1498,15 +1538,28 @@ impl Render for Workspace {
         }
         window.set_client_inset(px(if frame.floating() { SHADOW } else { 0. }));
         window.set_client_corner_radii(corners);
-
+        // GPUI cuts what is drawn inside to rectangles only: what fills a window's corner,
+        // inside its border, is rounded by hand to the curve
+        let inset = if frame.client && border { px(1.) } else { px(0.) };
+        let inner = |radius: Pixels, here: bool| if here { (radius - inset).max(px(0.)) } else { px(0.) };
+        let within = |top: bool, bottom: bool| Corners {
+            top_left: inner(corners.top_left, top),
+            top_right: inner(corners.top_right, top),
+            bottom_left: inner(corners.bottom_left, bottom),
+            bottom_right: inner(corners.bottom_right, bottom),
+        };
+        let shows_bar = cx.global::<Config>().tab_bar(self.tabs.len());
         let content = match self.tabs.get(self.active) {
             Some(tab) if tab.zoomed => tab.active.clone().into_any_element(),
-            Some(tab) => self.render_node(&tab.root, tab, cx),
+            Some(tab) => {
+                self.render_node(&tab.root, tab, within(!shows_bar || bar_below, !shows_bar || !bar_below), cx)
+            },
             None => div().into_any_element(),
         };
-        let bar = cx.global::<Config>().tab_bar(self.tabs.len()).then(|| self.render_tab_bar(window, cx));
+        let bar = shows_bar.then(|| self.render_tab_bar(within(!bar_below, bar_below), window, cx));
         let (bar_above, bar_below) = if bar_below { (None, bar) } else { (bar, None) };
         let bar_height = if bar_below.is_some() { px(TAB_BAR) } else { px(0.) };
+        let picture_corners = within(true, true);
 
         let surface = div()
             .id("workspace")
@@ -1535,10 +1588,10 @@ impl Render for Workspace {
                         ImageFit::Fill => ObjectFit::Fill,
                     })
                     .opacity(strength)
-                    .rounded_tl(corners.top_left)
-                    .rounded_tr(corners.top_right)
-                    .rounded_bl(corners.bottom_left)
-                    .rounded_br(corners.bottom_right)
+                    .rounded_tl(picture_corners.top_left)
+                    .rounded_tr(picture_corners.top_right)
+                    .rounded_bl(picture_corners.bottom_left)
+                    .rounded_br(picture_corners.bottom_right)
             }))
             .on_action(cx.listener(Self::new_tab))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| this.close_tab_at(this.active, window, cx)))
@@ -1596,7 +1649,7 @@ impl Render for Workspace {
         let margin = |free: bool| px(if frame.client && free { SHADOW } else { 0. });
         let margins =
             Edges { top: margin(!t.top), bottom: margin(!t.bottom), left: margin(!t.left), right: margin(!t.right) };
-        let shadows = (frame.floating() && casts_shadow).then(|| {
+        let shadows = (frame.floating() && casts_shadow && ui.shadow.a > 0.).then(|| {
             // two of them, both falling a little below the window: a soft one further out,
             // and a darker one close to the edge
             let soft = BoxShadow {

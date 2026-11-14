@@ -762,7 +762,10 @@ impl Element for TerminalElement {
                 let run = self.text_run(&base, bold, &style, text.len(), thickness);
                 text_system.shape_line(text.into(), font_size, &[run], Some(cell_width * cells as f32))
             });
-            let glow = (config.cursor.glow && self.focused && shape != CursorShape::HollowBlock)
+            let glow = (config.cursor.glow
+                && config.cursor.glow_strength > 0.
+                && self.focused
+                && shape != CursorShape::HollowBlock)
                 .then_some((config.cursor.glow_strength, config.cursor.glow_size));
             let stroke =
                 px(config.cursor.thickness.unwrap_or_else(|| (f32::from(cell_height) / 9.).round().max(1.)).round());

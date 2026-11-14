@@ -324,7 +324,7 @@ fn rows() -> Vec<Row> {
             Some("window"),
             "background_image",
             "Picture",
-            "A picture behind the text: Enter, then its file (PNG, JPEG, WebP, ~ for home). r takes it away.",
+            "A picture behind the text: Enter, then its file from / or ~/ (PNG, JPEG, WebP, SVG). r takes it away.",
             Picture,
             |c| Value::Text(c.window.background_image.clone().unwrap_or_else(|| "none".into())),
         ),
@@ -753,8 +753,16 @@ impl Menu {
                 if text.is_empty() {
                     return;
                 }
-                if !expand_home(&text).is_some_and(|path| path.is_file()) {
+                // the menu's own folder is no one else's: a picture is given from / or ~
+                let Some(path) = expand_home(&text).filter(|path| path.is_absolute()) else {
+                    return self.say(format!("{text} isn't a whole path: start it with / or ~/"), false);
+                };
+                if !path.is_file() {
                     return self.say(format!("there is no file {text}"), false);
+                }
+                let kind = path.extension().and_then(|kind| kind.to_str()).map(str::to_ascii_lowercase);
+                if !kind.is_some_and(|kind| gpui::Img::extensions().contains(&kind.as_str())) {
+                    return self.say(format!("{text} isn't a picture lumen can show (PNG, JPEG, WebP, SVG…)"), false);
                 }
                 toml_edit::value(text)
             },
@@ -1333,7 +1341,22 @@ mod tests {
         }
         menu.key(Key::Enter);
         assert!(matches!(&menu.said, Some((text, false)) if text.contains("no file")));
-        let picture = dir.join("wall.png");
+        let type_in = |menu: &mut Menu, text: &str| {
+            menu.key(Key::Enter);
+            for c in text.chars() {
+                menu.key(Key::Char(c));
+            }
+            menu.key(Key::Enter);
+        };
+        // a path from the menu's own folder would mean another folder to lumen
+        type_in(&mut menu, "wall.png");
+        assert!(matches!(&menu.said, Some((text, false)) if text.contains("whole path")));
+        let notes = dir.join("notes.txt");
+        std::fs::write(&notes, b"no picture").unwrap();
+        type_in(&mut menu, &notes.to_string_lossy());
+        assert!(matches!(&menu.said, Some((text, false)) if text.contains("isn't a picture")));
+        assert_eq!(menu.config().window.background_image, None);
+        let picture = dir.join("wall.PNG");
         std::fs::write(&picture, b"not checked for being a picture").unwrap();
         menu.key(Key::Enter);
         for c in picture.to_string_lossy().chars() {
