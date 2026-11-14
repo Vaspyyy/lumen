@@ -1606,7 +1606,8 @@ impl Render for Workspace {
                 spread_radius: px(0.),
                 inset: false,
             };
-            let close = BoxShadow { color: ui.shadow.opacity(ui.shadow.a * 0.7), blur_radius: px(3.), ..soft };
+            // `opacity` scales the color's own alpha: 0.25 against the soft one's 0.35, as before
+            let close = BoxShadow { color: ui.shadow.opacity(0.25 / 0.35), blur_radius: px(3.), ..soft };
             shadow_strips(window.viewport_size(), margins, corners, vec![soft, close], px(3.))
         });
         div()
@@ -1641,43 +1642,7 @@ fn shadow_strips(
     shadows: Vec<BoxShadow>,
     falls: Pixels,
 ) -> Vec<AnyElement> {
-    let surface = Bounds::new(
-        point(margins.left, margins.top),
-        size(viewport.width - margins.left - margins.right, viewport.height - margins.top - margins.bottom),
-    );
-    let mut clips = vec![
-        Bounds::new(point(px(0.), px(0.)), size(viewport.width, margins.top)),
-        Bounds::new(point(px(0.), surface.bottom()), size(viewport.width, margins.bottom)),
-        Bounds::new(point(px(0.), surface.top()), size(margins.left, surface.size.height)),
-        Bounds::new(point(surface.right(), surface.top()), size(margins.right, surface.size.height)),
-    ];
-    // At a round corner the window doesn't fill its own box: the shadow belongs in what is
-    // left of the box outside the curve too, which is cut in rows of a pixel, each as far
-    // as the curve. (GPUI cuts to rectangles only.)
-    let rows = |radius: Pixels, left: bool, top: bool| -> Vec<Bounds<Pixels>> {
-        let r = f32::from(radius);
-        let (x, y) = (
-            if left { surface.left() } else { surface.right() - radius },
-            if top { surface.top() } else { surface.bottom() - radius },
-        );
-        (0..r.ceil() as usize)
-            .filter_map(|i| {
-                // the row's middle, as far from the curve's center as it is
-                let middle = i as f32 + 0.5;
-                let from_center = if top { r - middle } else { middle };
-                let outside = r - (r * r - from_center * from_center).max(0.).sqrt();
-                // less than a pixel is under the window's own soft edge
-                (from_center > 0. && outside >= 1.).then(|| {
-                    let start = if left { x } else { x + radius - px(outside) };
-                    Bounds::new(point(start, y + px(i as f32)), size(px(outside), px(1.)))
-                })
-            })
-            .collect()
-    };
-    clips.extend(rows(corners.top_left, true, true));
-    clips.extend(rows(corners.top_right, false, true));
-    clips.extend(rows(corners.bottom_left, true, false));
-    clips.extend(rows(corners.bottom_right, false, false));
+    let (surface, clips) = shadow_clips(viewport, margins, corners);
     let grown = |radius: Pixels| if radius > px(0.) { radius + px(1.) } else { radius };
     // GPUI draws a shadow over all of its box and its blur, and leaves out what is cut away
     // only pixel by pixel: each clip gets a box of its own, no larger than what reaches it.
@@ -1690,7 +1655,6 @@ fn shadow_strips(
     );
     clips
         .into_iter()
-        .filter(|clip| clip.size.width > px(0.) && clip.size.height > px(0.))
         .map(|clip| {
             let caster = whole.intersect(&clip.dilate(reach));
             // a corner is round where it is the window's own, and square where the box was cut
@@ -1721,6 +1685,59 @@ fn shadow_strips(
         .collect()
 }
 
+/// Where the frame's shadow may be drawn: the window's own box, and the pieces of the
+/// margin around it and of the box's corners outside the round ones, none of them
+/// overlapping another (a shadow drawn twice in a spot would be darker there).
+fn shadow_clips(
+    viewport: Size<Pixels>,
+    margins: Edges<Pixels>,
+    corners: Corners<Pixels>,
+) -> (Bounds<Pixels>, Vec<Bounds<Pixels>>) {
+    let surface = Bounds::new(
+        point(margins.left, margins.top),
+        size(viewport.width - margins.left - margins.right, viewport.height - margins.top - margins.bottom),
+    );
+    let mut clips = vec![
+        Bounds::new(point(px(0.), px(0.)), size(viewport.width, margins.top)),
+        Bounds::new(point(px(0.), surface.bottom()), size(viewport.width, margins.bottom)),
+        Bounds::new(point(px(0.), surface.top()), size(margins.left, surface.size.height)),
+        Bounds::new(point(surface.right(), surface.top()), size(margins.right, surface.size.height)),
+    ];
+    // At a round corner the window doesn't fill its own box: the shadow belongs in what is
+    // left of the box outside the curve too, which is cut in rows of a pixel, each as far
+    // as the curve. (GPUI cuts to rectangles only.)
+    let rows = |radius: Pixels, left: bool, top: bool| -> Vec<Bounds<Pixels>> {
+        // as GPUI draws it: no rounder than half the window, where it is that small
+        let radius = radius.min(surface.size.width / 2.).min(surface.size.height / 2.).max(px(0.));
+        let r = f32::from(radius);
+        let (x, y) = (
+            if left { surface.left() } else { surface.right() - radius },
+            if top { surface.top() } else { surface.bottom() - radius },
+        );
+        (0..r.ceil() as usize)
+            .filter_map(|i| {
+                // the last row of a radius like 12.5 is half a row, so as not to reach into the margin
+                let high = (r - i as f32).min(1.);
+                // the row's middle, as far from the curve's center as it is
+                let middle = i as f32 + high / 2.;
+                let from_center = if top { r - middle } else { middle };
+                let outside = r - (r * r - from_center * from_center).max(0.).sqrt();
+                // less than a pixel is under the window's own soft edge
+                (from_center > 0. && outside >= 1.).then(|| {
+                    let start = if left { x } else { x + radius - px(outside) };
+                    Bounds::new(point(start, y + px(i as f32)), size(px(outside), px(high)))
+                })
+            })
+            .collect()
+    };
+    clips.extend(rows(corners.top_left, true, true));
+    clips.extend(rows(corners.top_right, false, true));
+    clips.extend(rows(corners.bottom_left, true, false));
+    clips.extend(rows(corners.bottom_right, false, false));
+    clips.retain(|clip| clip.size.width > px(0.) && clip.size.height > px(0.));
+    (surface, clips)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1735,6 +1752,46 @@ mod tests {
         let noted = Noted { last: start, count: NOTE_MOST };
         assert!(!noted.allows(start + Duration::from_secs(3600)));
         assert!(Noted { last: start, count: NOTE_MOST - 1 }.allows(start + NOTE_GAP));
+    }
+
+    #[test]
+    fn the_shadow_is_cut_into_pieces_that_never_overlap() {
+        let all = |m: f32| Edges { top: px(m), bottom: px(m), left: px(m), right: px(m) };
+        let half_tiled = Edges { top: px(0.), bottom: px(SHADOW), left: px(0.), right: px(SHADOW) };
+        for (viewport, margins) in [
+            (size(px(800.), px(600.)), all(SHADOW)),
+            (size(px(801.5), px(600.25)), all(SHADOW)),
+            (size(px(90.), px(60.)), all(SHADOW)),
+            (size(px(800.), px(600.)), half_tiled),
+        ] {
+            for radius in [0., 1., 7.3, 12., 12.5, 40.] {
+                let (surface, clips) = shadow_clips(viewport, margins, Corners::all(px(radius)));
+                assert!(clips.len() >= 2, "{radius} {viewport:?}");
+                for (i, a) in clips.iter().enumerate() {
+                    assert!(a.size.width > px(0.) && a.size.height > px(0.));
+                    // in the window: only in its corners, outside the curve
+                    let under = a.intersect(&surface);
+                    if under.size.width > px(0.) && under.size.height > px(0.) {
+                        let close = |x: Pixels, y: Pixels| (f32::from(x) - f32::from(y)).abs() < 1e-3;
+                        assert!(
+                            close(under.size.width, a.size.width) && close(under.size.height, a.size.height),
+                            "{radius} {viewport:?}: {a:?} is half in the window"
+                        );
+                        let r = px(radius).min(surface.size.width / 2.).min(surface.size.height / 2.);
+                        let near_x = a.left() < surface.left() + r || a.right() > surface.right() - r;
+                        let near_y = a.top() < surface.top() + r || a.bottom() > surface.bottom() - r;
+                        assert!(near_x && near_y, "{radius}: {a:?} is not in a corner");
+                    }
+                    for b in &clips[i + 1..] {
+                        let both = a.intersect(b);
+                        assert!(
+                            both.size.width <= px(1e-3) || both.size.height <= px(1e-3),
+                            "{radius} {viewport:?}: {a:?} and {b:?} overlap"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
