@@ -1,6 +1,6 @@
 ---
 title: Looks
-description: Every part of how lumen looks can be changed: the frame, a picture behind the text, the tab bar, the panes, the cursor, and lumen's own colors.
+description: "Every part of how lumen looks can be changed: the frame, a picture behind the text, the tab bar, the panes, the cursor, and lumen's own colors."
 ---
 
 Everything on this page goes into the [config file](/docs/configuration/), and saving it is enough: the window changes while you look at it. Most of it is in the [settings menu](/docs/configuration/#the-settings-menu) too. The colors of the text are on [Colors](/docs/colors/), the fonts on [Fonts](/docs/fonts/).
