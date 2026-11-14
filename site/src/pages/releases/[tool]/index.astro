@@ -1,0 +1,30 @@
+---
+import Base from '../../../layouts/Base.astro';
+import ReleaseList from '../../../components/ReleaseList.astro';
+import { family } from '../../../data/site';
+import { products, toolReleases } from '../../../lib/releases';
+import { url } from '../../../lib/url';
+
+export async function getStaticPaths() {
+  const names = await products();
+  return family
+    .filter((tool) => names.includes(tool.name))
+    .map((tool) => ({ params: { tool: tool.name }, props: { tool } }));
+}
+
+const { tool } = Astro.props;
+const releases = await toolReleases(tool.name);
+---
+
+<Base
+  title={`${tool.name} release notes`}
+  description={`What each version of ${tool.name}, a tool of lumen's family, brought, newest first.`}
+  noindex
+>
+  <ReleaseList product={tool.name} notes={releases}>
+    <p>
+      {tool.what} Newest first. There is a <a href={url(`/releases/${tool.name}/rss.xml`)}>feed</a> to follow, and
+      its code and manual are <a href={tool.href}>on GitHub</a>.
+    </p>
+  </ReleaseList>
+</Base>

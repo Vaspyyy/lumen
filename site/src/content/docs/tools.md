@@ -7,6 +7,8 @@ lumen is the home of a family of command line tools. They share one idea with lu
 
 The tools print ordinary terminal output and work in any terminal. lumen is a good terminal without them. Together, they do things neither does alone.
 
+What each version of each tool brought is on this site too, beside lumen's own [release notes](/releases/): [glint](/releases/glint/), [crux](/releases/crux/), [recap](/releases/recap/), [seek](/releases/seek/), [pulse](/releases/pulse/), [splice](/releases/splice/), [peek](/releases/peek/) and [lens](/releases/lens/).
+
 ## glint
 
 [glint](https://github.com/Vaspyyy/glint) is a modern `ls`: icons, git state, previews of what is in a file, thumbnails.

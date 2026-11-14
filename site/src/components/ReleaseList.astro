@@ -1,0 +1,222 @@
+---
+// All the release notes of lumen or of one tool, newest first, each under its
+// version, with a row above them to switch to the notes of another.
+import { render, type CollectionEntry } from 'astro:content';
+import { longDate, products, releasesPath } from '../lib/releases';
+import { url } from '../lib/url';
+
+interface Props {
+  /** lumen, or the name of a tool. */
+  product: string;
+  notes: (CollectionEntry<'releases'> | CollectionEntry<'toolReleases'>)[];
+}
+
+const { product, notes } = Astro.props;
+const switcher = await products();
+
+// On this page a note sits under the heading of its version: its own headings
+// go one step down, and their ids get the version in front, since several
+// notes have a "Fixed".
+function under(html: string, version: string) {
+  const prefix = `v${version.replaceAll('.', '-')}-`;
+  return html
+    .replace(/<(\/?)h([2-5])\b/g, (_, slash, level) => `<${slash}h${Number(level) + 1}`)
+    .replace(/(<h[3-6]\b[^>]*\sid=")/g, `$1${prefix}`);
+}
+
+const shown = await Promise.all(
+  notes.map(async (release) => {
+    const html = release.rendered?.html;
+    return { release, html: html && under(html, release.data.version), ...(await render(release)) };
+  }),
+);
+---
+
+<div class="wrap">
+  <header class="top">
+    <p class="eyebrow">Release notes</p>
+    <h1>
+      What each version {product !== 'lumen' && <>of <span class="name">{product}</span> </>}<span class="serif lamp-text"
+        >brought</span
+      >.
+    </h1>
+    <slot />
+    <nav class="whose" aria-label="Release notes of">
+      <ul>
+        {
+          switcher.map((name) => (
+            <li>
+              <a href={url(releasesPath(name))} aria-current={name === product ? 'page' : undefined}>
+                {name}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </nav>
+  </header>
+
+  <ol class="line">
+    {
+      shown.map(({ release, html, Content }, i) => (
+        <li>
+          <div class="when">
+            <a class="version" href={url(releasesPath(product, release.data.version))}>
+              {release.data.version}
+            </a>
+            <time datetime={release.data.date.toISOString().slice(0, 10)}>{longDate(release.data.date)}</time>
+            {i === 0 && <span class="latest">Latest</span>}
+          </div>
+          <article>
+            <h2>
+              <a href={url(releasesPath(product, release.data.version))}>{release.data.title}</a>
+            </h2>
+            <div class="prose">{html ? <Fragment set:html={html} /> : <Content />}</div>
+          </article>
+        </li>
+      ))
+    }
+  </ol>
+</div>
+
+<style>
+  .top {
+    max-width: 720px;
+    padding-top: clamp(40px, 7vw, 76px);
+  }
+  .top h1 {
+    margin-top: 14px;
+    font-size: clamp(2.1rem, 5vw, 3.3rem);
+    letter-spacing: -0.038em;
+    line-height: 1.05;
+  }
+  .top h1 .serif {
+    font-size: 1.1em;
+  }
+  .top h1 .name {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    letter-spacing: -0.03em;
+    color: var(--accent);
+  }
+  .top :global(p:not(.eyebrow)) {
+    margin-top: 18px;
+    font-size: 1.08rem;
+    color: var(--fg-3);
+  }
+  .top :global(p a) {
+    color: var(--accent-2);
+    text-decoration: underline;
+    text-decoration-color: rgba(255, 201, 122, 0.35);
+    text-underline-offset: 3px;
+  }
+  .top :global(p code) {
+    font-family: var(--mono);
+    font-size: 0.9em;
+    color: var(--fg-2);
+  }
+  .whose ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 26px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .whose a {
+    display: block;
+    padding: 5px 13px;
+    border-radius: 99px;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--fg-2);
+    background: rgba(255, 255, 255, 0.04);
+    box-shadow: inset 0 0 0 1px var(--line);
+    transition:
+      box-shadow 0.2s,
+      color 0.2s;
+  }
+  .whose a:hover {
+    color: var(--fg);
+    box-shadow: inset 0 0 0 1px rgba(255, 201, 122, 0.3);
+  }
+  .whose a[aria-current] {
+    font-weight: 700;
+    color: var(--accent);
+    background: rgba(255, 201, 122, 0.1);
+    box-shadow: inset 0 0 0 1px rgba(255, 201, 122, 0.35);
+  }
+  .line {
+    margin: clamp(40px, 6vw, 72px) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .line > li {
+    display: grid;
+    grid-template-columns: 200px minmax(0, 720px);
+    gap: 0 clamp(24px, 4vw, 56px);
+    padding-bottom: clamp(48px, 7vw, 80px);
+  }
+  .line > li + li {
+    padding-top: clamp(48px, 7vw, 80px);
+    border-top: 1px solid var(--line);
+  }
+  .when {
+    position: sticky;
+    top: calc(var(--nav-h) + 28px);
+    align-self: start;
+    display: grid;
+    justify-items: start;
+    gap: 8px;
+  }
+  .version {
+    font-family: var(--mono);
+    font-size: 1.7rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--accent);
+    text-shadow: 0 0 30px rgba(255, 190, 110, 0.45);
+  }
+  time {
+    font-size: 14px;
+    color: var(--fg-3);
+  }
+  .latest {
+    padding: 2px 10px;
+    border-radius: 99px;
+    font-size: 12px;
+    font-weight: 550;
+    color: var(--green);
+    background: rgba(143, 223, 168, 0.1);
+  }
+  article h2 {
+    font-size: clamp(1.5rem, 3vw, 2rem);
+    letter-spacing: -0.03em;
+  }
+  article h2 a:hover {
+    color: var(--accent-2);
+  }
+  .prose {
+    margin-top: 18px;
+  }
+  .prose :global(h3) {
+    margin-top: 1.8em;
+    font-size: 1.14rem;
+  }
+  @media (max-width: 760px) {
+    .line > li {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .when {
+      position: static;
+      grid-auto-flow: column;
+      justify-content: start;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+    .version {
+      font-size: 1.4rem;
+    }
+  }
+</style>
